@@ -1,0 +1,442 @@
+import React from "react";
+import Draggable from "react-draggable";
+import { motion, AnimatePresence } from "framer-motion";
+import { X, Paperclip, SendHorizontal, Play, Sparkles } from "lucide-react";
+import { getBuildModeProfile, getModeQuickPrompts } from "../../agent/modeProfiles";
+import { type AgentAction, type BuildMode, type UploadedImageAsset } from "../../types";
+
+type OrbMode = "idle" | "playful" | "curious" | "sleepy" | "sleeping" | "working" | "celebrate" | "surprised" | "error";
+
+interface AgentOrbProps {
+  ws: string | null;
+  buildMode: BuildMode;
+  agentStatus: "idle" | "thinking" | "error";
+  agentLog: string;
+  agentReply: string;
+  agentActions: AgentAction[];
+  agentWidgetOpen: boolean;
+  agentOrbPosition: { x: number; y: number } | null;
+  workingMsg: string;
+  editorStatus: string;
+  activeFile: string;
+  previewUrl: string;
+  agentInput: string;
+  attachedImage: UploadedImageAsset | null;
+  imageUploading: boolean;
+  onAgentInputChange: (value: string) => void;
+  onPickAgentImage: () => void;
+  onClearAttachedImage: () => void;
+  onRunAgent: () => void;
+  onEnsurePreviewRunning: () => void;
+  onToggleOpen: () => void;
+  onSetPosition: (pos: { x: number; y: number } | null) => void;
+}
+
+function pickRandom<T>(items: T[]): T {
+  return items[Math.floor(Math.random() * items.length)];
+}
+
+export const AgentOrb: React.FC<AgentOrbProps> = ({
+  ws,
+  buildMode,
+  agentStatus,
+  agentLog,
+  agentReply,
+  agentActions,
+  agentWidgetOpen,
+  agentOrbPosition,
+  workingMsg,
+  editorStatus,
+  activeFile,
+  previewUrl,
+  agentInput,
+  attachedImage,
+  imageUploading,
+  onAgentInputChange,
+  onPickAgentImage,
+  onClearAttachedImage,
+  onRunAgent,
+  onEnsurePreviewRunning,
+  onToggleOpen,
+  onSetPosition,
+}) => {
+  const nodeRef = React.useRef(null);
+  const playfulUntilRef = React.useRef<number>(0);
+  const reactionUntilRef = React.useRef<number>(0);
+  const prevEditorStatusRef = React.useRef<string>(editorStatus);
+  const prevPreviewUrlRef = React.useRef<string>(previewUrl);
+  const prevAgentReplyRef = React.useRef<string>(agentReply);
+  const modeProfile = getBuildModeProfile(buildMode);
+  const [orbMode, setOrbMode] = React.useState<OrbMode>("idle");
+  const [bubbleText, setBubbleText] = React.useState<string>(modeProfile.idleLines[0]);
+  const [lastInteractionAt, setLastInteractionAt] = React.useState<number>(() => Date.now());
+
+  if (!ws) return null;
+
+  const handleStop = (_e: unknown, data: { x: number; y: number }) => {
+    onSetPosition({ x: data.x, y: data.y });
+  };
+
+  const compactLogLines = (raw: string) => raw.split("\n").filter(Boolean).slice(-2);
+  const logLines = compactLogLines(agentLog);
+  const activeFileName = activeFile.split("/").pop() || activeFile;
+  const promptHasIntent = agentInput.trim().length > 8;
+  const contextChips = [
+    `${modeProfile.personaName} • ${modeProfile.personaRole}`,
+    activeFileName ? `File: ${activeFileName}` : null,
+    previewUrl ? "Preview live" : "Preview idle",
+    attachedImage ? `Asset: ${attachedImage.name}` : null,
+  ].filter(Boolean) as string[];
+
+  const quickPrompts = getModeQuickPrompts(buildMode, { activeFile, previewUrl }).map((item) => ({
+    label: item.label,
+    prompt: item.prompt,
+    action: item.action === "start-preview" ? () => onEnsurePreviewRunning() : undefined,
+  }));
+
+  const triggerReaction = React.useCallback((mode: OrbMode, text: string, durationMs = 5000) => {
+    reactionUntilRef.current = Date.now() + durationMs;
+    setLastInteractionAt(Date.now());
+    setOrbMode(mode);
+    setBubbleText(text);
+  }, []);
+
+  const wakeUp = React.useCallback((playful = false) => {
+    const now = Date.now();
+    const wasSleeping = orbMode === "sleeping" || orbMode === "sleepy";
+    setLastInteractionAt(now);
+    if (playful) {
+      playfulUntilRef.current = now + 5000;
+      setOrbMode("playful");
+      setBubbleText(pickRandom(modeProfile.playfulLines));
+      return;
+    }
+    if (agentStatus === "idle") {
+      if (wasSleeping) {
+        reactionUntilRef.current = now + 3000;
+        setOrbMode("surprised");
+        setBubbleText(pickRandom(modeProfile.surprisedLines));
+      } else {
+        setOrbMode("idle");
+        setBubbleText(pickRandom(modeProfile.idleLines));
+      }
+    }
+  }, [agentStatus, modeProfile, orbMode]);
+
+  const applyQuickPrompt = React.useCallback((prompt: string) => {
+    onAgentInputChange(prompt);
+    setLastInteractionAt(Date.now());
+    setOrbMode("curious");
+    setBubbleText("Sip, ini udah lebih spesifik. Aku siap gas.");
+    if (!agentWidgetOpen) onToggleOpen();
+  }, [agentWidgetOpen, onAgentInputChange, onToggleOpen]);
+
+  React.useEffect(() => {
+    if (agentStatus === "thinking") {
+      setOrbMode("working");
+      setBubbleText(workingMsg || "Lagi kerja. Jangan kaget kalau aku melotot ke terminal.");
+      return;
+    }
+    if (agentStatus === "error") {
+      setOrbMode("error");
+      setBubbleText(pickRandom(modeProfile.errorLines));
+      return;
+    }
+    if (agentWidgetOpen) {
+      setOrbMode("idle");
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      const now = Date.now();
+      const idleMs = now - lastInteractionAt;
+      if (reactionUntilRef.current > now || playfulUntilRef.current > now) {
+        return;
+      }
+      if (idleMs > 42000) {
+        setOrbMode("sleeping");
+      } else if (idleMs > 18000) {
+        setOrbMode("sleepy");
+      } else {
+        setOrbMode("idle");
+      }
+    }, 1200);
+
+    return () => window.clearInterval(interval);
+  }, [agentStatus, agentWidgetOpen, lastInteractionAt, modeProfile, workingMsg]);
+
+  React.useEffect(() => {
+    if (agentWidgetOpen || agentStatus !== "idle") return;
+
+    if (orbMode === "sleepy") setBubbleText(pickRandom(modeProfile.sleepyLines));
+    else if (orbMode === "sleeping") setBubbleText(pickRandom(modeProfile.sleepingLines));
+    else if (orbMode === "playful") setBubbleText(pickRandom(modeProfile.playfulLines));
+    else if (orbMode === "curious") setBubbleText(pickRandom(modeProfile.curiousLines));
+    else if (orbMode === "celebrate") setBubbleText(pickRandom(modeProfile.celebrateLines));
+    else if (orbMode === "surprised") setBubbleText(pickRandom(modeProfile.surprisedLines));
+    else setBubbleText(pickRandom(modeProfile.idleLines));
+  }, [orbMode, agentStatus, agentWidgetOpen, modeProfile]);
+
+  React.useEffect(() => {
+    if (agentWidgetOpen || agentStatus !== "idle") return;
+    if (orbMode === "sleeping") return;
+
+    const interval = window.setInterval(() => {
+      if (reactionUntilRef.current > Date.now()) return;
+      setBubbleText((current) => {
+        const pool = orbMode === "sleepy"
+          ? modeProfile.sleepyLines
+          : orbMode === "playful"
+            ? modeProfile.playfulLines
+            : orbMode === "curious"
+              ? modeProfile.curiousLines
+              : modeProfile.idleLines;
+        let next = pickRandom(pool);
+        if (next === current && pool.length > 1) next = pool[(pool.indexOf(next) + 1) % pool.length];
+        return next;
+      });
+    }, 11000);
+
+    return () => window.clearInterval(interval);
+  }, [orbMode, agentStatus, agentWidgetOpen, modeProfile]);
+
+  React.useEffect(() => {
+    if (agentWidgetOpen) return;
+    if (prevEditorStatusRef.current === editorStatus) return;
+    prevEditorStatusRef.current = editorStatus;
+
+    if (/Saved /i.test(editorStatus)) {
+      triggerReaction("celebrate", `Cakep, ${activeFileName || "file"} udah kesimpen.`);
+    } else if (/Preview live/i.test(editorStatus)) {
+      triggerReaction("celebrate", "Preview nyala. Ayo diliatin hasilnya.");
+    } else if (/Failed/i.test(editorStatus)) {
+      triggerReaction("error", pickRandom(modeProfile.errorLines));
+    } else if (/Opening |Loaded /i.test(editorStatus) && activeFileName) {
+      triggerReaction("curious", `Aku ngintip ${activeFileName} dulu ya.`, 4000);
+    }
+  }, [activeFileName, agentWidgetOpen, editorStatus, modeProfile, triggerReaction]);
+
+  React.useEffect(() => {
+    if (agentWidgetOpen) return;
+    if (prevPreviewUrlRef.current === previewUrl) return;
+    const hadPreview = Boolean(prevPreviewUrlRef.current);
+    prevPreviewUrlRef.current = previewUrl;
+    if (!hadPreview && previewUrl) {
+      triggerReaction("celebrate", "Preview bangun. Sekarang enak buat dicek.", 5000);
+    }
+  }, [agentWidgetOpen, previewUrl, triggerReaction]);
+
+  React.useEffect(() => {
+    if (agentWidgetOpen) return;
+    if (prevAgentReplyRef.current === agentReply) return;
+    prevAgentReplyRef.current = agentReply;
+    if (agentReply.trim()) {
+      triggerReaction("playful", pickRandom([
+        `${modeProfile.personaName} udah jawab. Coba cek hasilnya ya.`,
+        "Sudah kuberesin sebagian. Review bentar, terus lanjut gas.",
+        `Respons keluar. ${modeProfile.personaName} balik sok sibuk sekarang.`,
+      ]), 6000);
+    }
+  }, [agentReply, agentWidgetOpen, modeProfile, triggerReaction]);
+
+  React.useEffect(() => {
+    if (!agentWidgetOpen) return;
+    if (agentStatus !== "idle") return;
+    if (!promptHasIntent) return;
+    setOrbMode("curious");
+    setBubbleText(activeFileName
+      ? `Oke, aku nangkep. Fokusku sekarang ${activeFileName}.`
+      : `Oke, aku nangkep arahnya. ${modeProfile.personaName} standby di sini.`);
+  }, [activeFileName, agentStatus, agentWidgetOpen, modeProfile, promptHasIntent]);
+
+  const statusLabel = agentStatus === "thinking"
+    ? "Working"
+    : agentStatus === "error"
+      ? "Attention"
+      : orbMode === "sleeping"
+        ? "Sleeping"
+        : orbMode === "sleepy"
+          ? "Sleepy"
+          : orbMode === "playful"
+            ? "Goofy"
+            : orbMode === "curious"
+              ? "Curious"
+              : orbMode === "celebrate"
+                ? "Hyped"
+                : orbMode === "surprised"
+                  ? "Alert"
+                  : "Ready";
+
+  const initialPosition = agentOrbPosition || { x: 0, y: 0 };
+
+  return (
+    <Draggable
+      nodeRef={nodeRef}
+      defaultPosition={initialPosition}
+      onStop={handleStop}
+      cancel=".agentOrbPanel"
+    >
+      <div ref={nodeRef} className={`agentOrb ${agentWidgetOpen ? "open" : "collapsed"}`}>
+        <AnimatePresence>
+          {!agentWidgetOpen && bubbleText ? (
+            <motion.div
+              key={`${orbMode}:${bubbleText}`}
+              initial={{ opacity: 0, y: 10, scale: 0.96 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 8, scale: 0.96 }}
+              className={`agentOrbBubble ${orbMode}`}
+            >
+              {bubbleText}
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
+
+        {!agentWidgetOpen && agentStatus === "idle" && quickPrompts.length > 0 ? (
+          <div className="agentOrbDock">
+            {quickPrompts.slice(0, 2).map((item) => (
+              <button
+                key={item.label}
+                className="agentOrbDockChip"
+                onClick={() => item.prompt ? applyQuickPrompt(item.prompt) : item.action?.()}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+
+        <AnimatePresence>
+          {agentWidgetOpen && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 12 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 12 }}
+              className="agentOrbPanel"
+            >
+              <div className="agentOrbHeader">
+                <div>
+                  <div className="agentOrbTitle">{modeProfile.personaName}</div>
+                  <div className={`agentStatusPill ${agentStatus}`}>{statusLabel}</div>
+                </div>
+                <button className="agentOrbClose" onClick={onToggleOpen}>
+                  <X size={16} />
+                </button>
+              </div>
+
+              <div className="agentOrbContent">
+                {contextChips.length > 0 ? (
+                  <div className="agentOrbContextRow">
+                    {contextChips.map((chip) => (
+                      <span key={chip} className="agentOrbContextChip">{chip}</span>
+                    ))}
+                  </div>
+                ) : null}
+
+                <textarea
+                  className="textarea promptBox agentOrbPrompt"
+                  placeholder={buildMode === "full-agent"
+                    ? "Kasih brief, target produk, atau suruh Clara ambil alih build-nya..."
+                    : "Ceritain blocker, file yang lagi susah, atau minta Raka bantu di titik ini..."}
+                  value={agentInput}
+                  onChange={(e) => onAgentInputChange(e.target.value)}
+                />
+
+                <div className="agentOrbQuickGrid">
+                  {quickPrompts.slice(0, 4).map((item) => (
+                    <button
+                      key={item.label}
+                      className="agentOrbQuickAction"
+                      onClick={() => item.prompt ? applyQuickPrompt(item.prompt) : item.action?.()}
+                    >
+                      {item.action ? <Play size={13} /> : <Sparkles size={13} />}
+                      <span>{item.label}</span>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="agentOrbActions">
+                  <button className="btn subtleBtn" onClick={onPickAgentImage} disabled={imageUploading}>
+                    <Paperclip size={14} />
+                    <span>{imageUploading ? "Uploading..." : "Attach"}</span>
+                  </button>
+                  <button className="btn primary" onClick={onRunAgent} disabled={agentStatus === "thinking" || !agentInput.trim()}>
+                    <SendHorizontal size={14} />
+                    <span>{agentStatus === "thinking" ? "Running..." : "Run"}</span>
+                  </button>
+                </div>
+
+                {attachedImage ? (
+                  <div className="attachedImageChip">
+                    <span className="attachedImageName">{attachedImage.name}</span>
+                    <span className="attachedImagePath">{attachedImage.path}</span>
+                    <button className="attachedImageRemove" onClick={onClearAttachedImage} aria-label="Remove attached image">
+                      ×
+                    </button>
+                  </div>
+                ) : null}
+
+                {agentStatus === "thinking" ? (
+                  <div className="agentOrbThinking">
+                    <span className="spinner" />
+                    <span>{workingMsg || "Working…"}</span>
+                  </div>
+                ) : null}
+
+                {agentReply ? <div className="agentOrbReply">{agentReply}</div> : null}
+
+                {agentActions.length > 0 ? (
+                  <div className="agentOrbSection">
+                    <div className="agentOrbSectionLabel">Recent actions</div>
+                    <div className="agentOrbSteps">
+                      {agentActions.slice(-3).map((act, index) => (
+                        <div key={index} className="agentOrbStep">
+                          <span className="agentOrbStepIcon">⚡</span>
+                          <span>{String(act.type)}: {String(act.command || act.path || "")}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                {logLines.length > 0 ? <pre className="agentOrbLog">{logLines.join("\n")}</pre> : null}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <motion.button
+          className={`agentOrbButton ${agentStatus} ${orbMode}`}
+          onClick={() => {
+            wakeUp(false);
+            onToggleOpen();
+          }}
+          onMouseEnter={() => wakeUp(false)}
+          onDoubleClick={() => wakeUp(true)}
+          animate={
+            orbMode === "sleeping"
+              ? { y: [0, -2, 0], scale: [1, 0.98, 1] }
+              : orbMode === "playful"
+                ? { rotate: [0, -8, 8, 0], scale: [1, 1.03, 1] }
+                : orbMode === "celebrate"
+                  ? { y: [0, -8, 0], scale: [1, 1.08, 1] }
+                  : orbMode === "surprised"
+                    ? { scale: [1, 1.14, 1] }
+                    : orbMode === "working"
+                      ? { scale: [1, 1.06, 1] }
+                      : { y: [0, -4, 0] }
+          }
+          transition={{ duration: orbMode === "playful" ? 0.5 : orbMode === "surprised" ? 0.35 : orbMode === "celebrate" ? 0.7 : orbMode === "working" ? 0.9 : 2.6, repeat: orbMode === "surprised" ? 1 : Infinity, ease: "easeInOut" }}
+        >
+          <span className={`agentOrbFace ${orbMode}`}>
+            <span className="orbEye left" />
+            <span className="orbEye right" />
+            <span className="orbMouth" />
+            <span className="orbCheek left" />
+            <span className="orbCheek right" />
+          </span>
+          {(promptHasIntent || attachedImage || previewUrl) ? <span className="agentOrbBadgePulse" /> : null}
+        </motion.button>
+      </div>
+    </Draggable>
+  );
+};

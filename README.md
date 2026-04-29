@@ -1,0 +1,175 @@
+# Voice IDE
+
+Voice IDE adalah proyek **untuk lulus kuliah**.
+
+Arah project ini sekarang sengaja dipersempit:
+- dipakai **dosen / evaluator** untuk mencoba hasil kerja
+- **serverless only** lewat **Vercel**
+- state utama disimpan di **Supabase**
+- flow harus terasa rapi, gampang dipakai, dan cukup meyakinkan saat demo
+- agent harus proper untuk bantu bikin web yang kelihatan bagus dan modern
+
+Project ini **bukan** lagi diarahkan ke:
+- server sendiri yang harus dibayar terus
+- Docker/self-host setup
+- infra multi-tenant production yang berat
+
+## Fokus produk
+
+Voice IDE punya 2 mode agent:
+
+- **Clara** = full-agent mode, lebih cocok buat minta agent bangun web/app secara lebih menyeluruh
+- **Raka** = hybrid mode, lebih cocok buat ngoding bareng dan edit bertahap
+
+Tujuan UX sekarang:
+- login lancar
+- project tersimpan
+- preferences tersimpan
+- agent enak dipakai
+- hasil web terlihat proper untuk presentasi / penilaian
+
+## Stack
+
+- Frontend: React + Vite + TypeScript
+- Backend: FastAPI
+- Auth + persistence: Supabase
+- Deploy target: Vercel
+
+## Auth dan model
+
+Yang tetap dipakai:
+- **OAuth login user/app** boleh tetap ada
+
+Yang sudah dibuang:
+- **OAuth provider model**
+
+Akses model sekarang **BYOK only**:
+- `OPENAI_API_KEY`
+- `ANTHROPIC_API_KEY`
+- `OPENROUTER_API_KEY`
+
+## Ambil project
+
+Kalau mau ambil project ini dari GitHub:
+
+```bash
+git clone <URL-REPO-KAMU>
+cd voice-ide
+npm install
+python3 -m venv api/.venv
+source api/.venv/bin/activate
+pip install -e ./api
+```
+
+Jalankan local dev kalau mau cek cepat sebelum deploy:
+
+### Frontend
+```bash
+npm run dev
+```
+
+### Backend
+```bash
+source api/.venv/bin/activate
+uvicorn api.main:app --reload --host 0.0.0.0 --port 8787
+```
+
+## Deploy ke Vercel serverless
+
+Ini jalur deploy utama project ini.
+
+### 1. Siapkan Supabase
+
+Buat project di Supabase, lalu jalankan schema dari file:
+
+- `SUPABASE_SCHEMA.sql`
+
+Setelah itu siapkan Auth provider kalau kamu mau pakai login Google.
+
+### 2. Import repo ke Vercel
+
+- Push repo ke GitHub
+- Buka Vercel
+- Import repository ini
+- Framework: **Vite**
+
+Repo ini sudah punya:
+- `vercel.json`
+- `api/index.py`
+
+Jadi frontend dan API sudah diarahkan untuk deploy serverless di Vercel.
+
+### 3. Isi environment variables di Vercel
+
+Minimal isi ini:
+
+```env
+VITE_SUPABASE_URL=...
+VITE_SUPABASE_ANON_KEY=...
+SUPABASE_URL=...
+SUPABASE_SERVICE_ROLE_KEY=...
+OPENAI_API_KEY=...
+```
+
+Kalau mau set model/config dasar juga, tambahkan:
+
+```env
+LLM_PROVIDER=openai-codex
+BUILD_MODE=hybrid
+OPENAI_CODEX_MODEL=gpt-5.4
+ANTHROPIC_MODEL=claude-sonnet-4-0
+OPENROUTER_MODEL=openai/gpt-5.4
+GOOGLE_OAUTH_CLIENT_ID=...
+GOOGLE_OAUTH_CLIENT_SECRET=...
+```
+
+Optional provider lain:
+
+```env
+ANTHROPIC_API_KEY=...
+OPENROUTER_API_KEY=...
+```
+
+### 4. Deploy
+
+Klik **Deploy** di Vercel.
+
+### 5. Tes flow setelah live
+
+Urutan tes yang disarankan:
+- buka app
+- login
+- buka settings
+- isi provider/model
+- create project
+- reload halaman
+- pastikan project masih ada
+- coba Hybrid mode
+- coba Full Agent mode
+- minta agent bikin landing page / dashboard kecil
+- cek hasil preview dan kualitas flow
+
+## Batasan yang jujur
+
+Project ini sekarang ditargetkan untuk:
+- demo
+- penilaian dosen
+- validasi hasil kerja kuliah
+
+Project ini **belum** ditujukan untuk:
+- SaaS production penuh
+- runtime berat yang stabil untuk banyak user
+- isolasi tenant kelas production
+- infra berbayar jangka panjang
+
+## Kesimpulan arah project
+
+Arah final saat ini sederhana:
+
+- **bukan** bangun startup infra berat
+- **bukan** self-host Docker
+- **bukan** bayar server sendiri terus
+- **iya** untuk serverless Vercel
+- **iya** untuk flow yang rapi
+- **iya** untuk agent yang proper bikin web keren
+- **iya** untuk dipakai presentasi dan bantu lulus kuliah

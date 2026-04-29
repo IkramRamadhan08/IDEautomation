@@ -1,0 +1,582 @@
+export type WorkspaceInfo = { path: string | null; default: string | null };
+export type WorkspaceProvisionInfo = { ok: boolean; path: string; created: boolean; managed: boolean };
+export type HostedProject = {
+  id: string;
+  owner_id: string;
+  name: string;
+  slug: string;
+  root: string;
+  created_at: number;
+  updated_at: number;
+  archived: boolean;
+};
+export type IdentityInfo = {
+  user_id: string;
+  display_name: string | null;
+  email: string | null;
+  has_profile: boolean;
+  managed_workspace_mode: "user" | "session";
+  managed_workspace_path: string;
+};
+
+export type GoogleUserInfo = {
+  sub: string;
+  email: string | null;
+  name: string | null;
+  picture: string | null;
+};
+
+export type GoogleAuthStatus = {
+  ok: boolean;
+  authenticated: boolean;
+  phase: string;
+  auth_url?: string | null;
+  user?: GoogleUserInfo | null;
+};
+
+export type ProviderStatus = {
+  provider: "openai-codex" | "anthropic" | "openrouter";
+  connected: boolean;
+  hint?: string | null;
+  profile_id?: string | null;
+  account_id?: string | null;
+  auth_type?: string | null;
+  project_id?: string | null;
+  source?: string | null;
+};
+
+export type BuildMode = "full-agent" | "hybrid";
+
+export type ProviderChoice = "openai-codex" | "anthropic" | "openrouter" | "";
+
+export type SettingsInfo = {
+  default_workspace: string | null;
+  llm_provider: "openai-codex" | "anthropic" | "openrouter" | null;
+  build_mode: BuildMode;
+  openai_codex_model: string;
+  anthropic_model: string;
+  openrouter_model: string;
+  openai_api_key_set: boolean;
+  anthropic_api_key_set: boolean;
+  openrouter_api_key_set: boolean;
+  supabase_url: string | null;
+  supabase_anon_key_set: boolean;
+  supabase_enabled: boolean;
+  providers: {
+    openai_codex: ProviderStatus;
+    anthropic: ProviderStatus;
+    openrouter: ProviderStatus;
+  };
+};
+
+export type SettingsUpdate = Partial<{
+  default_workspace: string | null;
+  llm_provider: ProviderChoice;
+  build_mode: BuildMode;
+  openai_codex_model: string;
+  anthropic_model: string;
+  openrouter_model: string;
+  openai_api_key: string | null;
+  anthropic_api_key: string | null;
+  openrouter_api_key: string | null;
+}>;
+
+export type UploadedImageAsset = {
+  ok: boolean;
+  path: string;
+  name: string;
+  content_type?: string | null;
+  size: number;
+};
+
+export type UserPreferences = {
+  profile_id: string;
+  llm_provider: ProviderChoice | null;
+  build_mode: BuildMode | null;
+  openai_codex_model: string | null;
+  anthropic_model: string | null;
+  openrouter_model: string | null;
+};
+
+export type ProjectPreferences = {
+  project_id: string;
+  build_mode: BuildMode | null;
+  preview_entry: string | null;
+  default_prompt_style: string | null;
+};
+
+const envBase = (import.meta.env.VITE_API_BASE ?? "").trim().replace(/\/$/, "");
+const isViteDev = Boolean(import.meta.env.DEV);
+const localDevBase = typeof window !== "undefined"
+  ? `${window.location.protocol}//${window.location.hostname || "localhost"}:8787`
+  : "http://localhost:8787";
+const BASE = envBase || (isViteDev ? localDevBase : "");
+const SESSION_STORAGE_KEY = "voiceide-session-id";
+const USER_STORAGE_KEY = "voiceide-user-id";
+
+function createSessionId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `voiceide-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`;
+}
+
+function getSessionId(): string {
+  if (typeof window === "undefined") return "voiceide-server";
+  const existing = window.localStorage.getItem(SESSION_STORAGE_KEY)?.trim();
+  if (existing) return existing;
+  const next = createSessionId();
+  window.localStorage.setItem(SESSION_STORAGE_KEY, next);
+  return next;
+}
+
+function normalizeUserId(value: string | null | undefined): string {
+  const safe = String(value || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9._:-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120);
+  return safe || "voiceide-user-default";
+}
+
+function getUserId(): string {
+  if (typeof window === "undefined") return "voiceide-user-server";
+  const existing = window.localStorage.getItem(USER_STORAGE_KEY)?.trim();
+  if (existing) return normalizeUserId(existing);
+  const next = normalizeUserId(`user-${createSessionId()}`);
+  window.localStorage.setItem(USER_STORAGE_KEY, next);
+  return next;
+}
+
+export function getClientUserId(): string {
+  return getUserId();
+}
+
+export function setClientUserId(nextUserId: string): string {
+  const normalized = normalizeUserId(nextUserId);
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem(USER_STORAGE_KEY, normalized);
+  }
+  return normalized;
+}
+
+export function resetClientIdentity() {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(SESSION_STORAGE_KEY);
+  window.localStorage.removeItem(USER_STORAGE_KEY);
+}
+
+async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers ?? {});
+  headers.set("X-VoiceIDE-Session", getSessionId());
+  headers.set("X-VoiceIDE-User", getUserId());
+
+  try {
+    const { supabase } = await import("./lib/supabase");
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token?.trim();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+  } catch {
+    // keep header fallback for transitional hosted migration
+  }
+
+  return fetch(`${BASE}${path}`, {
+    ...init,
+    headers,
+  });
+}
+
+export async function listHostedProjects(): Promise<{ ok: boolean; projects: HostedProject[] }> {
+  const r = await apiFetch(`/api/projects`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function createHostedProject(payload: { name: string; slug?: string | null }): Promise<{ ok: boolean; project: HostedProject }> {
+  const r = await apiFetch(`/api/projects`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function renameHostedProject(projectId: string, payload: { name: string }): Promise<{ ok: boolean; project: HostedProject }> {
+  const r = await apiFetch(`/api/projects/${encodeURIComponent(projectId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function archiveHostedProject(projectId: string): Promise<{ ok: boolean; project: HostedProject }> {
+  const r = await apiFetch(`/api/projects/${encodeURIComponent(projectId)}`, {
+    method: "DELETE",
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function getWorkspace(): Promise<WorkspaceInfo> {
+  const r = await apiFetch(`/api/workspace`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function setWorkspace(path: string): Promise<{ ok: boolean; path: string }> {
+  const r = await apiFetch(`/api/workspace`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function pickWorkspaceNative(): Promise<{ ok: boolean; path: string | null }> {
+  const r = await apiFetch(`/api/workspace/pick`, {
+    method: "POST",
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function importBrowserFolder(files: File[]): Promise<WorkspaceProvisionInfo> {
+  const form = new FormData();
+  for (const file of files) {
+    const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+    form.append("files", file, file.name);
+    form.append("paths", rel);
+  }
+  const r = await apiFetch(`/api/workspace/import-browser-folder`, {
+    method: "POST",
+    body: form,
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function clearWorkspace(): Promise<{ ok: boolean }> {
+  const r = await apiFetch(`/api/workspace/clear`, {
+    method: "POST",
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function provisionWorkspace(): Promise<WorkspaceProvisionInfo> {
+  const r = await apiFetch(`/api/workspace/provision`, {
+    method: "POST",
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function getGoogleAuthStatus(): Promise<GoogleAuthStatus> {
+  const r = await apiFetch(`/api/auth/google/status`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function startGoogleAuthLogin(): Promise<GoogleAuthStatus> {
+  const r = await apiFetch(`/api/auth/google/login-start`, {
+    method: "POST",
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function logoutGoogleAuth(): Promise<{ ok: boolean }> {
+  const r = await apiFetch(`/api/auth/google/logout`, {
+    method: "POST",
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function getIdentity(): Promise<IdentityInfo> {
+  const r = await apiFetch(`/api/identity`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function getUserPreferences(): Promise<{ ok: boolean; preferences: UserPreferences }> {
+  const r = await apiFetch(`/api/preferences/user`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function updateUserPreferences(payload: Partial<UserPreferences>): Promise<{ ok: boolean; preferences: UserPreferences }> {
+  const r = await apiFetch(`/api/preferences/user`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function getProjectPreferences(projectId: string): Promise<{ ok: boolean; preferences: ProjectPreferences }> {
+  const r = await apiFetch(`/api/preferences/projects/${encodeURIComponent(projectId)}`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function updateProjectPreferences(projectId: string, payload: Partial<ProjectPreferences>): Promise<{ ok: boolean; preferences: ProjectPreferences }> {
+  const r = await apiFetch(`/api/preferences/projects/${encodeURIComponent(projectId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function updateIdentity(payload: Partial<{ display_name: string | null; email: string | null }>): Promise<IdentityInfo> {
+  const r = await apiFetch(`/api/identity`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function listDir(path: string): Promise<{ items: Array<{ name: string; path: string; type: "dir" | "file" }> }> {
+  const r = await apiFetch(`/api/fs/list`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function readFile(path: string): Promise<{ content: string }> {
+  const r = await apiFetch(`/api/fs/read`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function writeFile(path: string, content: string): Promise<{ ok: boolean }> {
+  const r = await apiFetch(`/api/fs/write`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, content }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function getSettings(): Promise<SettingsInfo> {
+  const r = await apiFetch(`/api/settings`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function getModels(provider: string): Promise<{ provider: string; models: string[] }> {
+  const r = await apiFetch(`/api/models?provider=${encodeURIComponent(provider)}`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function updateSettings(patch: SettingsUpdate): Promise<{ ok: boolean; changed: string[] }> {
+  const r = await apiFetch(`/api/settings`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function generatePrd(
+  name: string,
+  goal: string,
+  ref_url?: string
+): Promise<{ ok: boolean; spoken: string; prd_markdown: string; log: string }> {
+  const r = await apiFetch(`/api/agent/prd`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, goal, ref_url }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function applyMany(
+  ops: Array<{ path: string; content: string }>,
+  overwrite = false
+): Promise<{ ok: boolean; count: number }> {
+  const r = await apiFetch(`/api/fs/apply_many`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ops, overwrite }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function diffFile(path: string, new_content: string): Promise<{ diff: string }> {
+  const r = await apiFetch(`/api/fs/diff`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, new_content }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function detectProjects(): Promise<{ ok: boolean; projects: Array<{ root: string; name: string; has_dev: boolean }> }> {
+  const r = await apiFetch(`/api/run/detect`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function runStart(project_root: string, port?: number): Promise<{ ok: boolean; id: string; pid: number; url: string; project_root: string }> {
+  const r = await apiFetch(`/api/run/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_root, port }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function runList(): Promise<{ ok: boolean; items: Array<{ id: string; project_root: string; port: number; url: string; pid: number | null; running: boolean }> }> {
+  const r = await apiFetch(`/api/run/list`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function runLogs(id: string, limit = 300): Promise<{ ok: boolean; id: string; pid: number | null; running: boolean; logs: string[] }> {
+  const r = await apiFetch(`/api/run/logs?id=${encodeURIComponent(id)}&limit=${limit}`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function runStop(id: string): Promise<{ ok: boolean }> {
+  const r = await apiFetch(`/api/run/stop?id=${encodeURIComponent(id)}`, { method: "POST" });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function runClose(id: string): Promise<{ ok: boolean }> {
+  const r = await apiFetch(`/api/run/close?id=${encodeURIComponent(id)}`, { method: "POST" });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export type PreviewAuditResult = {
+  ok: boolean;
+  preview_url: string;
+  title: string;
+  meta_description: string;
+  headings: string[];
+  subheadings: string[];
+  buttons: string[];
+  links: string[];
+  form_count: number;
+  input_count: number;
+  word_count: number;
+  image_count: number;
+  images_missing_alt: number;
+  issues: string[];
+  excerpt: string;
+  summary: string;
+};
+
+export async function auditPreview(preview_url: string, attempts = 3): Promise<PreviewAuditResult> {
+  const r = await apiFetch(`/api/preview/audit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ preview_url, attempts }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export type ProjectValidationRun = {
+  ok: boolean;
+  project_root: string;
+  commands: string[];
+  results: Array<{ command: string; ok: boolean; stdout: string; stderr: string; returncode: number }>;
+  ran: number;
+  passed: number;
+  failed: number;
+};
+
+export async function validateProject(project_root: string, max_commands = 4): Promise<ProjectValidationRun> {
+  const r = await apiFetch(`/api/project/validate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_root, max_commands }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function terminalRun(command: string, cwd?: string): Promise<{ ok: boolean; stdout: string; stderr: string; returncode: number }> {
+  const r = await apiFetch(`/api/terminal/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ command, cwd }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function uploadImageAsset(project_root: string, file: File): Promise<UploadedImageAsset> {
+  const form = new FormData();
+  form.append("project_root", project_root);
+  form.append("file", file, file.name);
+  const r = await apiFetch(`/api/assets/image`, {
+    method: "POST",
+    body: form,
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export type AgentChange = { path: string; new_content: string; diff: string };
+
+export async function agent(
+  input: string,
+  active_file?: string | null,
+  selection?: string | null,
+  project_root?: string | null,
+  build_mode?: BuildMode,
+  asset_paths?: string[],
+  current_content?: string | null,
+  open_files?: string[],
+  preview_url?: string | null,
+  editor_status?: string | null,
+): Promise<{ spoken: string; log: string; changes: AgentChange[]; actions: Array<{ type: string; [key: string]: unknown }> }> {
+  const r = await apiFetch(`/api/agent`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      input,
+      mode: "type",
+      active_file,
+      selection,
+      current_content,
+      open_files,
+      project_root,
+      build_mode,
+      preview_url,
+      editor_status,
+      asset_paths,
+    }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}

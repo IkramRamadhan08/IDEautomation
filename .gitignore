@@ -1,0 +1,35 @@
+# env
+.env
+.env.*
+!.env.example
+!api/.env.example
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+backend/.venv/
+frontend/public/.venv/
+*.egg-info/
+
+# node
+node_modules/
+frontend/node_modules/
+
+# build outputs
+dist/
+coverage/
+playwright-report/
+
+# local runtime data
+.voiceide-users.json
+*.log
+
+# misc
+.DS_Store
+
+# legacy local oauth state
+.voiceide-oauth-state/
+
+
