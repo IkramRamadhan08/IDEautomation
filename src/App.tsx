@@ -188,6 +188,10 @@ export default function App() {
     if (typeof window !== "undefined") {
       window.localStorage.removeItem("voiceide-demo-mode");
     }
+    if (folderInputRef.current) {
+      folderInputRef.current.setAttribute("webkitdirectory", "");
+      folderInputRef.current.setAttribute("directory", "");
+    }
   }, []);
 
   useEffect(() => {
@@ -463,6 +467,10 @@ export default function App() {
   };
 
   const pickWorkspace = async () => {
+    if (isHostedBrowser()) {
+      folderInputRef.current?.click();
+      return;
+    }
     try {
       const picked = await pickWorkspaceNative();
       if (picked?.ok && picked.path) {
@@ -470,21 +478,32 @@ export default function App() {
         setWs(res.path);
         return;
       }
-    } catch { /* fall through */ }
-    folderInputRef.current?.click();
+    } catch {
+      folderInputRef.current?.click();
+    }
   };
 
   const createManagedWorkspace = async () => {
-    const res = await provisionWorkspace();
-    setWs(res.path);
-    setEditorStatus(`Workspace ready: ${res.path}`);
-    await refreshProjects();
+    try {
+      const res = await provisionWorkspace();
+      setWs(res.path);
+      setEditorStatus(`Workspace ready: ${res.path}`);
+      await refreshProjects();
+      toast.success("Workspace siap");
+    } catch (e) {
+      setEditorStatus("Failed to create workspace");
+      toast.error("Gagal membuat workspace: " + errorMessage(e));
+    }
   };
 
   const createHostedProjectFromPrompt = async () => {
     const name = window.prompt("Project name:");
     if (!name?.trim()) return;
     try {
+      if (!ws) {
+        const provisioned = await provisionWorkspace();
+        setWs(provisioned.path);
+      }
       const res = await createHostedProject({ name: name.trim() });
       if (settings?.supabase_enabled && googleAuth?.authenticated) {
         await updateProjectPreferences(res.project.id, { build_mode: buildModeDraft });
@@ -862,6 +881,7 @@ export default function App() {
         <div className="workspaceGateTitle">Choose where this session should build</div>
         <div className="workspaceGateSubtitle">
           Open an existing project, or create a managed workspace and start from a cleaner default surface.
+          {isHostedBrowser() ? " In hosted mode, folder access uses browser upload and managed workspaces are temporary." : ""}
         </div>
         <div className="workspaceGateFeatureGrid">
           <div className="gateFeatureCard">
@@ -874,7 +894,7 @@ export default function App() {
           </div>
         </div>
         <div className="workspaceGateActions">
-          <button className="btn primary" onClick={pickWorkspace}>Open folder…</button>
+          <button className="btn primary" onClick={pickWorkspace}>{isHostedBrowser() ? "Open folder from browser…" : "Open folder…"}</button>
           <button className="btn" onClick={createManagedWorkspace}>Create workspace</button>
           <button className="btn" onClick={createHostedProjectFromPrompt}>New project</button>
           <button className="btn" onClick={logoutToStart}>Logout</button>

@@ -527,8 +527,16 @@ class WorkspaceProvisionResp(BaseModel):
 
 
 def _managed_workspace_root() -> Path:
-    base_raw = settings_mod.settings.default_workspace or "~/.voiceide-home"
-    return Path(base_raw).expanduser().resolve()
+    import os
+
+    base_raw = settings_mod.settings.default_workspace
+    if base_raw:
+        return Path(base_raw).expanduser().resolve()
+
+    if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME") or os.environ.get("LAMBDA_TASK_ROOT"):
+        return Path("/tmp/.voiceide-home").resolve()
+
+    return Path("~/.voiceide-home").expanduser().resolve()
 
 
 def _managed_workspace_target() -> tuple[Path, Literal["user", "session"]]:
