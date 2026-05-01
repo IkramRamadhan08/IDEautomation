@@ -64,22 +64,9 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
-const DEMO_MODE_STORAGE_KEY = "voiceide-demo-mode";
-
 function getDefaultAssistPaneWidth() {
   if (typeof window === "undefined") return 280;
   return Math.max(220, Math.min(280, Math.floor(window.innerWidth * 0.24)));
-}
-
-function getStoredDemoMode() {
-  if (typeof window === "undefined") return false;
-  return window.localStorage.getItem(DEMO_MODE_STORAGE_KEY) === "1";
-}
-
-function setStoredDemoMode(enabled: boolean) {
-  if (typeof window === "undefined") return;
-  if (enabled) window.localStorage.setItem(DEMO_MODE_STORAGE_KEY, "1");
-  else window.localStorage.removeItem(DEMO_MODE_STORAGE_KEY);
 }
 
 function isHostedBrowser() {
@@ -198,6 +185,12 @@ export default function App() {
 
   // --- Auth & Init ---
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem("voiceide-demo-mode");
+    }
+  }, []);
+
+  useEffect(() => {
     const applySessionAuth = (session: Session | null) => {
       if (session) {
         setGoogleAuth({
@@ -209,20 +202,6 @@ export default function App() {
             email: session.user.email ?? null,
             name: typeof session.user.user_metadata?.full_name === "string" ? session.user.user_metadata.full_name : null,
             picture: typeof session.user.user_metadata?.avatar_url === "string" ? session.user.user_metadata.avatar_url : null,
-          },
-        });
-        return;
-      }
-      if (getStoredDemoMode()) {
-        setGoogleAuth({
-          ok: true,
-          authenticated: true,
-          phase: "demo",
-          user: {
-            sub: "demo-mode",
-            email: null,
-            name: "Demo Mode",
-            picture: null,
           },
         });
         return;
@@ -329,7 +308,6 @@ export default function App() {
 
   const startGoogleLogin = async () => {
     try {
-      setStoredDemoMode(false);
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: { redirectTo: window.location.origin },
@@ -340,25 +318,8 @@ export default function App() {
     }
   };
 
-  const startDemoMode = async () => {
-    setStoredDemoMode(true);
-    setGoogleAuth({
-      ok: true,
-      authenticated: true,
-      phase: "demo",
-      user: {
-        sub: "demo-mode",
-        email: null,
-        name: "Demo Mode",
-        picture: null,
-      },
-    });
-    toast.success("Demo mode aktif");
-  };
-
   const logoutToStart = async () => {
     try {
-      setStoredDemoMode(false);
       await supabase.auth.signOut();
       resetClientIdentity();
       setWs(null);
@@ -889,7 +850,6 @@ export default function App() {
         </div>
         <div className="workspaceGateActions">
           <button className="btn primary" onClick={startGoogleLogin}>Continue with Google</button>
-          <button className="btn subtleBtn" onClick={() => void startDemoMode()}>Continue in Demo Mode</button>
         </div>
       </div>
     </div>
