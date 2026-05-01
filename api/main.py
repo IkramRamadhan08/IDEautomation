@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path, PurePosixPath
 from typing import Literal
+import os
 import threading
 import time
 import json
@@ -920,6 +921,9 @@ def run_start(req: RunStartReq):
     import time
     import uuid
     import sys
+
+    if os.getenv("VERCEL"):
+        raise HTTPException(400, "Live preview runner only works in local desktop mode, not in the hosted Vercel deployment.")
 
     base = _ws()
     proj = safe_join(base, req.project_root)

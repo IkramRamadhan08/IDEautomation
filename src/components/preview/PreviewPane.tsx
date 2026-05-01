@@ -18,8 +18,14 @@ export const PreviewPane: React.FC<PreviewPaneProps> = ({
   onHide,
   isSmall = false,
 }) => {
+  const browserHost = typeof window !== "undefined" ? window.location.hostname.toLowerCase() : "";
+  const hostedBrowser = browserHost && !["localhost", "127.0.0.1", "::1"].includes(browserHost);
+  const localPreviewTarget = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|::1)(:\d+)?/i.test(previewUrl);
+  const unreachableHostedPreview = hostedBrowser && localPreviewTarget;
   const previewState = previewUrl ? "Live preview" : "Preview idle";
-  const previewMeta = previewUrl || "Start the app to open a clean embedded viewport.";
+  const previewMeta = unreachableHostedPreview
+    ? "Hosted mode cannot open localhost preview targets from your browser."
+    : previewUrl || "Start the app to open a clean embedded viewport.";
   const containerClassName = isSmall ? "previewMiniShell" : "pane previewPane fullAgentPreviewPane";
   const bodyClassName = isSmall ? "previewMiniBody" : "consoleBody sidebarBody previewBody";
   const viewportClassName = isSmall ? "previewEmbedSmall" : "previewViewport";
@@ -36,7 +42,7 @@ export const PreviewPane: React.FC<PreviewPaneProps> = ({
             <RefreshCw size={14} />
             <span>{previewUrl ? "Reload" : "Start"}</span>
           </button>
-          {previewUrl ? (
+          {previewUrl && !unreachableHostedPreview ? (
             <a className="btn subtleBtn" href={previewUrl} target="_blank" rel="noreferrer">
               <ExternalLink size={14} />
               <span>Open</span>
@@ -63,6 +69,16 @@ export const PreviewPane: React.FC<PreviewPaneProps> = ({
                 <Play size={14} />
                 <span>Start preview</span>
               </button>
+            </div>
+          ) : unreachableHostedPreview ? (
+            <div className="emptyPreview">
+              <div className="emptyStateIcon">
+                <ExternalLink size={18} />
+              </div>
+              <div className="emptyPreviewTitle">Local preview is unavailable in hosted mode</div>
+              <div className="emptyStateText">
+                This deployed app can edit files and use the agent, but it cannot open a runtime served from localhost inside your browser.
+              </div>
             </div>
           ) : (
             <div className={viewportClassName}>

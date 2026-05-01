@@ -69,6 +69,12 @@ function getDefaultAssistPaneWidth() {
   return Math.max(220, Math.min(280, Math.floor(window.innerWidth * 0.24)));
 }
 
+function isHostedBrowser() {
+  if (typeof window === "undefined") return false;
+  const host = window.location.hostname.toLowerCase();
+  return !["localhost", "127.0.0.1", "::1"].includes(host);
+}
+
 function mergeBuffersWithChanges(currentBuffers: Record<string, FileBuffer>, changes: AgentChange[]) {
   let mutated = false;
   const next = { ...currentBuffers };
@@ -785,6 +791,12 @@ export default function App() {
 
   const ensurePreviewRunning = async () => {
     if (!ws) return "";
+    if (isHostedBrowser()) {
+      const msg = "Live preview lokal belum didukung di deployment Vercel. Untuk sekarang, mode web bisa edit dan agent dulu, tapi preview runtime harus dijalankan dari app lokal/desktop.";
+      setEditorStatus("Preview lokal tidak tersedia di hosted mode");
+      toast.error(msg);
+      return "";
+    }
     setEditorStatus(`Starting preview for ${selectedProject}...`);
     try {
       const r = await runStart(selectedProject);
