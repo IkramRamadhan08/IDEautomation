@@ -6,7 +6,7 @@ from api.auth_policy import require_hosted_user
 from api.projects import ProjectCreateReq, ProjectListResp, ProjectRenameReq, ProjectResp, archive_project, create_project, list_projects, rename_project
 
 
-def build_projects_router(*, session_state):
+def build_projects_router(*, session_state, ensure_workspace=None):
     router = APIRouter(prefix="/api/projects", tags=["projects"])
 
     @router.get("", response_model=ProjectListResp)
@@ -17,6 +17,9 @@ def build_projects_router(*, session_state):
     @router.post("", response_model=ProjectResp)
     def create_project_route(req: ProjectCreateReq, user=Depends(require_hosted_user)):
         ws_root = session_state().get("workspace")
+        if not ws_root and ensure_workspace:
+            ws_root, _created = ensure_workspace()
+            session_state()["workspace"] = ws_root
         if not ws_root:
             raise HTTPException(400, "Workspace not set")
         project = create_project(workspace_root=ws_root, owner_id=user.user_id, req=req)

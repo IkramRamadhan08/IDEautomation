@@ -774,7 +774,7 @@ def _env_unset(key: str) -> None:
 
 
 app.include_router(build_auth_router(session_state=_session_state, sanitize_session_id=_sanitize_session_id, sanitize_user_id=sanitize_user_id, upsert_current_user_profile=_upsert_current_user_profile))
-app.include_router(build_projects_router(session_state=_session_state))
+app.include_router(build_projects_router(session_state=_session_state, ensure_workspace=_provision_managed_workspace))
 app.include_router(build_preferences_router())
 app.include_router(build_settings_router(session_state=_session_state, env_set=_env_set, env_unset=_env_unset, reload_settings=_reload_settings))
 
