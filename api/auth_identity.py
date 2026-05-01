@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi import Header, HTTPException
+from fastapi import Header
 
 from api.app_state import CURRENT_USER_ID
 from api.supabase_store import get_supabase_admin, upsert_profile
@@ -52,11 +52,11 @@ def verify_supabase_bearer_token(authorization: str | None) -> AuthenticatedUser
     try:
         result = client.auth.get_user(token)
         user = getattr(result, "user", None)
-    except Exception as exc:
-        raise HTTPException(401, f"Invalid Supabase token: {exc}")
+    except Exception:
+        return None
 
     if not user or not getattr(user, "id", None):
-        raise HTTPException(401, "Invalid Supabase token")
+        return None
 
     supabase_user_id = str(getattr(user, "id", "") or "").strip()
     email = str(getattr(user, "email", "") or "").strip() or None

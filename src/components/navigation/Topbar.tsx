@@ -43,6 +43,8 @@ export const Topbar: React.FC<TopbarProps> = ({
   const userLabel = identity?.display_name || identity?.email || "Signed in";
   const userInitial = userLabel.trim().charAt(0).toUpperCase() || "V";
   const modeProfile = getBuildModeProfile(buildMode);
+  const browserHost = typeof window !== "undefined" ? window.location.hostname.toLowerCase() : "";
+  const hostedPreviewUnavailable = Boolean(browserHost && !["localhost", "127.0.0.1", "::1"].includes(browserHost) && !previewUrl);
 
   return (
     <header className="topbar">
@@ -126,9 +128,9 @@ export const Topbar: React.FC<TopbarProps> = ({
           <span>Settings</span>
         </button>
 
-        <button className="btn primary iconBtn" disabled={!ws} onClick={onEnsurePreviewRunning}>
+        <button className="btn primary iconBtn" disabled={!ws || hostedPreviewUnavailable} onClick={onEnsurePreviewRunning} title={hostedPreviewUnavailable ? "Preview runtime hanya tersedia di app lokal/desktop" : "Preview"}>
           <Play size={16} />
-          <span>Preview</span>
+          <span>{hostedPreviewUnavailable ? "Preview off" : "Preview"}</span>
         </button>
 
         <div className="topbarUserBadge" title={userLabel}>

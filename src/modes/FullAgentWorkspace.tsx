@@ -42,6 +42,8 @@ export const FullAgentWorkspace: React.FC<FullAgentWorkspaceProps> = ({
   const statusTone = getStatusTone(agentStatus, previewUrl);
   const logLines = agentLog.split("\n").filter(Boolean).slice(-6);
   const recentActions = agentActions.slice(-4);
+  const browserHost = typeof window !== "undefined" ? window.location.hostname.toLowerCase() : "";
+  const hostedPreviewUnavailable = Boolean(browserHost && !["localhost", "127.0.0.1", "::1"].includes(browserHost) && !previewUrl);
   const statusText = agentStatus === "thinking"
     ? workingMsg || "Clara lagi ngerakit hasilnya."
     : agentStatus === "error"
@@ -144,9 +146,9 @@ export const FullAgentWorkspace: React.FC<FullAgentWorkspaceProps> = ({
               <div className="missionCardEyebrow">Build stage</div>
               <div className="missionCardTitle">Autonomous product runway</div>
             </div>
-            <button className="btn primary" onClick={onEnsurePreviewRunning} disabled={!ws}>
+            <button className="btn primary" onClick={onEnsurePreviewRunning} disabled={!ws || hostedPreviewUnavailable} title={hostedPreviewUnavailable ? "Preview runtime hanya tersedia di app lokal/desktop" : "Start preview"}>
               <Play size={14} />
-              <span>{previewUrl ? "Refresh preview" : "Start preview"}</span>
+              <span>{previewUrl ? "Refresh preview" : hostedPreviewUnavailable ? "Preview unavailable here" : "Start preview"}</span>
             </button>
           </div>
           <div className="missionPrimaryText">This lane is for handing over the product build. Clara should be able to turn a rough idea into a runnable, polished direction without babysitting every file.</div>

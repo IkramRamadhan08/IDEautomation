@@ -19,13 +19,16 @@ export const PreviewPane: React.FC<PreviewPaneProps> = ({
   isSmall = false,
 }) => {
   const browserHost = typeof window !== "undefined" ? window.location.hostname.toLowerCase() : "";
-  const hostedBrowser = browserHost && !["localhost", "127.0.0.1", "::1"].includes(browserHost);
+  const hostedBrowser = Boolean(browserHost && !["localhost", "127.0.0.1", "::1"].includes(browserHost));
   const localPreviewTarget = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|::1)(:\d+)?/i.test(previewUrl);
   const unreachableHostedPreview = hostedBrowser && localPreviewTarget;
+  const hostedPreviewUnavailable = hostedBrowser && !previewUrl;
   const previewState = previewUrl ? "Live preview" : "Preview idle";
   const previewMeta = unreachableHostedPreview
     ? "Hosted mode cannot open localhost preview targets from your browser."
-    : previewUrl || "Start the app to open a clean embedded viewport.";
+    : hostedPreviewUnavailable
+      ? "Hosted demo can edit files, but runtime preview must run from the local desktop app."
+      : previewUrl || "Start the app to open a clean embedded viewport.";
   const containerClassName = isSmall ? "previewMiniShell" : "pane previewPane fullAgentPreviewPane";
   const bodyClassName = isSmall ? "previewMiniBody" : "consoleBody sidebarBody previewBody";
   const viewportClassName = isSmall ? "previewEmbedSmall" : "previewViewport";
@@ -38,9 +41,9 @@ export const PreviewPane: React.FC<PreviewPaneProps> = ({
           <div className="paneHeading">Preview</div>
         </div>
         <div className="editorActions">
-          <button className="btn subtleBtn" onClick={onEnsurePreviewRunning} disabled={!ws}>
+          <button className="btn subtleBtn" onClick={onEnsurePreviewRunning} disabled={!ws || hostedPreviewUnavailable}>
             <RefreshCw size={14} />
-            <span>{previewUrl ? "Reload" : "Start"}</span>
+            <span>{previewUrl ? "Reload" : hostedPreviewUnavailable ? "Hosted only" : "Start"}</span>
           </button>
           {previewUrl && !unreachableHostedPreview ? (
             <a className="btn subtleBtn" href={previewUrl} target="_blank" rel="noreferrer">
@@ -64,10 +67,10 @@ export const PreviewPane: React.FC<PreviewPaneProps> = ({
                 <Play size={18} />
               </div>
               <div className="emptyPreviewTitle">Preview is not running</div>
-              <div className="emptyStateText">Launch the selected project and you will get a clean in-app browser surface here.</div>
-              <button className="btn primary" onClick={onEnsurePreviewRunning} disabled={!ws}>
+              <div className="emptyStateText">{hostedPreviewUnavailable ? "Hosted demo can edit files and use the agent, but app runtime preview only works from the local desktop version." : "Launch the selected project and you will get a clean in-app browser surface here."}</div>
+              <button className="btn primary" onClick={onEnsurePreviewRunning} disabled={!ws || hostedPreviewUnavailable}>
                 <Play size={14} />
-                <span>Start preview</span>
+                <span>{hostedPreviewUnavailable ? "Preview unavailable here" : "Start preview"}</span>
               </button>
             </div>
           ) : unreachableHostedPreview ? (
