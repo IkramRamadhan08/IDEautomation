@@ -20,7 +20,6 @@ import {
   pickWorkspaceNative,
   provisionWorkspace,
   resetClientIdentity,
-  setClientUserId,
   setWorkspace,
   updateSettings,
   updateUserPreferences,
@@ -66,22 +65,9 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
-const DEMO_MODE_STORAGE_KEY = "voiceide-demo-mode";
-
 function getDefaultAssistPaneWidth() {
   if (typeof window === "undefined") return 280;
   return Math.max(220, Math.min(280, Math.floor(window.innerWidth * 0.24)));
-}
-
-function getStoredDemoMode() {
-  if (typeof window === "undefined") return false;
-  return window.localStorage.getItem(DEMO_MODE_STORAGE_KEY) === "1";
-}
-
-function setStoredDemoMode(enabled: boolean) {
-  if (typeof window === "undefined") return;
-  if (enabled) window.localStorage.setItem(DEMO_MODE_STORAGE_KEY, "1");
-  else window.localStorage.removeItem(DEMO_MODE_STORAGE_KEY);
 }
 
 function isHostedBrowser() {
@@ -144,16 +130,6 @@ function formatPreviewAuditReport(audit: PreviewAuditResult, maxChars = 4000) {
   return report.length > maxChars ? `${report.slice(0, maxChars)}\n…[truncated]` : report;
 }
 
-function slugifyProjectName(value: string) {
-  const slug = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48);
-  return slug || "demo-project";
-}
-
 export default function App() {
   const [ws, setWs] = useState<string | null>(null);
   const [identity, setIdentity] = useState<IdentityInfo | null>(null);
@@ -207,8 +183,7 @@ export default function App() {
 
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
-  const isDemoMode = googleAuth?.phase === "demo";
-  const hasVerifiedHostedAuth = Boolean(settings?.supabase_enabled && googleAuth?.authenticated && !isDemoMode);
+  const hasVerifiedHostedAuth = Boolean(settings?.supabase_enabled && googleAuth?.authenticated);
 
   const bindFolderInputRef = (node: HTMLInputElement | null) => {
     folderInputRef.current = node;
@@ -230,9 +205,12 @@ export default function App() {
 
   // --- Auth & Init ---
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem("voiceide-demo-mode");
+    }
+
     const applySessionAuth = (session: Session | null) => {
       if (session) {
-        setStoredDemoMode(false);
         setGoogleAuth({
           ok: true,
           authenticated: true,
@@ -242,21 +220,6 @@ export default function App() {
             email: session.user.email ?? null,
             name: typeof session.user.user_metadata?.full_name === "string" ? session.user.user_metadata.full_name : null,
             picture: typeof session.user.user_metadata?.avatar_url === "string" ? session.user.user_metadata.avatar_url : null,
-          },
-        });
-        return;
-      }
-      if (getStoredDemoMode()) {
-        const activeDemoUserId = setClientUserId("demo-user");
-        setGoogleAuth({
-          ok: true,
-          authenticated: true,
-          phase: "demo",
-          user: {
-            sub: activeDemoUserId,
-            email: null,
-            name: "Demo Mode",
-            picture: null,
           },
         });
         return;
@@ -336,7 +299,7 @@ export default function App() {
       let nextProvider = (s.llm_provider || "") as ProviderChoice;
       let nextModel = "";
 
-      if (s.supabase_enabled && googleAuth?.authenticated && !isDemoMode) {
+      if (s.supabase_enabled && googleAuth?.authenticated) {
         try {
           const prefRes = await getUserPreferences();
           const prefs = prefRes.preferences;
@@ -367,21 +330,13 @@ export default function App() {
   const loadWorkspaceOverview = async () => {
     try {
       const info = await getWorkspace();
-      if (info.path) {
-        setWs(info.path);
-        return;
-      }
-      if (getStoredDemoMode()) {
-        const provisioned = await provisionWorkspace();
-        setWs(provisioned.path);
-      }
+      setWs(info.path);
     } catch {
       // keep the current workspace state if a background restore check fails
     }
   };
 
   const startGoogleLogin = async () => {
-    setStoredDemoMode(false);
     try {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
@@ -393,40 +348,7 @@ export default function App() {
     }
   };
 
-  const startDemoMode = async () => {
-    try {
-      setStoredDemoMode(true);
-      resetClientIdentity();
-      const demoUserId = setClientUserId("demo-user");
-      try {
-        await supabase.auth.signOut();
-      } catch {
-        // ignore stale hosted auth cleanup failures
-      }
-      const res = await provisionWorkspace();
-      setWs(res.path);
-      setGoogleAuth({
-        ok: true,
-        authenticated: true,
-        phase: "demo",
-        user: {
-          sub: demoUserId,
-          email: null,
-          name: "Demo Mode",
-          picture: null,
-        },
-      });
-      setSelectedProject(".");
-      setEditorStatus(`Demo workspace ready: ${res.path}`);
-      await openFile("README.md");
-      toast.success("Demo siap dipakai");
-    } catch (e) {
-      toast.error("Gagal masuk demo: " + errorMessage(e));
-    }
-  };
-
   const logoutToStart = async () => {
-    setStoredDemoMode(false);
     try {
       await supabase.auth.signOut();
     } catch {
@@ -608,17 +530,6 @@ export default function App() {
       if (!ws) {
         const provisioned = await provisionWorkspace();
         setWs(provisioned.path);
-      }
-
-      if (isDemoMode) {
-        const slug = slugifyProjectName(name);
-        await writeFile(`${slug}/README.md`, `# ${name.trim()}\n\nDemo project is ready. Start editing files here.\n`);
-        await refreshExplorer(".");
-        setSelectedProject(slug);
-        setEditorStatus(`Project ready: ${name.trim()}`);
-        await openFile(`${slug}/README.md`);
-        toast.success(`Project created: ${name.trim()}`);
-        return;
       }
 
       const res = await createHostedProject({ name: name.trim() });
@@ -986,7 +897,6 @@ export default function App() {
         </div>
         <div className="workspaceGateActions">
           <button className="btn primary" onClick={startGoogleLogin}>Continue with Google</button>
-          <button className="btn" onClick={() => void startDemoMode()}>Continue in Demo Mode</button>
         </div>
       </div>
     </div>
