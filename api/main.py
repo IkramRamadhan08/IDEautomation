@@ -29,10 +29,6 @@ from api.agent_modes import get_agent_mode_spec
 
 
 app = FastAPI(title="Voice IDE Backend", version="0.1.0")
-app.include_router(build_auth_router(session_state=_session_state, sanitize_session_id=_sanitize_session_id, sanitize_user_id=_sanitize_user_id, upsert_current_user_profile=_upsert_current_user_profile))
-app.include_router(build_projects_router(session_state=_session_state))
-app.include_router(build_preferences_router())
-app.include_router(build_settings_router(session_state=_session_state, env_set=_env_set, env_unset=_env_unset, reload_settings=_reload_settings))
 
 # Serialize LLM calls to avoid provider rate-limit bursts (429).
 SCAFFOLD_LOCK = threading.Lock()
@@ -766,6 +762,12 @@ def _env_unset(key: str) -> None:
         capture_output=True,
         text=True,
     )
+
+
+app.include_router(build_auth_router(session_state=_session_state, sanitize_session_id=_sanitize_session_id, sanitize_user_id=sanitize_user_id, upsert_current_user_profile=_upsert_current_user_profile))
+app.include_router(build_projects_router(session_state=_session_state))
+app.include_router(build_preferences_router())
+app.include_router(build_settings_router(session_state=_session_state, env_set=_env_set, env_unset=_env_unset, reload_settings=_reload_settings))
 
 
 def _ws() -> Path:

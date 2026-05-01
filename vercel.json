@@ -3,7 +3,6 @@
   "framework": "vite",
   "functions": {
     "api/index.py": {
-      "runtime": "python3.12",
       "maxDuration": 30
     }
   },
