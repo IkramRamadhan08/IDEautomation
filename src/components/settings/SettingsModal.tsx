@@ -117,16 +117,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           <div className="settingsSection">
             <label className="settingsLabel">API key</label>
-            {llmProviderDraft === "openai" && (
-              <input type="password" value={openaiApiKeyDraft} onChange={(e) => onApiKeyChange("openai", e.target.value)} className="settingsInput" placeholder="sk-..." />
+            {settings?.supabase_enabled ? (
+              <div className="settingsSubtle compactHint">Hosted mode belum support simpan API key dari UI. Isi provider key lewat environment deployment.</div>
+            ) : (
+              <>
+                {llmProviderDraft === "openai" && (
+                  <input type="password" value={openaiApiKeyDraft} onChange={(e) => onApiKeyChange("openai", e.target.value)} className="settingsInput" placeholder="sk-..." />
+                )}
+                {llmProviderDraft === "anthropic" && (
+                  <input type="password" value={anthropicApiKeyDraft} onChange={(e) => onApiKeyChange("anthropic", e.target.value)} className="settingsInput" placeholder="sk-ant-..." />
+                )}
+                {llmProviderDraft === "openrouter" && (
+                  <input type="password" value={openrouterApiKeyDraft} onChange={(e) => onApiKeyChange("openrouter", e.target.value)} className="settingsInput" placeholder="sk-or-..." />
+                )}
+                {!llmProviderDraft ? <div className="settingsSubtle">Pick a provider first.</div> : null}
+              </>
             )}
-            {llmProviderDraft === "anthropic" && (
-              <input type="password" value={anthropicApiKeyDraft} onChange={(e) => onApiKeyChange("anthropic", e.target.value)} className="settingsInput" placeholder="sk-ant-..." />
-            )}
-            {llmProviderDraft === "openrouter" && (
-              <input type="password" value={openrouterApiKeyDraft} onChange={(e) => onApiKeyChange("openrouter", e.target.value)} className="settingsInput" placeholder="sk-or-..." />
-            )}
-            {!llmProviderDraft ? <div className="settingsSubtle">Pick a provider first.</div> : null}
           </div>
 
           <div className="settingsSection">

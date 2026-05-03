@@ -625,9 +625,11 @@ export default function App() {
         else if (llmProviderDraft === "anthropic") patch.anthropic_model = modelDraft;
         else if (llmProviderDraft === "openrouter") patch.openrouter_model = modelDraft;
       }
-      if (openaiApiKeyDraft) patch.openai_api_key = openaiApiKeyDraft;
-      if (anthropicApiKeyDraft) patch.anthropic_api_key = anthropicApiKeyDraft;
-      if (openrouterApiKeyDraft) patch.openrouter_api_key = openrouterApiKeyDraft;
+      if (!hasVerifiedHostedAuth) {
+        if (openaiApiKeyDraft) patch.openai_api_key = openaiApiKeyDraft;
+        if (anthropicApiKeyDraft) patch.anthropic_api_key = anthropicApiKeyDraft;
+        if (openrouterApiKeyDraft) patch.openrouter_api_key = openrouterApiKeyDraft;
+      }
 
       await updateSettings(patch);
 
@@ -644,7 +646,7 @@ export default function App() {
       await loadSettingsOverview();
       setBuildMode(buildModeDraft);
       setSettingsOpen(false);
-      toast.success("Settings disimpan");
+      toast.success(hasVerifiedHostedAuth ? "Model settings disimpan" : "Settings disimpan");
     } catch (e) {
       toast.error("Gagal menyimpan settings: " + errorMessage(e));
     }

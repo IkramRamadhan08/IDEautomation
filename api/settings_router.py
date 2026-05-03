@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends, Header
 from pydantic import BaseModel
 
 from api import settings as settings_mod
 from api.settings import ENV_PATH, ROOT
+from api.auth_identity import resolve_request_user
+from api.supabase_store import has_supabase
+from api.preferences import UserPreferencesUpdateReq, upsert_user_preferences
 
 
 class ProviderStatus(BaseModel):
@@ -88,7 +91,39 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
             raise HTTPException(500, str(exc))
 
     @router.put("/settings")
-    def update_settings(req: SettingsUpdateReq):
+    def update_settings(req: SettingsUpdateReq, authorization: str | None = Header(default=None), x_voiceide_user: str | None = Header(default=None)):
+        user = resolve_request_user(authorization=authorization, x_voiceide_user=x_voiceide_user)
+        changed: list[str] = []
+
+        hosted_mode = has_supabase() and user.auth_source == "supabase"
+        has_secret_updates = any(
+            value is not None for value in [req.openai_api_key, req.anthropic_api_key, req.openrouter_api_key]
+        )
+
+        if hosted_mode:
+            if has_secret_updates:
+                raise HTTPException(400, "Hosted deployment belum mendukung simpan API key dari Settings. Isi provider secret lewat environment deployment dulu.")
+
+            pref_req = UserPreferencesUpdateReq(
+                llm_provider=req.llm_provider,
+                build_mode=req.build_mode,
+                openai_model=req.openai_model,
+                anthropic_model=req.anthropic_model,
+                openrouter_model=req.openrouter_model,
+            )
+            upsert_user_preferences(profile_id=user.user_id, req=pref_req)
+            if req.llm_provider is not None:
+                changed.append("llm_provider")
+            if req.build_mode is not None:
+                changed.append("build_mode")
+            if req.openai_model is not None:
+                changed.append("openai_model")
+            if req.anthropic_model is not None:
+                changed.append("anthropic_model")
+            if req.openrouter_model is not None:
+                changed.append("openrouter_model")
+            return {"ok": True, "changed": changed, "storage": "hosted_preferences"}
+
         mapping: list[tuple[str, str | None]] = [
             ("DEFAULT_WORKSPACE", req.default_workspace if req.default_workspace is not None else None),
             ("LLM_PROVIDER", req.llm_provider),
@@ -101,8 +136,6 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
             ("ANTHROPIC_API_KEY", req.anthropic_api_key),
             ("OPENROUTER_API_KEY", req.openrouter_api_key),
         ]
-
-        changed: list[str] = []
 
         if not ENV_PATH.exists():
             import shutil
@@ -124,6 +157,6 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
             changed.append(env_key)
 
         reload_settings()
-        return {"ok": True, "changed": changed}
+        return {"ok": True, "changed": changed, "storage": "env"}
 
     return router
