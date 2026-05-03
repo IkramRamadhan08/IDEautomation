@@ -49,12 +49,31 @@ def upsert_profile(*, user_id: str, supabase_user_id: str | None = None, display
     client = get_supabase_admin()
     if not client:
         return None
+
+    updated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    if supabase_user_id:
+        payload_uuid = {
+            "id": supabase_user_id,
+            "supabase_user_id": supabase_user_id,
+            "display_name": display_name,
+            "email": email,
+            "updated_at": updated_at,
+        }
+        try:
+            res_uuid = client.table("profiles").upsert(payload_uuid).execute()
+            data_uuid = getattr(res_uuid, "data", None) or []
+            if data_uuid:
+                return data_uuid[0]
+        except Exception:
+            pass
+
     payload = {
         "id": user_id,
         "supabase_user_id": supabase_user_id,
         "display_name": display_name,
         "email": email,
-        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "updated_at": updated_at,
     }
     res = client.table("profiles").upsert(payload).execute()
     data = getattr(res, "data", None) or []
