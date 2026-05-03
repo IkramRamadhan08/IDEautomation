@@ -65,7 +65,7 @@ def verify_supabase_bearer_token(authorization: str | None) -> AuthenticatedUser
     user_id = sanitize_user_id(f"sb-{supabase_user_id}")
 
     try:
-        upsert_profile(user_id=user_id, display_name=display_name, email=email)
+        upsert_profile(user_id=user_id, supabase_user_id=supabase_user_id, display_name=display_name, email=email)
     except Exception:
         pass
 

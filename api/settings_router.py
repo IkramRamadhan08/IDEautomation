@@ -102,26 +102,30 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
         )
 
         if hosted_mode:
+            secret_profile_id = (user.supabase_user_id or "").strip()
+            if not secret_profile_id:
+                raise HTTPException(400, "Hosted secret storage membutuhkan login Supabase yang valid.")
+
             if req.openai_api_key is not None:
                 key = req.openai_api_key.strip()
                 if key:
-                    upsert_provider_secret(profile_id=user.user_id, provider="openai", api_key=key)
+                    upsert_provider_secret(profile_id=secret_profile_id, provider="openai", api_key=key)
                 else:
-                    delete_provider_secret(profile_id=user.user_id, provider="openai")
+                    delete_provider_secret(profile_id=secret_profile_id, provider="openai")
                 changed.append("openai_api_key")
             if req.anthropic_api_key is not None:
                 key = req.anthropic_api_key.strip()
                 if key:
-                    upsert_provider_secret(profile_id=user.user_id, provider="anthropic", api_key=key)
+                    upsert_provider_secret(profile_id=secret_profile_id, provider="anthropic", api_key=key)
                 else:
-                    delete_provider_secret(profile_id=user.user_id, provider="anthropic")
+                    delete_provider_secret(profile_id=secret_profile_id, provider="anthropic")
                 changed.append("anthropic_api_key")
             if req.openrouter_api_key is not None:
                 key = req.openrouter_api_key.strip()
                 if key:
-                    upsert_provider_secret(profile_id=user.user_id, provider="openrouter", api_key=key)
+                    upsert_provider_secret(profile_id=secret_profile_id, provider="openrouter", api_key=key)
                 else:
-                    delete_provider_secret(profile_id=user.user_id, provider="openrouter")
+                    delete_provider_secret(profile_id=secret_profile_id, provider="openrouter")
                 changed.append("openrouter_api_key")
 
             pref_req = UserPreferencesUpdateReq(

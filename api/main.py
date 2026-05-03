@@ -258,7 +258,7 @@ async def bind_voiceide_session(request: Request, call_next):
         x_voiceide_user=request.headers.get("X-VoiceIDE-User"),
     )
     user_token = CURRENT_USER_ID.set(resolved_user.user_id)
-    profile_token = CURRENT_PROFILE_ID.set(resolved_user.user_id)
+    profile_token = CURRENT_PROFILE_ID.set(resolved_user.supabase_user_id or resolved_user.user_id)
     try:
         session = _session_state()
         google_user = session.get("google_user") or {}

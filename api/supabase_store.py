@@ -45,12 +45,13 @@ def get_supabase_admin() -> Client | None:
     return _client
 
 
-def upsert_profile(*, user_id: str, display_name: str | None, email: str | None) -> dict[str, Any] | None:
+def upsert_profile(*, user_id: str, supabase_user_id: str | None = None, display_name: str | None, email: str | None) -> dict[str, Any] | None:
     client = get_supabase_admin()
     if not client:
         return None
     payload = {
         "id": user_id,
+        "supabase_user_id": supabase_user_id,
         "display_name": display_name,
         "email": email,
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
