@@ -812,6 +812,12 @@ app.include_router(build_settings_router(session_state=_session_state, env_set=_
 def _ws() -> Path:
     p: Path | None = _session_state()["workspace"]
     if p is None:
+        try:
+            p, _created = _provision_managed_workspace()
+            _session_state()["workspace"] = p
+        except Exception:
+            p = None
+    if p is None:
         raise HTTPException(400, "Workspace not set")
     return p
 
