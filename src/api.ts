@@ -35,7 +35,7 @@ export type GoogleAuthStatus = {
 };
 
 export type ProviderStatus = {
-  provider: "openai-codex" | "anthropic" | "openrouter";
+  provider: "openai" | "anthropic" | "openrouter";
   connected: boolean;
   hint?: string | null;
   profile_id?: string | null;
@@ -47,13 +47,13 @@ export type ProviderStatus = {
 
 export type BuildMode = "full-agent" | "hybrid";
 
-export type ProviderChoice = "openai-codex" | "anthropic" | "openrouter" | "";
+export type ProviderChoice = "openai" | "anthropic" | "openrouter" | "";
 
 export type SettingsInfo = {
   default_workspace: string | null;
-  llm_provider: "openai-codex" | "anthropic" | "openrouter" | null;
+  llm_provider: "openai" | "anthropic" | "openrouter" | null;
   build_mode: BuildMode;
-  openai_codex_model: string;
+  openai_model: string;
   anthropic_model: string;
   openrouter_model: string;
   openai_api_key_set: boolean;
@@ -63,7 +63,7 @@ export type SettingsInfo = {
   supabase_anon_key_set: boolean;
   supabase_enabled: boolean;
   providers: {
-    openai_codex: ProviderStatus;
+    openai: ProviderStatus;
     anthropic: ProviderStatus;
     openrouter: ProviderStatus;
   };
@@ -73,7 +73,7 @@ export type SettingsUpdate = Partial<{
   default_workspace: string | null;
   llm_provider: ProviderChoice;
   build_mode: BuildMode;
-  openai_codex_model: string;
+  openai_model: string;
   anthropic_model: string;
   openrouter_model: string;
   openai_api_key: string | null;
@@ -93,7 +93,7 @@ export type UserPreferences = {
   profile_id: string;
   llm_provider: ProviderChoice | null;
   build_mode: BuildMode | null;
-  openai_codex_model: string | null;
+  openai_model: string | null;
   anthropic_model: string | null;
   openrouter_model: string | null;
 };

@@ -203,7 +203,7 @@ def _provider_and_model() -> tuple[str, str]:
         raise RuntimeError("No provider selected yet. Open Settings, choose a provider, then save credentials first.")
     require_provider_connected(provider)
     if provider == OPENAI_PROVIDER:
-        return provider, s.openai_codex_model
+        return provider, s.openai_model
     if provider == ANTHROPIC_PROVIDER:
         return provider, s.anthropic_model
     if provider == OPENROUTER_PROVIDER:
@@ -222,7 +222,7 @@ def _generate_json(*, system: str, user: str) -> tuple[str, str, dict[str, Any]]
             err = str(raw.get("error_message") or "").strip()
             if err:
                 raise RuntimeError(err)
-            raise RuntimeError("OpenAI/Codex returned an empty response")
+            raise RuntimeError("OpenAI returned an empty response")
         return provider, model, _extract_json_object(text)
 
     if provider == ANTHROPIC_PROVIDER:

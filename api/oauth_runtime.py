@@ -4,14 +4,13 @@ import base64
 import hashlib
 import json
 import os
-import subprocess
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
-OPENAI_PROVIDER = "openai-codex"
+OPENAI_PROVIDER = "openai"
 ANTHROPIC_PROVIDER = "anthropic"
 OPENROUTER_PROVIDER = "openrouter"
 SUPPORTED_PROVIDERS = (OPENAI_PROVIDER, ANTHROPIC_PROVIDER, OPENROUTER_PROVIDER)
@@ -20,7 +19,7 @@ GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_IDENTITY_SCOPES = ["openid"]
 
-OPENAI_LOGIN_HINT = "Masukkan OPENAI_API_KEY (BYOK) di Settings. OAuth model provider sudah dinonaktifkan."
+OPENAI_LOGIN_HINT = "Masukkan OPENAI_API_KEY (BYOK) di Settings."
 ANTHROPIC_LOGIN_HINT = "Masukkan ANTHROPIC_API_KEY (BYOK) di Settings."
 OPENROUTER_LOGIN_HINT = "Masukkan OPENROUTER_API_KEY (BYOK) di Settings."
 
@@ -68,7 +67,7 @@ def openrouter_status() -> dict[str, Any]:
 
 def auth_snapshot(workspace: Path | None = None) -> dict[str, Any]:
     return {
-        "openai_codex": openai_status(),
+        "openai": openai_status(),
         "anthropic": anthropic_status(),
         "openrouter": openrouter_status(),
     }
@@ -81,7 +80,7 @@ def require_provider_connected(provider: str, workspace: Path | None = None) -> 
         raise RuntimeError(f"Unsupported provider: {provider}")
     if not status.get("connected"):
         if provider == OPENAI_PROVIDER:
-            raise RuntimeError("OpenAI/Codex belum connected. Isi OPENAI_API_KEY (BYOK) di Settings.")
+            raise RuntimeError("OpenAI belum connected. Isi OPENAI_API_KEY (BYOK) di Settings.")
         if provider == ANTHROPIC_PROVIDER:
             raise RuntimeError("Anthropic belum connected. Isi ANTHROPIC_API_KEY di Settings.")
         if provider == OPENROUTER_PROVIDER:
@@ -168,74 +167,100 @@ def exchange_google_identity_code(*, code: str, verifier: str, redirect_uri: str
     }
 
 
-def _bridge_path() -> Path:
-    return Path(__file__).with_name("oauth_bridge.mjs")
-
-
-def _run_bridge(command: str, payload: dict[str, Any]) -> dict[str, Any]:
-    bridge = _bridge_path()
-    if not bridge.exists():
-        raise RuntimeError(f"Missing OAuth bridge script: {bridge}")
-
-    proc = subprocess.run(
-        ["node", str(bridge), command],
-        input=json.dumps(payload),
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=180,
-    )
-    if proc.returncode != 0:
-        err = (proc.stderr or proc.stdout or "Bridge call failed").strip()
-        raise RuntimeError(err)
-
-    raw = (proc.stdout or "").strip()
-    if not raw:
-        return {}
+def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str]) -> tuple[int, dict[str, Any] | None, str]:
+    body = json.dumps(payload).encode("utf-8")
+    req = Request(url, data=body, method="POST", headers={"Content-Type": "application/json", **headers})
     try:
-        return json.loads(raw)
-    except Exception as exc:
-        raise RuntimeError(f"Bridge returned invalid JSON: {raw[:400]}") from exc
+        with urlopen(req, timeout=180) as resp:
+            raw = resp.read().decode("utf-8", "replace")
+            return resp.status, json.loads(raw) if raw else {}, raw
+    except HTTPError as exc:
+        raw = exc.read().decode("utf-8", "replace")
+        try:
+            data = json.loads(raw) if raw else None
+        except Exception:
+            data = None
+        return exc.code, data, raw
 
 
 def list_models(provider: str) -> list[str]:
     provider = provider.strip().lower()
     if provider not in SUPPORTED_PROVIDERS:
         raise RuntimeError(f"Unsupported provider: {provider}")
-    bridge_provider = OPENAI_PROVIDER if provider == OPENAI_PROVIDER else provider
-    data = _run_bridge("models", {"provider": bridge_provider})
-    models = data.get("models") or []
-    return [str(m) for m in models if str(m).strip()]
+    if provider == OPENAI_PROVIDER:
+        return ["gpt-5.4", "gpt-5.4-mini"]
+    if provider == ANTHROPIC_PROVIDER:
+        return ["claude-sonnet-4-0"]
+    if provider == OPENROUTER_PROVIDER:
+        return ["openai/gpt-5.4", "anthropic/claude-sonnet-4"]
+    return []
 
 
 def openai_generate_json(*, model: str, system: str, user: str) -> dict[str, Any]:
-    return _run_bridge(
-        "openai-byok-json",
+    api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+    if not api_key:
+        return {"text": "", "error_message": "OPENAI_API_KEY is not set"}
+    status, data, _raw = _post_json(
+        "https://api.openai.com/v1/responses",
         {
             "model": model,
-            "system": system,
-            "user": user,
+            "input": [
+                {"role": "system", "content": [{"type": "input_text", "text": system}]},
+                {"role": "user", "content": [{"type": "input_text", "text": user}]},
+            ],
+            "text": {"format": {"type": "text"}},
         },
+        {"Authorization": f"Bearer {api_key}"},
     )
+    if status < 200 or status >= 300:
+        error = ((data or {}).get("error") or {}).get("message") if isinstance(data, dict) else None
+        return {"text": "", "error_message": error or f"OpenAI error {status}"}
+    return {"text": str((data or {}).get("output_text") or "")}
 
 
 def anthropic_generate_json(*, model: str, system: str, user: str) -> dict[str, Any]:
-    return _run_bridge(
-        "anthropic-byok-json",
+    api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+    if not api_key:
+        return {"text": "", "error_message": "ANTHROPIC_API_KEY is not set"}
+    status, data, _raw = _post_json(
+        "https://api.anthropic.com/v1/messages",
         {
             "model": model,
+            "max_tokens": 4000,
             "system": system,
-            "user": user,
+            "messages": [{"role": "user", "content": user}],
         },
+        {"x-api-key": api_key, "anthropic-version": "2023-06-01"},
     )
+    if status < 200 or status >= 300:
+        error = ((data or {}).get("error") or {}).get("message") if isinstance(data, dict) else None
+        return {"text": "", "error_message": error or f"Anthropic error {status}"}
+    chunks = (data or {}).get("content") if isinstance(data, dict) else []
+    if not isinstance(chunks, list):
+        chunks = []
+    text = "\n".join(str(item.get("text") or "") for item in chunks if isinstance(item, dict) and item.get("type") == "text")
+    return {"text": text}
 
 
 def openrouter_generate_json(*, model: str, system: str, user: str) -> dict[str, Any]:
-    return _run_bridge(
-        "openrouter-byok-json",
+    api_key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
+    if not api_key:
+        return {"text": "", "error_message": "OPENROUTER_API_KEY is not set"}
+    status, data, _raw = _post_json(
+        "https://openrouter.ai/api/v1/chat/completions",
         {
             "model": model,
-            "system": system,
-            "user": user,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
         },
+        {"Authorization": f"Bearer {api_key}"},
     )
+    if status < 200 or status >= 300:
+        error = ((data or {}).get("error") or {}).get("message") if isinstance(data, dict) else None
+        return {"text": "", "error_message": error or f"OpenRouter error {status}"}
+    choices = (data or {}).get("choices") if isinstance(data, dict) else []
+    first = choices[0] if isinstance(choices, list) and choices else {}
+    message = first.get("message") if isinstance(first, dict) else {}
+    return {"text": str((message or {}).get("content") or "")}

@@ -25,9 +25,9 @@ export const PreviewPane: React.FC<PreviewPaneProps> = ({
   const hostedPreviewUnavailable = hostedBrowser && !previewUrl;
   const previewState = previewUrl ? "Live preview" : "Preview idle";
   const previewMeta = unreachableHostedPreview
-    ? "Hosted mode cannot open localhost preview targets from your browser."
+    ? "This deployment cannot open private preview targets from your browser."
     : hostedPreviewUnavailable
-      ? "Hosted demo can edit files, but runtime preview must run from the local desktop app."
+      ? "Preview is not available in this deployment."
       : previewUrl || "Start the app to open a clean embedded viewport.";
   const containerClassName = isSmall ? "previewMiniShell" : "pane previewPane fullAgentPreviewPane";
   const bodyClassName = isSmall ? "previewMiniBody" : "consoleBody sidebarBody previewBody";
@@ -67,7 +67,7 @@ export const PreviewPane: React.FC<PreviewPaneProps> = ({
                 <Play size={18} />
               </div>
               <div className="emptyPreviewTitle">Preview is not running</div>
-              <div className="emptyStateText">{hostedPreviewUnavailable ? "Hosted demo can edit files and use the agent, but app runtime preview only works from the local desktop version." : "Launch the selected project and you will get a clean in-app browser surface here."}</div>
+              <div className="emptyStateText">{hostedPreviewUnavailable ? "This deployment supports editing and agent workflows, but embedded runtime preview is not available here." : "Launch the selected project and you will get a clean in-app browser surface here."}</div>
               <button className="btn primary" onClick={onEnsurePreviewRunning} disabled={!ws || hostedPreviewUnavailable}>
                 <Play size={14} />
                 <span>{hostedPreviewUnavailable ? "Preview unavailable here" : "Start preview"}</span>
@@ -78,9 +78,9 @@ export const PreviewPane: React.FC<PreviewPaneProps> = ({
               <div className="emptyStateIcon">
                 <ExternalLink size={18} />
               </div>
-              <div className="emptyPreviewTitle">Local preview is unavailable in hosted mode</div>
+              <div className="emptyPreviewTitle">Preview is unavailable for localhost targets</div>
               <div className="emptyStateText">
-                This deployed app can edit files and use the agent, but it cannot open a runtime served from localhost inside your browser.
+                This deployment can edit files and use the agent, but it cannot open a runtime served from localhost inside your browser.
               </div>
             </div>
           ) : (

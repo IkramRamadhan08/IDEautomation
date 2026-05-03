@@ -305,7 +305,7 @@ export default function App() {
           const prefs = prefRes.preferences;
           nextBuildMode = prefs.build_mode || nextBuildMode;
           nextProvider = (prefs.llm_provider || nextProvider) as ProviderChoice;
-          if (nextProvider === "openai-codex") nextModel = prefs.openai_codex_model || s.openai_codex_model || "";
+          if (nextProvider === "openai") nextModel = prefs.openai_model || s.openai_model || "";
           else if (nextProvider === "anthropic") nextModel = prefs.anthropic_model || s.anthropic_model || "";
           else if (nextProvider === "openrouter") nextModel = prefs.openrouter_model || s.openrouter_model || "";
         } catch {
@@ -316,7 +316,7 @@ export default function App() {
       setBuildMode(nextBuildMode);
       setBuildModeDraft(nextBuildMode);
       setLlmProviderDraft(nextProvider);
-      setModelDraft(nextModel || (nextProvider === "openai-codex" ? s.openai_codex_model : nextProvider === "anthropic" ? s.anthropic_model : nextProvider === "openrouter" ? s.openrouter_model : ""));
+      setModelDraft(nextModel || (nextProvider === "openai" ? s.openai_model : nextProvider === "anthropic" ? s.anthropic_model : nextProvider === "openrouter" ? s.openrouter_model : ""));
     } catch { /* ignore */ }
   };
 
@@ -621,7 +621,7 @@ export default function App() {
         build_mode: buildModeDraft,
       };
       if (modelDraft) {
-        if (llmProviderDraft === "openai-codex") patch.openai_codex_model = modelDraft;
+        if (llmProviderDraft === "openai") patch.openai_model = modelDraft;
         else if (llmProviderDraft === "anthropic") patch.anthropic_model = modelDraft;
         else if (llmProviderDraft === "openrouter") patch.openrouter_model = modelDraft;
       }
@@ -635,7 +635,7 @@ export default function App() {
         await updateUserPreferences({
           llm_provider: llmProviderDraft || null,
           build_mode: buildModeDraft,
-          openai_codex_model: llmProviderDraft === "openai-codex" ? modelDraft : null,
+          openai_model: llmProviderDraft === "openai" ? modelDraft : null,
           anthropic_model: llmProviderDraft === "anthropic" ? modelDraft : null,
           openrouter_model: llmProviderDraft === "openrouter" ? modelDraft : null,
         });
@@ -845,8 +845,8 @@ export default function App() {
   const ensurePreviewRunning = async () => {
     if (!ws) return "";
     if (isHostedBrowser()) {
-      const msg = "Live preview lokal belum didukung di deployment Vercel. Untuk sekarang, mode web bisa edit dan agent dulu, tapi preview runtime harus dijalankan dari app lokal/desktop.";
-      setEditorStatus("Preview lokal tidak tersedia di hosted mode");
+      const msg = "Embedded preview belum tersedia di deployment ini.";
+      setEditorStatus("Preview tidak tersedia di deployment ini");
       toast(msg);
       return "";
     }
@@ -908,22 +908,22 @@ export default function App() {
         <div className="workspaceGateKicker">Workspace setup</div>
         <div className="workspaceGateTitle">Choose where this session should build</div>
         <div className="workspaceGateSubtitle">
-          Open an existing project, or create a managed workspace and start from a cleaner default surface.
-          {isHostedBrowser() ? " In hosted mode, folder access uses browser upload and managed workspaces are temporary." : ""}
+          Open an existing project, or create a new workspace and start from a cleaner default surface.
+          {isHostedBrowser() ? " In this deployment, uploaded projects are session-based." : ""}
         </div>
         <div className="workspaceGateFeatureGrid">
           <div className="gateFeatureCard">
-            <div className="gateFeatureTitle">Open existing folder</div>
+            <div className="gateFeatureTitle">Open existing project</div>
             <div className="gateFeatureText">Best when you already have a repo and want to keep working immediately.</div>
           </div>
           <div className="gateFeatureCard">
-            <div className="gateFeatureTitle">Create managed workspace</div>
+            <div className="gateFeatureTitle">Create new workspace</div>
             <div className="gateFeatureText">Best when you want an isolated place to scaffold and ship without clutter.</div>
           </div>
         </div>
         <div className="workspaceGateActions">
-          <button className="btn primary" onClick={pickWorkspace}>{isHostedBrowser() ? "Open folder from browser…" : "Open folder…"}</button>
-          <button className="btn" onClick={createManagedWorkspace}>Create workspace</button>
+          <button className="btn primary" onClick={pickWorkspace}>{isHostedBrowser() ? "Upload project…" : "Open project…"}</button>
+          <button className="btn" onClick={createManagedWorkspace}>New workspace</button>
           <button className="btn" onClick={createHostedProjectFromPrompt}>New project</button>
           <button className="btn" onClick={logoutToStart}>Logout</button>
         </div>
@@ -1029,7 +1029,7 @@ export default function App() {
           onBuildModeDraftChange={setBuildModeDraft}
           onModelDraftChange={setModelDraft}
           onApiKeyChange={(p, k) => {
-            if (p === "openai-codex") setOpenaiApiKeyDraft(k);
+            if (p === "openai") setOpenaiApiKeyDraft(k);
             else if (p === "anthropic") setAnthropicApiKeyDraft(k);
             else if (p === "openrouter") setOpenrouterApiKeyDraft(k);
           }}

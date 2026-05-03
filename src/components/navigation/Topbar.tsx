@@ -112,9 +112,9 @@ export const Topbar: React.FC<TopbarProps> = ({
           </select>
         </div>
 
-        <button className="btn iconBtn" onClick={onPickWorkspace} title="Open folder">
+        <button className="btn iconBtn" onClick={onPickWorkspace} title="Project">
           <FolderOpen size={16} />
-          <span>Folder</span>
+          <span>Project</span>
         </button>
 
         <button className="btn iconBtn" onClick={onOpenSettings} title="Settings">
@@ -122,7 +122,7 @@ export const Topbar: React.FC<TopbarProps> = ({
           <span>Settings</span>
         </button>
 
-        <button className="btn primary iconBtn" disabled={!ws || hostedPreviewUnavailable} onClick={onEnsurePreviewRunning} title={hostedPreviewUnavailable ? "Preview runtime hanya tersedia di app lokal/desktop" : "Preview"}>
+        <button className="btn primary iconBtn" disabled={!ws || hostedPreviewUnavailable} onClick={onEnsurePreviewRunning} title={hostedPreviewUnavailable ? "Preview tidak tersedia di deployment ini" : "Preview"}>
           <Play size={16} />
           <span>{hostedPreviewUnavailable ? "Off" : "Preview"}</span>
         </button>

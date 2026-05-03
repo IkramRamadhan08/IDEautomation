@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Simple .env manager for Voice IDE.
 
-OAuth credentials are managed externally by OpenClaw.
+OAuth credentials are managed externally by Voice IDE.
 This helper only persists lightweight local app settings such as provider choice,
 preferred model, and default workspace.
 
@@ -30,9 +30,9 @@ LINE_RE = re.compile(r"^(?P<key>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>.*)$")
 
 DEFAULT_ENV = """# Voice IDE local settings
 # OAuth auth itself is managed outside this file.
-LLM_PROVIDER=openai-codex
+LLM_PROVIDER=openai
 BUILD_MODE=hybrid
-OPENAI_CODEX_MODEL=gpt-5.4
+OPENAI_MODEL=gpt-5.4
 # DEFAULT_WORKSPACE=/absolute/path/to/your/project
 """
 
@@ -138,9 +138,9 @@ def wizard() -> None:
     print("Voice IDE OAuth settings wizard")
     ensure_env_exists()
 
-    provider = prompt("LLM_PROVIDER", default="openai-codex")
+    provider = prompt("LLM_PROVIDER", default="openai")
     build_mode = prompt("BUILD_MODE", default="hybrid")
-    openai_model = prompt("OPENAI_CODEX_MODEL", default="gpt-5.4")
+    openai_model = prompt("OPENAI_MODEL", default="gpt-5.4")
     default_workspace = prompt("DEFAULT_WORKSPACE (optional)", default="")
 
     if provider:
@@ -151,11 +151,11 @@ def wizard() -> None:
         except SystemExit:
             pass
     set_key("BUILD_MODE", build_mode)
-    set_key("OPENAI_CODEX_MODEL", openai_model)
+    set_key("OPENAI_MODEL", openai_model)
     if default_workspace:
         set_key("DEFAULT_WORKSPACE", default_workspace)
 
-    print("Done. OAuth login itself is managed externally by OpenClaw.")
+    print("Done. OAuth login itself is managed externally by Voice IDE.")
 
 
 def main(argv: list[str]) -> None:

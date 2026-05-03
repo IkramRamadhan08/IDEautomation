@@ -104,7 +104,7 @@ async function openrouterJson({ model, system, user }) {
 }
 
 async function listModels({ provider }) {
-  if (provider === "openai-codex") {
+  if (provider === "openai" || provider === "openai-codex") {
     return { models: ["gpt-5.4", "gpt-5.4-mini"] };
   }
   if (provider === "anthropic") {

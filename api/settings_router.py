@@ -22,7 +22,7 @@ class SettingsInfo(BaseModel):
     default_workspace: str | None
     llm_provider: str | None
     build_mode: str
-    openai_codex_model: str
+    openai_model: str
     anthropic_model: str
     openrouter_model: str
     openai_api_key_set: bool = False
@@ -38,7 +38,7 @@ class SettingsUpdateReq(BaseModel):
     default_workspace: str | None = None
     llm_provider: str | None = None
     build_mode: str | None = None
-    openai_codex_model: str | None = None
+    openai_model: str | None = None
     anthropic_model: str | None = None
     openrouter_model: str | None = None
     openai_api_key: str | None = None
@@ -59,7 +59,7 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
             default_workspace=s.default_workspace,
             llm_provider=s.llm_provider,
             build_mode=s.build_mode,
-            openai_codex_model=s.openai_codex_model,
+            openai_model=s.openai_model,
             anthropic_model=getattr(s, "anthropic_model", "claude-sonnet-4-0"),
             openrouter_model=getattr(s, "openrouter_model", "openai/gpt-5.4"),
             openai_api_key_set=s.openai_api_key_set,
@@ -68,11 +68,15 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
             supabase_url=getattr(s, "supabase_url", None),
             supabase_anon_key_set=getattr(s, "supabase_anon_key_set", False),
             supabase_enabled=getattr(s, "supabase_enabled", False),
-            providers={k: ProviderStatus(**v) for k, v in statuses.items()},
+            providers={
+                "openai": ProviderStatus(**statuses.get("openai", statuses.get("openai_codex", {}))),
+                "anthropic": ProviderStatus(**statuses.get("anthropic", {})),
+                "openrouter": ProviderStatus(**statuses.get("openrouter", {})),
+            },
         )
 
     @router.get("/models")
-    def list_models(provider: str = Query("", description="llm provider, e.g. openai-codex|anthropic|openrouter")):
+    def list_models(provider: str = Query("", description="llm provider, e.g. openai|anthropic|openrouter")):
         from .oauth_runtime import list_models as oauth_list_models
 
         prov = provider.lower().strip()
@@ -89,7 +93,8 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
             ("DEFAULT_WORKSPACE", req.default_workspace if req.default_workspace is not None else None),
             ("LLM_PROVIDER", req.llm_provider),
             ("BUILD_MODE", req.build_mode),
-            ("OPENAI_CODEX_MODEL", req.openai_codex_model),
+            ("OPENAI_MODEL", req.openai_model),
+            ("OPENAI_CODEX_MODEL", req.openai_model),
             ("ANTHROPIC_MODEL", req.anthropic_model),
             ("OPENROUTER_MODEL", req.openrouter_model),
             ("OPENAI_API_KEY", req.openai_api_key),

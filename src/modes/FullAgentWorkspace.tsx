@@ -146,7 +146,7 @@ export const FullAgentWorkspace: React.FC<FullAgentWorkspaceProps> = ({
               <div className="missionCardEyebrow">Build stage</div>
               <div className="missionCardTitle">Autonomous product runway</div>
             </div>
-            <button className="btn primary" onClick={onEnsurePreviewRunning} disabled={!ws || hostedPreviewUnavailable} title={hostedPreviewUnavailable ? "Preview runtime hanya tersedia di app lokal/desktop" : "Start preview"}>
+            <button className="btn primary" onClick={onEnsurePreviewRunning} disabled={!ws || hostedPreviewUnavailable} title={hostedPreviewUnavailable ? "Preview tidak tersedia di deployment ini" : "Start preview"}>
               <Play size={14} />
               <span>{previewUrl ? "Refresh preview" : hostedPreviewUnavailable ? "Preview unavailable here" : "Start preview"}</span>
             </button>

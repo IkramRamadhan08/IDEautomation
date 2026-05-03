@@ -12,7 +12,7 @@ class UserPreferencesRecord(BaseModel):
     profile_id: str
     llm_provider: str | None = None
     build_mode: str | None = None
-    openai_codex_model: str | None = None
+    openai_model: str | None = None
     anthropic_model: str | None = None
     openrouter_model: str | None = None
 
@@ -27,7 +27,7 @@ class ProjectPreferencesRecord(BaseModel):
 class UserPreferencesUpdateReq(BaseModel):
     llm_provider: str | None = None
     build_mode: str | None = None
-    openai_codex_model: str | None = None
+    openai_model: str | None = None
     anthropic_model: str | None = None
     openrouter_model: str | None = None
 

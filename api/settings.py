@@ -11,7 +11,7 @@ from pydantic import BaseModel
 ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = ROOT / ".env"
 
-Provider = Literal["openai-codex", "anthropic", "openrouter", "groq", "xai"]
+Provider = Literal["openai", "anthropic", "openrouter", "groq", "xai"]
 BuildMode = Literal["full-agent", "hybrid"]
 
 
@@ -23,7 +23,7 @@ class Settings(BaseModel):
     default_workspace: str | None = None
     llm_provider: Provider | None = None
     build_mode: BuildMode = "hybrid"
-    openai_codex_model: str = "gpt-5.4"
+    openai_model: str = "gpt-5.4"
     anthropic_model: str = "claude-sonnet-4-0"
     openrouter_model: str = "openai/gpt-5.4"
     openai_api_key_set: bool = False
@@ -49,7 +49,9 @@ def load_settings() -> Settings:
         return v
 
     raw_provider = str(g("LLM_PROVIDER", "") or "").strip().lower()
-    llm_provider = raw_provider if raw_provider in {"openai-codex", "anthropic", "openrouter"} else None
+    if raw_provider == "openai-codex":
+        raw_provider = "openai"
+    llm_provider = raw_provider if raw_provider in {"openai", "anthropic", "openrouter"} else None
 
     build_mode = str(g("BUILD_MODE", "hybrid") or "hybrid").strip().lower()
     if build_mode not in {"full-agent", "hybrid"}:
@@ -59,7 +61,7 @@ def load_settings() -> Settings:
         default_workspace=(g("DEFAULT_WORKSPACE", "") or "").strip() or None,
         llm_provider=llm_provider,  # type: ignore[arg-type]
         build_mode=build_mode,  # type: ignore[arg-type]
-        openai_codex_model=str(g("OPENAI_CODEX_MODEL", "gpt-5.4") or "gpt-5.4").strip(),
+        openai_model=str(g("OPENAI_MODEL", g("OPENAI_CODEX_MODEL", "gpt-5.4")) or "gpt-5.4").strip(),
         anthropic_model=str(g("ANTHROPIC_MODEL", "claude-sonnet-4-0") or "claude-sonnet-4-0").strip(),
         openrouter_model=str(g("OPENROUTER_MODEL", "openai/gpt-5.4") or "openai/gpt-5.4").strip(),
         openai_api_key_set=bool((g("OPENAI_API_KEY", "") or "").strip()),

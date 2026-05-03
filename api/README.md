@@ -1,6 +1,6 @@
 # Voice IDE API
 
-FastAPI API service for the local-first IDE:
+FastAPI API service for Voice IDE:
 - File tree / read / write
 - Diff preview
 - Agent planning via local OAuth-backed runtimes

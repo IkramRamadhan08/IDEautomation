@@ -295,7 +295,7 @@ def _normalize_preview_url(preview_url: str) -> str:
     if parsed.scheme not in {"http", "https"}:
         raise HTTPException(400, "preview_url must be http(s)")
     if (parsed.hostname or "").lower() not in PREVIEW_AUDIT_HOSTS:
-        raise HTTPException(400, "preview audit only supports localhost preview URLs")
+        raise HTTPException(400, "preview audit only supports private preview URLs")
     return urlunsplit(parsed)
 
 
@@ -322,12 +322,12 @@ def _fetch_preview_html(preview_url: str, attempts: int = 3) -> str:
             req = URLRequest(
                 preview_url,
                 headers={
-                    "User-Agent": "VoiceIDE/0.1 (+local-preview-audit)",
+                    "User-Agent": "VoiceIDE/0.1 (+preview-audit)",
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 },
                 method="GET",
             )
-            with urlopen(req, timeout=8) as resp:  # nosec B310 - internal localhost preview fetch
+            with urlopen(req, timeout=8) as resp:  # nosec B310 - internal preview fetch
                 raw = resp.read(250_000)
             return raw.decode("utf-8", errors="ignore")
         except Exception as exc:
@@ -549,7 +549,7 @@ def _managed_workspace_target() -> tuple[Path, Literal["user", "session"]]:
         target = (base / "sessions" / CURRENT_SESSION_ID.get()).resolve()
         mode = "session"
     if base != target and base not in target.parents:
-        raise HTTPException(400, "Invalid managed workspace root")
+        raise HTTPException(400, "Invalid workspace root")
     return target, mode
 
 
@@ -587,7 +587,7 @@ def _provision_managed_workspace() -> tuple[Path, bool]:
     if not readme.exists():
         readme.write_text(
             "# Voice IDE Workspace\n\n"
-            f"This managed workspace was provisioned automatically for the current {mode}.\n"
+            f"This workspace was provisioned automatically for the current {mode}.\n"
             "You can build apps here, and later replace it with a stronger authenticated runtime model.\n",
             encoding="utf-8",
         )
@@ -958,7 +958,7 @@ def run_start(req: RunStartReq):
     import sys
 
     if os.getenv("VERCEL"):
-        raise HTTPException(400, "Live preview runner only works in local desktop mode, not in the hosted Vercel deployment.")
+        raise HTTPException(400, "Embedded preview is not available in this deployment.")
 
     base = _ws()
     proj = safe_join(base, req.project_root)

@@ -114,9 +114,9 @@ OPENAI_API_KEY=...
 Kalau mau set model/config dasar juga, tambahkan:
 
 ```env
-LLM_PROVIDER=openai-codex
+LLM_PROVIDER=openai
 BUILD_MODE=hybrid
-OPENAI_CODEX_MODEL=gpt-5.4
+OPENAI_MODEL=gpt-5.4
 ANTHROPIC_MODEL=claude-sonnet-4-0
 OPENROUTER_MODEL=openai/gpt-5.4
 GOOGLE_OAUTH_CLIENT_ID=...

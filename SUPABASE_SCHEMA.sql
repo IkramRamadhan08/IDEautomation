@@ -45,7 +45,7 @@ create table if not exists public.user_preferences (
   profile_id text primary key references public.profiles(id) on delete cascade,
   llm_provider text,
   build_mode text,
-  openai_codex_model text,
+  openai_model text,
   anthropic_model text,
   openrouter_model text,
   created_at timestamptz not null default now(),

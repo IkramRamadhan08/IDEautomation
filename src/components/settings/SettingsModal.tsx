@@ -51,7 +51,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 }) => {
   if (!settingsOpen) return null;
 
-  const providerKey = llmProviderDraft === "openai-codex" ? "openai_codex" : llmProviderDraft;
+  const providerKey = llmProviderDraft;
   const providerStatus = providerKey ? settings?.providers?.[providerKey] ?? null : null;
 
   return (
@@ -102,7 +102,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               onChange={(e) => onLlmProviderChange(e.target.value as ProviderChoice)}
             >
               <option value="">Choose provider…</option>
-              <option value="openai-codex">OpenAI / Codex</option>
+              <option value="openai">OpenAI</option>
               <option value="anthropic">Anthropic</option>
               <option value="openrouter">OpenRouter</option>
             </select>
@@ -117,8 +117,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           <div className="settingsSection">
             <label className="settingsLabel">API key</label>
-            {llmProviderDraft === "openai-codex" && (
-              <input type="password" value={openaiApiKeyDraft} onChange={(e) => onApiKeyChange("openai-codex", e.target.value)} className="settingsInput" placeholder="sk-..." />
+            {llmProviderDraft === "openai" && (
+              <input type="password" value={openaiApiKeyDraft} onChange={(e) => onApiKeyChange("openai", e.target.value)} className="settingsInput" placeholder="sk-..." />
             )}
             {llmProviderDraft === "anthropic" && (
               <input type="password" value={anthropicApiKeyDraft} onChange={(e) => onApiKeyChange("anthropic", e.target.value)} className="settingsInput" placeholder="sk-ant-..." />
