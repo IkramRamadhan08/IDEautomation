@@ -8,6 +8,11 @@ from pydantic import BaseModel
 from api.supabase_store import get_supabase_admin, has_supabase
 
 
+USER_SETTINGS_TABLE = "user_settings"
+PROJECT_PREFERENCES_TABLE = "project_preferences"
+HAS_PROJECT_PREFERENCES = False
+
+
 class UserPreferencesRecord(BaseModel):
     profile_id: str
     llm_provider: str | None = None
@@ -59,29 +64,49 @@ def _require_supabase() -> Any:
 
 def get_user_preferences(*, profile_id: str) -> UserPreferencesRecord:
     client = _require_supabase()
-    res = client.table("user_preferences").select("*").eq("profile_id", profile_id).limit(1).execute()
+    res = client.table(USER_SETTINGS_TABLE).select("*").eq("user_id", profile_id).limit(1).execute()
     data = getattr(res, "data", None) or []
     if data:
-        return UserPreferencesRecord(**data[0])
+        row = data[0] if isinstance(data[0], dict) else {}
+        return UserPreferencesRecord(
+            profile_id=profile_id,
+            llm_provider=row.get("llm_provider"),
+            build_mode=row.get("build_mode"),
+            openai_model=row.get("openai_codex_model"),
+            anthropic_model=row.get("anthropic_model"),
+            openrouter_model=row.get("openrouter_model"),
+        )
     return UserPreferencesRecord(profile_id=profile_id)
 
 
 def upsert_user_preferences(*, profile_id: str, req: UserPreferencesUpdateReq) -> UserPreferencesRecord:
     client = _require_supabase()
     payload = {
-        "profile_id": profile_id,
-        **req.model_dump(),
+        "user_id": profile_id,
+        "llm_provider": req.llm_provider,
+        "build_mode": req.build_mode,
+        "openai_codex_model": req.openai_model,
+        "anthropic_model": req.anthropic_model,
+        "openrouter_model": req.openrouter_model,
     }
-    res = client.table("user_preferences").upsert(payload).execute()
+    res = client.table(USER_SETTINGS_TABLE).upsert(payload, on_conflict="user_id").execute()
     data = getattr(res, "data", None) or []
-    if not data:
-        raise HTTPException(500, "Failed to save user preferences")
-    return UserPreferencesRecord(**data[0])
+    row = data[0] if data and isinstance(data[0], dict) else payload
+    return UserPreferencesRecord(
+        profile_id=profile_id,
+        llm_provider=row.get("llm_provider"),
+        build_mode=row.get("build_mode"),
+        openai_model=row.get("openai_codex_model"),
+        anthropic_model=row.get("anthropic_model"),
+        openrouter_model=row.get("openrouter_model"),
+    )
 
 
 def get_project_preferences(*, project_id: str) -> ProjectPreferencesRecord:
+    if not HAS_PROJECT_PREFERENCES:
+        return ProjectPreferencesRecord(project_id=project_id)
     client = _require_supabase()
-    res = client.table("project_preferences").select("*").eq("project_id", project_id).limit(1).execute()
+    res = client.table(PROJECT_PREFERENCES_TABLE).select("*").eq("project_id", project_id).limit(1).execute()
     data = getattr(res, "data", None) or []
     if data:
         return ProjectPreferencesRecord(**data[0])
@@ -89,12 +114,19 @@ def get_project_preferences(*, project_id: str) -> ProjectPreferencesRecord:
 
 
 def upsert_project_preferences(*, project_id: str, req: ProjectPreferencesUpdateReq) -> ProjectPreferencesRecord:
+    if not HAS_PROJECT_PREFERENCES:
+        return ProjectPreferencesRecord(
+            project_id=project_id,
+            build_mode=req.build_mode,
+            preview_entry=req.preview_entry,
+            default_prompt_style=req.default_prompt_style,
+        )
     client = _require_supabase()
     payload = {
         "project_id": project_id,
         **req.model_dump(),
     }
-    res = client.table("project_preferences").upsert(payload).execute()
+    res = client.table(PROJECT_PREFERENCES_TABLE).upsert(payload).execute()
     data = getattr(res, "data", None) or []
     if not data:
         raise HTTPException(500, "Failed to save project preferences")
