@@ -61,6 +61,15 @@ create table if not exists public.project_preferences (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.user_provider_secrets (
+  profile_id text not null references public.profiles(id) on delete cascade,
+  provider text not null,
+  secret_ciphertext text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (profile_id, provider)
+);
+
 create index if not exists idx_projects_owner_id on public.projects(owner_id);
 create index if not exists idx_projects_updated_at on public.projects(updated_at desc);
 create index if not exists idx_project_members_profile_id on public.project_members(profile_id);
@@ -100,6 +109,7 @@ alter table public.projects enable row level security;
 alter table public.project_members enable row level security;
 alter table public.user_preferences enable row level security;
 alter table public.project_preferences enable row level security;
+alter table public.user_provider_secrets enable row level security;
 
 -- Trial-stage RLS:
 -- app server may still use service role for API writes,
@@ -184,6 +194,46 @@ do $$ begin
         select 1 from public.project_members pm
         join public.profiles p on p.id = pm.profile_id
         where pm.project_id = project_preferences.project_id and p.supabase_user_id::text = auth.uid()::text
+      )
+    );
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  create policy "user_provider_secrets_select_self" on public.user_provider_secrets
+    for select using (
+      exists (
+        select 1 from public.profiles p
+        where p.id = profile_id and p.supabase_user_id::text = auth.uid()::text
+      )
+    );
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  create policy "user_provider_secrets_insert_self" on public.user_provider_secrets
+    for insert with check (
+      exists (
+        select 1 from public.profiles p
+        where p.id = profile_id and p.supabase_user_id::text = auth.uid()::text
+      )
+    );
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  create policy "user_provider_secrets_update_self" on public.user_provider_secrets
+    for update using (
+      exists (
+        select 1 from public.profiles p
+        where p.id = profile_id and p.supabase_user_id::text = auth.uid()::text
+      )
+    );
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  create policy "user_provider_secrets_delete_self" on public.user_provider_secrets
+    for delete using (
+      exists (
+        select 1 from public.profiles p
+        where p.id = profile_id and p.supabase_user_id::text = auth.uid()::text
       )
     );
 exception when duplicate_object then null; end $$;

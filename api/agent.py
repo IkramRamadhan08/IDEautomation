@@ -12,6 +12,7 @@ from typing import Any
 from . import settings as settings_mod
 from .oauth_runtime import (
     ANTHROPIC_PROVIDER,
+    CURRENT_PROFILE_ID,
     OPENAI_PROVIDER,
     OPENROUTER_PROVIDER,
     anthropic_generate_json,

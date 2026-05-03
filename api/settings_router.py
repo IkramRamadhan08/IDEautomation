@@ -8,6 +8,7 @@ from api.settings import ENV_PATH, ROOT
 from api.auth_identity import resolve_request_user
 from api.supabase_store import has_supabase
 from api.preferences import UserPreferencesUpdateReq, upsert_user_preferences
+from api.secrets_store import delete_provider_secret, upsert_provider_secret
 
 
 class ProviderStatus(BaseModel):
@@ -101,8 +102,27 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
         )
 
         if hosted_mode:
-            if has_secret_updates:
-                raise HTTPException(400, "Hosted deployment belum mendukung simpan API key dari Settings. Isi provider secret lewat environment deployment dulu.")
+            if req.openai_api_key is not None:
+                key = req.openai_api_key.strip()
+                if key:
+                    upsert_provider_secret(profile_id=user.user_id, provider="openai", api_key=key)
+                else:
+                    delete_provider_secret(profile_id=user.user_id, provider="openai")
+                changed.append("openai_api_key")
+            if req.anthropic_api_key is not None:
+                key = req.anthropic_api_key.strip()
+                if key:
+                    upsert_provider_secret(profile_id=user.user_id, provider="anthropic", api_key=key)
+                else:
+                    delete_provider_secret(profile_id=user.user_id, provider="anthropic")
+                changed.append("anthropic_api_key")
+            if req.openrouter_api_key is not None:
+                key = req.openrouter_api_key.strip()
+                if key:
+                    upsert_provider_secret(profile_id=user.user_id, provider="openrouter", api_key=key)
+                else:
+                    delete_provider_secret(profile_id=user.user_id, provider="openrouter")
+                changed.append("openrouter_api_key")
 
             pref_req = UserPreferencesUpdateReq(
                 llm_provider=req.llm_provider,

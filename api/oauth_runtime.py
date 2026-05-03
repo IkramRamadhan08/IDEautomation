@@ -4,11 +4,14 @@ import base64
 import hashlib
 import json
 import os
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
+
+from api.secrets_store import get_provider_secret, has_provider_secret
 
 OPENAI_PROVIDER = "openai"
 ANTHROPIC_PROVIDER = "anthropic"
@@ -19,9 +22,11 @@ GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_IDENTITY_SCOPES = ["openid"]
 
-OPENAI_LOGIN_HINT = "Masukkan OPENAI_API_KEY (BYOK) di Settings."
-ANTHROPIC_LOGIN_HINT = "Masukkan ANTHROPIC_API_KEY (BYOK) di Settings."
-OPENROUTER_LOGIN_HINT = "Masukkan OPENROUTER_API_KEY (BYOK) di Settings."
+OPENAI_LOGIN_HINT = "Masukkan OPENAI API key di Settings."
+ANTHROPIC_LOGIN_HINT = "Masukkan Anthropic API key di Settings."
+OPENROUTER_LOGIN_HINT = "Masukkan OpenRouter API key di Settings."
+
+CURRENT_PROFILE_ID: ContextVar[str | None] = ContextVar("voiceide_profile_id", default=None)
 
 def _google_oauth_client_id() -> str:
     return (os.getenv("GOOGLE_OAUTH_CLIENT_ID") or os.getenv("GEMINI_OAUTH_CLIENT_ID") or "").strip()
@@ -31,8 +36,28 @@ def _google_oauth_client_secret() -> str:
     return (os.getenv("GOOGLE_OAUTH_CLIENT_SECRET") or os.getenv("GEMINI_OAUTH_CLIENT_SECRET") or "").strip()
 
 
+def _provider_key_from_env_or_secret(provider: str) -> str:
+    env_map = {
+        OPENAI_PROVIDER: "OPENAI_API_KEY",
+        ANTHROPIC_PROVIDER: "ANTHROPIC_API_KEY",
+        OPENROUTER_PROVIDER: "OPENROUTER_API_KEY",
+    }
+    env_key = env_map.get(provider, "")
+    if env_key:
+        direct = (os.getenv(env_key) or "").strip()
+        if direct:
+            return direct
+    profile_id = CURRENT_PROFILE_ID.get()
+    if profile_id:
+        try:
+            return (get_provider_secret(profile_id=profile_id, provider=provider) or "").strip()
+        except Exception:
+            return ""
+    return ""
+
+
 def openai_status() -> dict[str, Any]:
-    has_key = bool((os.getenv("OPENAI_API_KEY") or "").strip())
+    has_key = bool(_provider_key_from_env_or_secret(OPENAI_PROVIDER))
     return {
         "provider": OPENAI_PROVIDER,
         "connected": has_key,
@@ -44,7 +69,7 @@ def openai_status() -> dict[str, Any]:
 
 
 def anthropic_status() -> dict[str, Any]:
-    has_key = bool((os.getenv("ANTHROPIC_API_KEY") or "").strip())
+    has_key = bool(_provider_key_from_env_or_secret(ANTHROPIC_PROVIDER))
     return {
         "provider": ANTHROPIC_PROVIDER,
         "connected": has_key,
@@ -55,7 +80,7 @@ def anthropic_status() -> dict[str, Any]:
 
 
 def openrouter_status() -> dict[str, Any]:
-    has_key = bool((os.getenv("OPENROUTER_API_KEY") or "").strip())
+    has_key = bool(_provider_key_from_env_or_secret(OPENROUTER_PROVIDER))
     return {
         "provider": OPENROUTER_PROVIDER,
         "connected": has_key,
@@ -197,7 +222,7 @@ def list_models(provider: str) -> list[str]:
 
 
 def openai_generate_json(*, model: str, system: str, user: str) -> dict[str, Any]:
-    api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+    api_key = _provider_key_from_env_or_secret(OPENAI_PROVIDER)
     if not api_key:
         return {"text": "", "error_message": "OPENAI_API_KEY is not set"}
     status, data, _raw = _post_json(
@@ -219,7 +244,7 @@ def openai_generate_json(*, model: str, system: str, user: str) -> dict[str, Any
 
 
 def anthropic_generate_json(*, model: str, system: str, user: str) -> dict[str, Any]:
-    api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+    api_key = _provider_key_from_env_or_secret(ANTHROPIC_PROVIDER)
     if not api_key:
         return {"text": "", "error_message": "ANTHROPIC_API_KEY is not set"}
     status, data, _raw = _post_json(
@@ -243,7 +268,7 @@ def anthropic_generate_json(*, model: str, system: str, user: str) -> dict[str, 
 
 
 def openrouter_generate_json(*, model: str, system: str, user: str) -> dict[str, Any]:
-    api_key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
+    api_key = _provider_key_from_env_or_secret(OPENROUTER_PROVIDER)
     if not api_key:
         return {"text": "", "error_message": "OPENROUTER_API_KEY is not set"}
     status, data, _raw = _post_json(

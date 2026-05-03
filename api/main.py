@@ -22,6 +22,7 @@ from api import settings as settings_mod
 from api.app_state import CURRENT_SESSION_ID, CURRENT_USER_ID, STATE
 from api.auth_router import build_auth_router
 from api.auth_identity import resolve_request_user, sanitize_user_id
+from api.oauth_runtime import CURRENT_PROFILE_ID
 from api.projects_router import build_projects_router
 from api.preferences_router import build_preferences_router
 from api.settings_router import build_settings_router
@@ -257,6 +258,7 @@ async def bind_voiceide_session(request: Request, call_next):
         x_voiceide_user=request.headers.get("X-VoiceIDE-User"),
     )
     user_token = CURRENT_USER_ID.set(resolved_user.user_id)
+    profile_token = CURRENT_PROFILE_ID.set(resolved_user.user_id)
     try:
         session = _session_state()
         google_user = session.get("google_user") or {}
@@ -271,6 +273,7 @@ async def bind_voiceide_session(request: Request, call_next):
         response.headers["X-VoiceIDE-Auth-Source"] = resolved_user.auth_source
         return response
     finally:
+        CURRENT_PROFILE_ID.reset(profile_token)
         CURRENT_USER_ID.reset(user_token)
         CURRENT_SESSION_ID.reset(session_token)
 

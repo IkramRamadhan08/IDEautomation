@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import Header
 
 from api.app_state import CURRENT_USER_ID
+from api.oauth_runtime import CURRENT_PROFILE_ID
 from api.supabase_store import get_supabase_admin, upsert_profile
 
 
@@ -89,4 +90,5 @@ def resolve_request_user(*, authorization: str | None, x_voiceide_user: str | No
 def bind_request_user(authorization: str | None = Header(default=None), x_voiceide_user: str | None = Header(default=None)) -> AuthenticatedUser:
     user = resolve_request_user(authorization=authorization, x_voiceide_user=x_voiceide_user)
     CURRENT_USER_ID.set(user.user_id)
+    CURRENT_PROFILE_ID.set(user.user_id)
     return user
