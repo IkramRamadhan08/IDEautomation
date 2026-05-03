@@ -128,6 +128,7 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
                     delete_provider_secret(profile_id=secret_profile_id, provider="openrouter")
                 changed.append("openrouter_api_key")
 
+            pref_profile_id = user.supabase_user_id or user.user_id
             pref_req = UserPreferencesUpdateReq(
                 llm_provider=req.llm_provider,
                 build_mode=req.build_mode,
@@ -135,7 +136,7 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
                 anthropic_model=req.anthropic_model,
                 openrouter_model=req.openrouter_model,
             )
-            upsert_user_preferences(profile_id=user.user_id, req=pref_req)
+            upsert_user_preferences(profile_id=pref_profile_id, req=pref_req)
             if req.llm_provider is not None:
                 changed.append("llm_provider")
             if req.build_mode is not None:
