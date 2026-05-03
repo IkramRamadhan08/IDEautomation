@@ -1,6 +1,5 @@
 import React from "react";
 import { type BuildMode, type IdentityInfo, type ProjectInfo } from "../../types";
-import { getBuildModeProfile } from "../../agent/modeProfiles";
 import { FolderOpen, Settings, Play, Command, PanelLeft, PanelRight, CircleDot } from "lucide-react";
 
 interface TopbarProps {
@@ -39,10 +38,8 @@ export const Topbar: React.FC<TopbarProps> = ({
   onToggleAssistPane,
 }) => {
   const selectedProjectInfo = projects.find((project) => project.root === selectedProject) ?? null;
-  const workspaceName = ws ? ws.split("/").filter(Boolean).pop() || ws : "No workspace";
   const userLabel = identity?.display_name || identity?.email || "Signed in";
   const userInitial = userLabel.trim().charAt(0).toUpperCase() || "V";
-  const modeProfile = getBuildModeProfile(buildMode);
   const browserHost = typeof window !== "undefined" ? window.location.hostname.toLowerCase() : "";
   const hostedPreviewUnavailable = Boolean(browserHost && !["localhost", "127.0.0.1", "::1"].includes(browserHost) && !previewUrl);
 
@@ -54,18 +51,15 @@ export const Topbar: React.FC<TopbarProps> = ({
         </div>
         <div className="brandStack">
           <div className="brand">Voice IDE</div>
-          <div className="brandSub">{modeProfile.topbarSubtitle}</div>
         </div>
       </div>
 
-      <div className="topbarMeta">
+      <div className="topbarMeta minimalTopbarMeta">
         <span className={`topbarPill ${previewUrl ? "success" : ""}`}>
           <CircleDot size={12} />
-          {previewUrl ? "Preview live" : "Ready to build"}
+          {previewUrl ? "Live" : "Ready"}
         </span>
-        <span className="topbarPill">{workspaceName}</span>
-        <span className="topbarPath" title={selectedProject}>{selectedProjectInfo?.name || "No project selected"}</span>
-        {selectedProjectInfo?.has_dev ? <span className="topbarPill success">Dev script detected</span> : null}
+        <span className="topbarPath" title={selectedProject}>{selectedProjectInfo?.name || "No project"}</span>
       </div>
 
       <div className="spacer" />
@@ -75,13 +69,13 @@ export const Topbar: React.FC<TopbarProps> = ({
           className={`btn modeBtn ${buildMode === "hybrid" ? "primary" : ""}`}
           onClick={() => onQuickSwitchBuildMode("hybrid")}
         >
-          Raka / Hybrid
+          Raka
         </button>
         <button
           className={`btn modeBtn ${buildMode === "full-agent" ? "primary" : ""}`}
           onClick={() => onQuickSwitchBuildMode("full-agent")}
         >
-          Clara / Full Agent
+          Clara
         </button>
       </div>
 
@@ -130,7 +124,7 @@ export const Topbar: React.FC<TopbarProps> = ({
 
         <button className="btn primary iconBtn" disabled={!ws || hostedPreviewUnavailable} onClick={onEnsurePreviewRunning} title={hostedPreviewUnavailable ? "Preview runtime hanya tersedia di app lokal/desktop" : "Preview"}>
           <Play size={16} />
-          <span>{hostedPreviewUnavailable ? "Preview off" : "Preview"}</span>
+          <span>{hostedPreviewUnavailable ? "Off" : "Preview"}</span>
         </button>
 
         <div className="topbarUserBadge" title={userLabel}>

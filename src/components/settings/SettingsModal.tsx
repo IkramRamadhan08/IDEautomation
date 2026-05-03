@@ -5,7 +5,6 @@ import {
   type ProviderChoice,
   type BuildMode,
 } from "../../types";
-import { getBuildModeProfile } from "../../agent/modeProfiles";
 
 interface SettingsModalProps {
   settingsOpen: boolean;
@@ -54,9 +53,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const providerKey = llmProviderDraft === "openai-codex" ? "openai_codex" : llmProviderDraft;
   const providerStatus = providerKey ? settings?.providers?.[providerKey] ?? null : null;
-  const providerLabel = llmProviderDraft === "openai-codex" ? "OpenAI / Codex" : llmProviderDraft === "anthropic" ? "Anthropic" : llmProviderDraft === "openrouter" ? "OpenRouter" : "provider";
-  const hybridProfile = getBuildModeProfile("hybrid");
-  const fullAgentProfile = getBuildModeProfile("full-agent");
 
   return (
     <div className="modalBackdrop" onClick={onClose}>
@@ -71,64 +67,34 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </button>
         </div>
 
-        <div className="settingsGrid">
-          <div className="settingsSection">
-            <div className="brainTitle">Identity</div>
-            <div className="settingsNote">Signed-in profile and workspace mode.</div>
-            <div className="settingsInfoCard">
-              <div className="settingsProfileLine">
-                <span className="mono">{identity?.display_name || identity?.email || identity?.user_id || "loading"}</span>
-              </div>
-              <div className="settingsSubtle">{identity?.email || "No email available"}</div>
-              <div className="providerStatusLine">
-                <span className="providerStatusChip">{identity?.managed_workspace_mode === "user" ? "User workspace" : "Session workspace"}</span>
-                <span className="settingsSubtle mono">{identity?.managed_workspace_path || "Managed path loading…"}</span>
-              </div>
-              <div className="providerStatusLine" style={{ marginTop: 8 }}>
+        <div className="settingsGrid compactSettingsGrid">
+          <div className="settingsSection compactSettingsSection settingsSectionWide">
+            <div className="settingsRowHead">
+              <div className="brainTitle">Mode</div>
+              <div className="providerStatusLine compactStatusLine">
+                <span className="providerStatusChip">{identity?.managed_workspace_mode === "user" ? "User" : "Session"}</span>
                 <span className={`providerStatusChip ${settings?.supabase_enabled ? "connected" : "disconnected"}`}>
-                  {settings?.supabase_enabled ? "Hosted sync ready" : "Hosted sync not configured"}
+                  {settings?.supabase_enabled ? "Sync on" : "Sync off"}
                 </span>
-                <span className="settingsSubtle">{settings?.supabase_enabled ? "Supabase is connected for trial persistence." : "Set Supabase env vars before Vercel trial deployment."}</span>
               </div>
             </div>
-          </div>
-
-          <div className="settingsSection">
-            <div className="brainTitle">Mode</div>
-            <div className="settingsNote">Pick which companion should lead the workflow by default.</div>
-            <div className="segmentedControl">
+            <div className="segmentedControl compactSegmentedControl">
               <button
                 className={`btn modeBtn ${buildModeDraft === "hybrid" ? "primary" : ""}`}
                 onClick={() => onBuildModeDraftChange("hybrid")}
               >
-                Raka / Hybrid
+                Raka
               </button>
               <button
                 className={`btn modeBtn ${buildModeDraft === "full-agent" ? "primary" : ""}`}
                 onClick={() => onBuildModeDraftChange("full-agent")}
               >
-                Clara / Full agent
+                Clara
               </button>
-            </div>
-            <div className="settingsInfoCard">
-              <div className="settingsProfileLine">
-                <span>{hybridProfile.personaName}</span>
-                <span className="settingsSubtle">{hybridProfile.personaRole}</span>
-              </div>
-              <div className="settingsSubtle">{hybridProfile.settingsDescription}</div>
-              <div className="settingsSubtle">{hybridProfile.modeSummary}</div>
-            </div>
-            <div className="settingsInfoCard">
-              <div className="settingsProfileLine">
-                <span>{fullAgentProfile.personaName}</span>
-                <span className="settingsSubtle">{fullAgentProfile.personaRole}</span>
-              </div>
-              <div className="settingsSubtle">{fullAgentProfile.settingsDescription}</div>
-              <div className="settingsSubtle">{fullAgentProfile.modeSummary}</div>
             </div>
           </div>
 
-          <div className="settingsSection">
+          <div className="settingsSection compactSettingsSection">
             <label className="settingsLabel">Provider</label>
             <select
               className="settingsInput settingsSelect"
@@ -141,15 +107,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <option value="openrouter">OpenRouter</option>
             </select>
             {providerStatus ? (
-              <div className="providerStatusLine">
+              <div className="providerStatusLine compactStatusLine">
                 <span className={`providerStatusChip ${providerStatus.connected ? "connected" : "disconnected"}`}>
-                  {providerStatus.connected ? "BYOK ready" : "API key required"}
+                  {providerStatus.connected ? "Ready" : "Need key"}
                 </span>
-                <span className="settingsSubtle">{providerStatus.hint || `${providerLabel} is configured through API key only.`}</span>
               </div>
-            ) : (
-              <div className="settingsSubtle">Choose a provider to configure model and API key.</div>
-            )}
+            ) : null}
           </div>
 
           <div className="settingsSection">
@@ -172,7 +135,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               {models.length === 0 ? <option value="">No models loaded</option> : null}
               {models.map((model) => <option key={model} value={model}>{model}</option>)}
             </select>
-            <div className="settingsSubtle">{modelsLoading ? "Loading available models…" : modelsError || "Choose the default model for this workspace. Model providers use BYOK only."}</div>
+            <div className="settingsSubtle compactHint">{modelsLoading ? "Loading…" : modelsError || ""}</div>
           </div>
 
           <div className="settingsActions settingsSectionWide">

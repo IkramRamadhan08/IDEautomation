@@ -739,38 +739,65 @@ async def import_browser_folder(files: list[UploadFile] = File(...), paths: list
 
 
 # Settings endpoints
-def _env_set(key: str, value: str) -> None:
-    import subprocess
-    import sys
+def _read_env_lines() -> list[str]:
+    if not ENV_PATH.exists():
+        return []
+    return ENV_PATH.read_text(encoding="utf-8").splitlines(keepends=True)
 
-    script = ROOT / "scripts" / "env.py"
-    if not script.exists():
-        raise RuntimeError(f"Missing env helper: {script}")
 
-    subprocess.run(
-        [sys.executable, str(script), "set", key, value],
-        cwd=str(ROOT),
-        check=True,
-        capture_output=True,
-        text=True,
+def _write_env_lines(lines: list[str]) -> None:
+    ENV_PATH.write_text("".join(lines).rstrip("\n") + "\n", encoding="utf-8")
+
+
+def _find_env_key_index(lines: list[str], key: str) -> int | None:
+    pattern = re.compile(r"^(?P<key>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>.*)$")
+    for i, line in enumerate(lines):
+        match = pattern.match(line.rstrip("\n"))
+        if match and match.group("key") == key:
+            return i
+    return None
+
+
+def _quote_env_value(value: str) -> str:
+    needs_quotes = (
+        value != value.strip()
+        or any(ch in value for ch in [" ", "#"])
+        or "\t" in value
+        or "\n" in value
+        or '"' in value
     )
+    if not needs_quotes:
+        return value
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _env_set(key: str, value: str) -> None:
+    if not ENV_PATH.exists():
+        ENV_PATH.write_text("", encoding="utf-8")
+
+    lines = _read_env_lines()
+    idx = _find_env_key_index(lines, key)
+    new_line = f"{key}={_quote_env_value(value)}\n"
+
+    if idx is None:
+        if lines and not lines[-1].endswith("\n"):
+            lines[-1] += "\n"
+        lines.append(new_line)
+    else:
+        lines[idx] = new_line
+
+    _write_env_lines(lines)
 
 
 def _env_unset(key: str) -> None:
-    import subprocess
-    import sys
-
-    script = ROOT / "scripts" / "env.py"
-    if not script.exists():
-        raise RuntimeError(f"Missing env helper: {script}")
-
-    subprocess.run(
-        [sys.executable, str(script), "unset", key],
-        cwd=str(ROOT),
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    if not ENV_PATH.exists():
+        return
+    lines = _read_env_lines()
+    idx = _find_env_key_index(lines, key)
+    if idx is None:
+        return
+    lines.pop(idx)
+    _write_env_lines(lines)
 
 
 app.include_router(build_auth_router(session_state=_session_state, sanitize_session_id=_sanitize_session_id, sanitize_user_id=sanitize_user_id, upsert_current_user_profile=_upsert_current_user_profile))
