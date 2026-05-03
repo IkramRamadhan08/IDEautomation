@@ -78,9 +78,9 @@ export const PreviewPane: React.FC<PreviewPaneProps> = ({
               <div className="emptyStateIcon">
                 <ExternalLink size={18} />
               </div>
-              <div className="emptyPreviewTitle">Preview is unavailable for localhost targets</div>
+              <div className="emptyPreviewTitle">Preview target is not reachable from this deployment</div>
               <div className="emptyStateText">
-                This deployment can edit files and use the agent, but it cannot open a runtime served from localhost inside your browser.
+                This deployment can edit files and use the agent, but the current preview target is only reachable inside a private network.
               </div>
             </div>
           ) : (

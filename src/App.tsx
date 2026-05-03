@@ -909,7 +909,7 @@ export default function App() {
         <div className="workspaceGateTitle">Choose where this session should build</div>
         <div className="workspaceGateSubtitle">
           Open an existing project, or create a new workspace and start from a cleaner default surface.
-          {isHostedBrowser() ? " In this deployment, uploaded projects are session-based." : ""}
+          {isHostedBrowser() ? " In this deployment, uploaded projects are temporary." : ""}
         </div>
         <div className="workspaceGateFeatureGrid">
           <div className="gateFeatureCard">
