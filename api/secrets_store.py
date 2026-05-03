@@ -50,12 +50,18 @@ def upsert_provider_secret(*, profile_id: str, provider: str, api_key: str) -> N
         "provider": provider,
         "secret_ciphertext": _encrypt(api_key),
     }
-    client.table(SECRET_TABLE).upsert(payload).execute()
+    try:
+        client.table(SECRET_TABLE).upsert(payload).execute()
+    except Exception as exc:
+        raise HTTPException(400, f"Could not store provider secret: {exc}")
 
 
 def delete_provider_secret(*, profile_id: str, provider: str) -> None:
     client = _require_supabase()
-    client.table(SECRET_TABLE).delete().eq("profile_id", profile_id).eq("provider", provider).execute()
+    try:
+        client.table(SECRET_TABLE).delete().eq("profile_id", profile_id).eq("provider", provider).execute()
+    except Exception as exc:
+        raise HTTPException(400, f"Could not delete provider secret: {exc}")
 
 
 def get_provider_secret(*, profile_id: str, provider: str) -> str | None:
