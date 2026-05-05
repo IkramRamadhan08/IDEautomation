@@ -3,8 +3,9 @@ import { FileExplorer } from "../components/explorer/FileExplorer";
 import { MonacoEditor } from "../components/editor/MonacoEditor";
 import { PreviewPane } from "../components/preview/PreviewPane";
 import { AgentLiveStage } from "../components/agent/AgentLiveStage";
+import { AgentAuditTrail } from "../components/agent/AgentAuditTrail";
 import { getBuildModeProfile } from "../agent/runtime";
-import { type AgentAction, type AgentLiveItem, type ExplorerItem, type FileBuffer } from "../types";
+import { type AgentAction, type AgentAuditSnapshot, type AgentLiveItem, type ExplorerItem, type FileBuffer } from "../types";
 
 interface HybridWorkspaceProps {
   ws: string | null;
@@ -28,6 +29,7 @@ interface HybridWorkspaceProps {
   attachedAssetName?: string | null;
   recentActions: AgentAction[];
   agentLiveItems: AgentLiveItem[];
+  agentAuditTrail: AgentAuditSnapshot[];
   onRefreshExplorer: () => void | Promise<void>;
   onToggleDir: (path: string) => void | Promise<void>;
   onOpenFile: (path: string) => void | Promise<void>;
@@ -64,6 +66,7 @@ export const HybridWorkspace: React.FC<HybridWorkspaceProps> = ({
   attachedAssetName,
   recentActions,
   agentLiveItems,
+  agentAuditTrail,
   onRefreshExplorer,
   onToggleDir,
   onOpenFile,
@@ -178,6 +181,17 @@ export const HybridWorkspace: React.FC<HybridWorkspaceProps> = ({
                   workingMsg={editorStatus}
                   compact
                 />
+              </div>
+            ) : null}
+            {agentAuditTrail.length > 0 ? (
+              <div className="missionCard hybridLiveCard">
+                <div className="missionCardHeader">
+                  <div>
+                    <div className="missionCardEyebrow">Audit trail</div>
+                    <div className="missionCardTitle">Jejak reasoning yang bisa diaudit</div>
+                  </div>
+                </div>
+                <AgentAuditTrail snapshots={agentAuditTrail} compact />
               </div>
             ) : null}
             <PreviewPane ws={ws} previewUrl={previewUrl} previewFrameKey={previewFrameKey} onEnsurePreviewRunning={onEnsurePreviewRunning} isSmall />

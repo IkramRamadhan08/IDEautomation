@@ -11,7 +11,7 @@ import {
   type PreviewAuditResult,
   type ProjectValidationRun,
 } from "../api";
-import type { AgentAction, AgentChange, AgentLiveItem, BuildMode, FileBuffer } from "../types";
+import type { AgentAction, AgentAuditSnapshot, AgentChange, AgentLiveItem, BuildMode, FileBuffer } from "../types";
 import { buildRepairPrompt, getAgentRunPlan } from "./runtime";
 
 type Setter<T> = Dispatch<SetStateAction<T>>;
@@ -51,6 +51,7 @@ type WorkflowArgs = {
   setAgentLog: Setter<string>;
   setAgentActions: Setter<AgentAction[]>;
   setAgentLiveItems: Setter<AgentLiveItem[]>;
+  setAgentAuditTrail: Setter<AgentAuditSnapshot[]>;
   setEditorStatus: Setter<string>;
   setWorkingMsg: Setter<string>;
 };
@@ -141,6 +142,41 @@ function formatPreviewAuditReport(audit: PreviewAuditResult, maxChars = 4000) {
   return report.length > maxChars ? `${report.slice(0, maxChars)}\n…[truncated]` : report;
 }
 
+function toAuditSnapshot(label: string, trace: AgentRunTrace, makeId: () => string): AgentAuditSnapshot {
+  return {
+    id: makeId(),
+    label,
+    passes: trace.passes,
+    memoryHits: trace.memory_hits.map((hit) => ({
+      kind: hit.kind,
+      source: hit.source,
+      title: hit.title,
+      score: hit.score,
+      text: hit.text,
+    })),
+    skills: trace.skills.map((skill) => ({
+      skillId: skill.skill_id,
+      title: skill.title,
+      source: skill.source,
+    })),
+    mcpServers: trace.mcp_servers.map((server) => ({
+      name: server.name,
+      transport: server.transport,
+      target: server.target,
+      tools: server.tools,
+      source: server.source,
+    })),
+    mcpToolsUsed: trace.mcp_tools_used.map((tool) => ({
+      server: tool.server,
+      tool: tool.tool,
+      ok: tool.ok,
+      durationMs: tool.duration_ms,
+      error: tool.error,
+      text: tool.text,
+    })),
+  };
+}
+
 function pushRunTrace(pushAgentLiveItem: WorkflowArgs["pushAgentLiveItem"], trace: AgentRunTrace | undefined) {
   if (!trace) return;
 
@@ -210,6 +246,7 @@ export async function runAgentWorkflow({
   setAgentLog,
   setAgentActions,
   setAgentLiveItems,
+  setAgentAuditTrail,
   setEditorStatus,
   setWorkingMsg,
 }: WorkflowArgs) {
@@ -386,6 +423,7 @@ export async function runAgentWorkflow({
   setAgentReply("");
   setAgentLog("");
   setAgentActions([]);
+  setAgentAuditTrail([]);
   setAgentLiveItems([{ id: makeAgentLiveId(), role: "user", tone: "default", text: agentInput.trim() }]);
   setEditorStatus(requestEditorStatus);
   setWorkingMsg("Agent sedang berpikir…");
@@ -443,7 +481,11 @@ export async function runAgentWorkflow({
       text: `Backend intent final: ${intentSummary(resolvedIntent)}.`,
       meta: resolvedIntent.rationale,
     });
-    pushRunTrace(pushAgentLiveItem, res.trace);
+    const mainTrace = res.trace;
+    pushRunTrace(pushAgentLiveItem, mainTrace);
+    if (mainTrace) {
+      setAgentAuditTrail([toAuditSnapshot("Main pass", mainTrace, makeAgentLiveId)]);
+    }
 
     combinedActions = [...actions];
     setAgentActions(combinedActions);
@@ -493,7 +535,11 @@ export async function runAgentWorkflow({
 
       appendLogSection("REPAIR PASS", repairRes.log);
       if (repairRes.spoken) setAgentReply(repairRes.spoken);
-      pushRunTrace(pushAgentLiveItem, repairRes.trace);
+      const repairTrace = repairRes.trace;
+      pushRunTrace(pushAgentLiveItem, repairTrace);
+      if (repairTrace) {
+        setAgentAuditTrail((prev) => [...prev, toAuditSnapshot("Repair pass", repairTrace, makeAgentLiveId)]);
+      }
 
       const repairChanges: AgentChange[] = repairRes.changes || [];
       const repairActions: AgentAction[] = repairRes.actions || [];

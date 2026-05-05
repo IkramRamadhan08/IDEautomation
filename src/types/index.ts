@@ -22,6 +22,38 @@ export type AgentLiveItem = {
   tone?: "default" | "working" | "success" | "error";
   meta?: string | null;
 };
+export type AgentAuditSnapshot = {
+  id: string;
+  label: string;
+  passes: number;
+  memoryHits: Array<{
+    kind: string;
+    source: string;
+    title: string;
+    score: number;
+    text: string;
+  }>;
+  skills: Array<{
+    skillId: string;
+    title: string;
+    source: string;
+  }>;
+  mcpServers: Array<{
+    name: string;
+    transport: string;
+    target: string;
+    tools: string[];
+    source: string;
+  }>;
+  mcpToolsUsed: Array<{
+    server: string;
+    tool: string;
+    ok: boolean;
+    durationMs: number;
+    error?: string | null;
+    text?: string;
+  }>;
+};
 export type WorkspaceInfo = { path: string | null; default: string | null };
 export type WorkspaceProvisionInfo = { ok: boolean; path: string; created: boolean; managed: boolean };
 export type IdentityInfo = {

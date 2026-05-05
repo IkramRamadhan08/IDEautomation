@@ -1430,6 +1430,104 @@ a {
   overflow-wrap: anywhere;
 }
 
+.agentAuditTrail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.agentAuditStage {
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.agentAuditStageHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.agentAuditStageTitle {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.agentAuditStageMeta,
+.agentAuditSecondary {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.agentAuditSection {
+  margin-top: 12px;
+}
+
+.agentAuditSectionTitle {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-soft);
+  margin-bottom: 8px;
+}
+
+.agentAuditList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agentAuditRow {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.agentAuditRow.ok {
+  border-color: rgba(56, 211, 159, 0.18);
+}
+
+.agentAuditRow.error {
+  border-color: rgba(251, 113, 133, 0.18);
+}
+
+.agentAuditPrimary {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.agentAuditTagRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agentAuditTag {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(124, 140, 255, 0.1);
+  border: 1px solid rgba(124, 140, 255, 0.16);
+  color: var(--text-soft);
+  font-size: 11px;
+}
+
+.agentAuditTrail.compact .agentAuditStage {
+  padding: 10px;
+}
+
+.agentAuditTrail.compact .agentAuditSection {
+  margin-top: 10px;
+}
+
 .agentLiveTyping {
   display: inline-flex;
   align-items: center;

@@ -4,7 +4,8 @@ import { motion, AnimatePresence } from "framer-motion";
 import { X, Paperclip, SendHorizontal, Play, Sparkles, MessageSquarePlus } from "lucide-react";
 import { getBuildModeProfile, getModeQuickPrompts } from "../../agent/runtime";
 import { AgentLiveStage } from "./AgentLiveStage";
-import { type AgentAction, type AgentLiveItem, type BuildMode, type UploadedImageAsset } from "../../types";
+import { AgentAuditTrail } from "./AgentAuditTrail";
+import { type AgentAction, type AgentAuditSnapshot, type AgentLiveItem, type BuildMode, type UploadedImageAsset } from "../../types";
 
 type OrbMode = "idle" | "playful" | "curious" | "sleepy" | "sleeping" | "working" | "celebrate" | "surprised" | "error";
 
@@ -19,6 +20,7 @@ interface AgentOrbProps {
   agentOrbPosition: { x: number; y: number } | null;
   workingMsg: string;
   agentLiveItems: AgentLiveItem[];
+  agentAuditTrail: AgentAuditSnapshot[];
   agentRunViewPinned: boolean;
   editorStatus: string;
   activeFile: string;
@@ -51,6 +53,7 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
   agentOrbPosition,
   workingMsg,
   agentLiveItems,
+  agentAuditTrail,
   agentRunViewPinned,
   editorStatus,
   activeFile,
@@ -361,6 +364,13 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
                       workingMsg={workingMsg}
                       emptyText={agentReply || "Begitu kamu run, progress Clara bakal muncul di sini."}
                     />
+
+                    {agentAuditTrail.length > 0 ? (
+                      <div className="agentOrbSection">
+                        <div className="agentOrbSectionLabel">Audit trail</div>
+                        <AgentAuditTrail snapshots={agentAuditTrail} compact />
+                      </div>
+                    ) : null}
 
                     {agentActions.length > 0 ? (
                       <div className="agentOrbSection">

@@ -2,8 +2,9 @@ import React from "react";
 import { Bot, Image as ImageIcon, Play, Sparkles, Wand2 } from "lucide-react";
 import { PreviewPane } from "../components/preview/PreviewPane";
 import { AgentLiveStage } from "../components/agent/AgentLiveStage";
+import { AgentAuditTrail } from "../components/agent/AgentAuditTrail";
 import { getBuildModeProfile } from "../agent/runtime";
-import { type AgentAction, type AgentLiveItem } from "../types";
+import { type AgentAction, type AgentAuditSnapshot, type AgentLiveItem } from "../types";
 
 interface FullAgentWorkspaceProps {
   ws: string | null;
@@ -16,6 +17,7 @@ interface FullAgentWorkspaceProps {
   agentLog: string;
   agentActions: AgentAction[];
   agentLiveItems: AgentLiveItem[];
+  agentAuditTrail: AgentAuditSnapshot[];
   attachedAssetName?: string | null;
   onEnsurePreviewRunning: () => void | Promise<string | void>;
 }
@@ -38,6 +40,7 @@ export const FullAgentWorkspace: React.FC<FullAgentWorkspaceProps> = ({
   agentLog,
   agentActions,
   agentLiveItems,
+  agentAuditTrail,
   attachedAssetName,
   onEnsurePreviewRunning,
 }) => {
@@ -185,6 +188,17 @@ export const FullAgentWorkspace: React.FC<FullAgentWorkspaceProps> = ({
               emptyText={agentReply || "Begitu Clara mulai jalan, brief, progress, dan aksinya bakal muncul di sini."}
               compact
             />
+          </div>
+
+          <div className="missionCard">
+            <div className="missionCardHeader">
+              <div>
+                <div className="missionCardEyebrow">Audit trail</div>
+                <div className="missionCardTitle">Reasoning boundary yang kepake</div>
+              </div>
+              <Bot size={16} />
+            </div>
+            <AgentAuditTrail snapshots={agentAuditTrail} />
           </div>
 
           <div className="missionCard">

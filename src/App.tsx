@@ -41,6 +41,7 @@ import {
   type ProjectInfo,
   type HostedProject as HostedProjectType,
   type AgentAction,
+  type AgentAuditSnapshot,
   type AgentLiveItem,
   type UploadedImageAsset,
 } from "./types";
@@ -84,6 +85,7 @@ export default function App() {
   const [agentOrbPosition, setAgentOrbPosition] = useState<{ x: number; y: number } | null>(null);
   const [workingMsg, setWorkingMsg] = useState<string>("");
   const [agentLiveItems, setAgentLiveItems] = useState<AgentLiveItem[]>([]);
+  const [agentAuditTrail, setAgentAuditTrail] = useState<AgentAuditSnapshot[]>([]);
   const [agentRunViewPinned, setAgentRunViewPinned] = useState(false);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -143,6 +145,7 @@ export default function App() {
   const resetAgentRunView = useCallback(() => {
     setAgentRunViewPinned(false);
     setAgentLiveItems([]);
+    setAgentAuditTrail([]);
   }, []);
 
   const bindFolderInputRef = (node: HTMLInputElement | null) => {
@@ -656,6 +659,7 @@ export default function App() {
       setAgentLog,
       setAgentActions,
       setAgentLiveItems,
+      setAgentAuditTrail,
       setEditorStatus,
       setWorkingMsg,
     });
@@ -781,6 +785,7 @@ export default function App() {
       attachedAssetName={attachedImage?.name || null}
       recentActions={agentActions}
       agentLiveItems={agentLiveItems}
+      agentAuditTrail={agentAuditTrail}
       onRefreshExplorer={refreshExplorer}
       onToggleDir={toggleTreeDir}
       onOpenFile={openFile}
@@ -808,6 +813,7 @@ export default function App() {
       agentLog={agentLog}
       agentActions={agentActions}
       agentLiveItems={agentLiveItems}
+      agentAuditTrail={agentAuditTrail}
       attachedAssetName={attachedImage?.name || null}
       onEnsurePreviewRunning={ensurePreviewRunning}
     />
@@ -898,6 +904,7 @@ export default function App() {
         agentOrbPosition={agentOrbPosition}
         workingMsg={workingMsg}
         agentLiveItems={agentLiveItems}
+        agentAuditTrail={agentAuditTrail}
         agentRunViewPinned={agentRunViewPinned}
         editorStatus={editorStatus}
         activeFile={activeFile}
