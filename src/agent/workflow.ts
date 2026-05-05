@@ -70,20 +70,6 @@ const PHASE_LABELS: Record<string, string> = {
   diffing: "Lagi nyusun patch yang rapi…",
 };
 
-const PHASE_SPEECH: Record<string, string> = {
-  queued: "Oke, gue terima task-nya dulu.",
-  starting: "Gue cek konteks project sama file yang lagi relevan.",
-  intent: "Gue bedain dulu ini kamu lagi nyuruh ngebuild, lagi ngobrol, atau dua-duanya sekaligus.",
-  memory: "Gue tarik dulu memori session sama memori project yang masih nyambung sama task ini.",
-  skills: "Sekarang gue pilih skill kerja yang paling cocok buat ngerjain ini.",
-  mcp: "Gue cek juga ada integrasi MCP apa aja yang bisa dipakai kalau butuh context tambahan.",
-  context_ready: "Konteksnya udah kebaca, sekarang gue cari jalur yang paling masuk akal.",
-  drafting: "Ketemu arah awalnya, gue mulai nulis perubahan.",
-  tooling: "Ada info yang lebih aman diambil lewat tool dulu, jadi gue jalanin itu sebentar.",
-  refining: "Gue rapihin dulu biar hasilnya nggak terasa asal jadi.",
-  diffing: "Terakhir, gue susun patch-nya biar rapi dipasang ke project.",
-};
-
 function mergeBuffersWithChanges(currentBuffers: Record<string, FileBuffer>, changes: AgentChange[]) {
   let mutated = false;
   const next = { ...currentBuffers };
@@ -389,7 +375,6 @@ export async function runAgentWorkflow({
 
   const runValidationPass = async (label: string) => {
     setWorkingMsg("Menjalankan validasi proyek…");
-    pushAgentLiveItem({ role: "assistant", tone: "working", text: "Sekarang aku validasi dulu, biar nggak cuma kelihatan jadi tapi juga aman dijalanin." });
     const validation = await validateProject(selectedProject);
     appendLogSection(label, formatValidationReport(validation));
     pushAgentLiveItem({
@@ -404,7 +389,6 @@ export async function runAgentWorkflow({
   const runPreviewAuditPass = async (url: string, label: string) => {
     if (!url) return null;
     setWorkingMsg("Mengaudit preview yang lagi live…");
-    pushAgentLiveItem({ role: "assistant", tone: "working", text: "Aku cek tampilan live-nya juga, bukan cuma source code-nya." });
     const audit = await auditPreview(url, selectedProject);
     appendLogSection(label, formatPreviewAuditReport(audit));
     pushAgentLiveItem({
@@ -522,7 +506,6 @@ export async function runAgentWorkflow({
     } else if ((hasValidationIssues || hasPreviewIssues) && changes.length > 0) {
       setWorkingMsg("Memperbaiki hasil audit…");
       setEditorStatus("Fixing preview and validation issues...");
-      pushAgentLiveItem({ role: "assistant", tone: "working", text: "Aku nemu beberapa issue, jadi aku lanjut pass kedua buat beresin sisanya." });
 
       const validationReport = validation && !validation.ok ? formatValidationReport(validation, 6000) : null;
       const previewAuditReport = previewAudit && previewAudit.issues.length > 0 ? formatPreviewAuditReport(previewAudit, 3500) : null;
@@ -578,13 +561,6 @@ export async function runAgentWorkflow({
 
     setEditorStatus(finalStatus);
     if (finalToast.kind === "success") {
-      pushAgentLiveItem({
-        role: "assistant",
-        tone: "success",
-        text: resolvedIntent.kind === "conversation"
-          ? "Sip, gue jawab dulu tanpa ngacak project. Kalau mau, tinggal ubah ini jadi task build yang konkret."
-          : "Sip, jalur utamanya udah beres. Tinggal kamu review hasil akhirnya.",
-      });
       notify(finalToast);
     } else if (finalToast.kind === "warning") {
       pushAgentLiveItem({ role: "assistant", tone: "error", text: "Perubahannya udah kepasang, tapi masih ada beberapa hal yang menurutku perlu review manual." });
