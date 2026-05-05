@@ -358,17 +358,20 @@ export async function runAgentWorkflow({
       const mcpLabel = mcpCount > 0
         ? `${mcpCount} MCP server siap dipakai`
         : "belum ada MCP server yang dikonfigurasi";
+      const stackBits = [];
+      if (caps.stack.component_libraries.length > 0) stackBits.push(`ui libs: ${caps.stack.component_libraries.join(", ")}`);
+      if (caps.stack.playwright) stackBits.push("playwright terdeteksi");
+      else if (caps.stack.headless_browser) stackBits.push("headless browser terdeteksi");
+      if (caps.stack.webcontainer) stackBits.push("webcontainer terdeteksi");
       pushAgentLiveItem({
         role: "tool",
         tone: "default",
         text: `Capability check: ${memoryLabel}, ${mcpLabel}.`,
-        meta: caps.supports.autonomous_mcp_loop
-          ? caps.supports.command_conversation_boundary
-            ? "autonomous tool loop aktif • command/conversation boundary aktif"
-            : "autonomous tool loop aktif"
-          : caps.supports.command_conversation_boundary
-            ? "command/conversation boundary aktif"
-            : null,
+        meta: [
+          caps.supports.autonomous_mcp_loop ? "autonomous tool loop aktif" : null,
+          caps.supports.command_conversation_boundary ? "command/conversation boundary aktif" : null,
+          ...stackBits,
+        ].filter(Boolean).join(" • ") || null,
       });
     })
     .catch(() => {

@@ -641,6 +641,10 @@ export type AgentCapabilities = {
     autonomous_mcp_loop?: boolean;
     interaction_intent_detection?: boolean;
     command_conversation_boundary?: boolean;
+    component_library_awareness?: boolean;
+    headless_browser_runtime?: boolean;
+    webcontainer_runtime?: boolean;
+    browser_dom_audit?: boolean;
     tool_actions: string[];
     streaming_transport: boolean;
     native_provider_token_streaming: boolean;
@@ -657,6 +661,12 @@ export type AgentCapabilities = {
     project_entries: number;
     latest_session_ts: number | null;
     latest_project_ts: number | null;
+  };
+  stack: {
+    component_libraries: string[];
+    headless_browser: boolean;
+    playwright: boolean;
+    webcontainer: boolean;
   };
   discovered_mcp_servers: Array<{
     name: string;

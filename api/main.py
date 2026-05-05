@@ -32,6 +32,7 @@ from api.fs import list_tree, read_text, write_text, diff_text, safe_join
 from api.agent_mcp import discover_mcp_servers, list_mcp_tools
 from api.agent_memory import get_agent_memory_overview
 from api.agent_runtime import run_agent_pipeline
+from api.agent_skills import detect_project_stack
 
 
 app = FastAPI(title="Voice IDE Backend", version="0.1.0")
@@ -1379,6 +1380,7 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
     servers = discover_mcp_servers(ws_root, project_dir) if project_dir.exists() else []
     tool_catalog = list_mcp_tools(ws_root, project_dir, refresh=False) if include_live_tools and servers else {}
     memory_overview = get_agent_memory_overview(ws_root, project_root=proj_root)
+    stack = detect_project_stack(project_dir) if project_dir.exists() else None
     return {
         "ok": True,
         "runtime": "langgraph",
@@ -1393,6 +1395,10 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "autonomous_mcp_loop": True,
             "interaction_intent_detection": True,
             "command_conversation_boundary": True,
+            "component_library_awareness": True,
+            "headless_browser_runtime": bool(stack.has_headless_browser) if stack else False,
+            "webcontainer_runtime": bool(stack.has_webcontainer) if stack else False,
+            "browser_dom_audit": True,
             "tool_actions": ["shell", "mcp"],
             "streaming_transport": True,
             "native_provider_token_streaming": False,
@@ -1409,6 +1415,12 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "project_entries": memory_overview.project_entries,
             "latest_session_ts": memory_overview.latest_session_ts,
             "latest_project_ts": memory_overview.latest_project_ts,
+        },
+        "stack": {
+            "component_libraries": list(stack.component_libraries) if stack else [],
+            "headless_browser": bool(stack.has_headless_browser) if stack else False,
+            "playwright": bool(stack.has_playwright) if stack else False,
+            "webcontainer": bool(stack.has_webcontainer) if stack else False,
         },
         "discovered_mcp_servers": [
             {

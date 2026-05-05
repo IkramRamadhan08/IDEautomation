@@ -23,6 +23,7 @@ Voice IDE agent is being reset around explicit boundaries instead of procedural 
 4. **Skill registry**
    - built-in delivery skills
    - optional custom project skills from `.voiceide/skills/*.md`
+   - can detect installed project stack signals like component libraries or browser tooling from `package.json`
    - matched by request/context before drafting
 
 5. **MCP registry + execution loop**
@@ -47,6 +48,7 @@ Make the agent more reliable by separating:
 
 - MCP now has a bounded execution loop, but still depends on valid project/workspace MCP config
 - RAG is lexical/project-local for now, not embedding-based
+- headless browser and WebContainer are surfaced honestly as capability flags, but are not yet generalized runtimes unless the project/environment actually provides them
 - frontend still has some state coupling that should be moved into dedicated controllers/hooks
 
 ## Why this is better

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import json
 import re
 
-_TOKEN_RE = re.compile(r"[a-zA-Z0-9_:-]{2,}")
+_TOKEN_RE = re.compile(r"[a-zA-Z0-9_:@./-]{2,}")
 
 
 @dataclass(frozen=True)
@@ -13,6 +14,14 @@ class SkillDoc:
     title: str
     body: str
     source: str
+
+
+@dataclass(frozen=True)
+class ProjectStackSignals:
+    component_libraries: list[str]
+    has_playwright: bool
+    has_headless_browser: bool
+    has_webcontainer: bool
 
 
 _BUILTIN_SKILLS: list[SkillDoc] = [
@@ -49,6 +58,24 @@ _BUILTIN_SKILLS: list[SkillDoc] = [
         source="builtin",
         body=(
             "In hybrid mode, stay close to the active file and user momentum. Touch the fewest files that still make the fix complete."
+        ),
+    ),
+    SkillDoc(
+        skill_id="component-library-awareness",
+        title="Component library awareness",
+        source="builtin",
+        body=(
+            "If the project already uses component primitives or a UI kit, extend that library first instead of inventing a parallel design system. "
+            "Prefer composition, accessibility, and consistent tokens over one-off handcrafted widgets."
+        ),
+    ),
+    SkillDoc(
+        skill_id="browser-runtime-boundaries",
+        title="Browser runtime boundaries",
+        source="builtin",
+        body=(
+            "Be honest about browser automation and container limits. If headless browser or webcontainer support is not available, do not pretend those runtimes exist. "
+            "Use available preview audit and validation paths instead."
         ),
     ),
 ]
@@ -94,6 +121,96 @@ def _load_custom_skills(ws_root: Path, project_dir: Path) -> list[SkillDoc]:
     return skills
 
 
+def _read_package_json(project_dir: Path) -> dict:
+    path = project_dir / "package.json"
+    if not path.exists() or not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def detect_project_stack(project_dir: Path) -> ProjectStackSignals:
+    pkg = _read_package_json(project_dir)
+    deps = pkg.get("dependencies") if isinstance(pkg.get("dependencies"), dict) else {}
+    dev_deps = pkg.get("devDependencies") if isinstance(pkg.get("devDependencies"), dict) else {}
+    all_names = {str(name).strip() for name in [*deps.keys(), *dev_deps.keys()] if str(name).strip()}
+
+    component_libraries: list[str] = []
+    if any(name.startswith("@radix-ui/") for name in all_names):
+        component_libraries.append("radix-ui")
+    if "@headlessui/react" in all_names:
+        component_libraries.append("headless-ui")
+    if any(name.startswith("@ariakit/") for name in all_names):
+        component_libraries.append("ariakit")
+    if "@mui/material" in all_names:
+        component_libraries.append("mui")
+    if "@chakra-ui/react" in all_names:
+        component_libraries.append("chakra-ui")
+    if "antd" in all_names:
+        component_libraries.append("antd")
+    if "react-aria-components" in all_names or "react-aria" in all_names:
+        component_libraries.append("react-aria")
+    if "class-variance-authority" in all_names or "tailwind-merge" in all_names:
+        component_libraries.append("shadcn-style")
+
+    has_playwright = "playwright" in all_names or "@playwright/test" in all_names
+    has_headless_browser = has_playwright or "puppeteer" in all_names
+    has_webcontainer = "@webcontainer/api" in all_names
+
+    return ProjectStackSignals(
+        component_libraries=component_libraries,
+        has_playwright=has_playwright,
+        has_headless_browser=has_headless_browser,
+        has_webcontainer=has_webcontainer,
+    )
+
+
+def _stack_skills(project_dir: Path) -> list[SkillDoc]:
+    stack = detect_project_stack(project_dir)
+    out: list[SkillDoc] = []
+    if stack.component_libraries:
+        libs = ", ".join(stack.component_libraries)
+        out.append(
+            SkillDoc(
+                skill_id="project-component-libraries",
+                title="Project component libraries",
+                source="detected:package.json",
+                body=(
+                    f"Detected component libraries: {libs}. Prefer using or extending those primitives first. "
+                    "Keep accessibility, focus management, portals, and overlay behavior aligned with the installed primitives."
+                ),
+            )
+        )
+    if stack.has_headless_browser:
+        driver = "Playwright" if stack.has_playwright else "Puppeteer"
+        out.append(
+            SkillDoc(
+                skill_id="project-headless-browser",
+                title="Project headless browser tooling",
+                source="detected:package.json",
+                body=(
+                    f"Detected {driver} in the project. If browser-level testing or interaction coverage is relevant, keep selectors and flows testable. "
+                    "Prefer stable roles, labels, and deterministic UI states."
+                ),
+            )
+        )
+    if stack.has_webcontainer:
+        out.append(
+            SkillDoc(
+                skill_id="project-webcontainer",
+                title="Project WebContainer runtime",
+                source="detected:package.json",
+                body=(
+                    "Detected @webcontainer/api. If the task touches in-browser runtime or sandbox execution, preserve that path instead of assuming a host-only preview flow."
+                ),
+            )
+        )
+    return out
+
+
 def resolve_agent_skills(
     ws_root: Path,
     *,
@@ -104,8 +221,25 @@ def resolve_agent_skills(
     preview_url: str | None,
     limit: int = 4,
 ) -> list[SkillDoc]:
-    query_tokens = _tokenize("\n".join(filter(None, [query, build_mode, active_rel, preview_url or ""])))
-    pool = list(_BUILTIN_SKILLS) + _load_custom_skills(ws_root, project_dir)
+    stack = detect_project_stack(project_dir)
+    query_tokens = _tokenize(
+        "\n".join(
+            filter(
+                None,
+                [
+                    query,
+                    build_mode,
+                    active_rel,
+                    preview_url or "",
+                    " ".join(stack.component_libraries),
+                    "playwright" if stack.has_playwright else "",
+                    "headless-browser" if stack.has_headless_browser else "",
+                    "webcontainer" if stack.has_webcontainer else "",
+                ],
+            )
+        )
+    )
+    pool = list(_BUILTIN_SKILLS) + _stack_skills(project_dir) + _load_custom_skills(ws_root, project_dir)
     scored: list[tuple[float, SkillDoc]] = []
     for skill in pool:
         bonus = 0.0
@@ -113,6 +247,10 @@ def resolve_agent_skills(
             bonus += 0.6
         if preview_url and skill.skill_id == "preview-and-validation":
             bonus += 0.4
+        if stack.component_libraries and skill.skill_id in {"component-library-awareness", "project-component-libraries"}:
+            bonus += 0.8
+        if (stack.has_headless_browser or stack.has_webcontainer) and skill.skill_id == "browser-runtime-boundaries":
+            bonus += 0.35
         score = _score(query_tokens, f"{skill.title}\n{skill.body}") + bonus
         if score > 0:
             scored.append((score, skill))
