@@ -204,6 +204,15 @@ function pushRunTrace(pushAgentLiveItem: WorkflowArgs["pushAgentLiveItem"], trac
       meta: trace.mcp_tools_used.map((tool) => `${tool.server}.${tool.tool} (${tool.ok ? "ok" : "error"})`).join(" • "),
     });
   }
+
+  if (trace.warnings && trace.warnings.length > 0) {
+    pushAgentLiveItem({
+      role: "tool",
+      tone: "error",
+      text: "Agent run ini punya warning boundary/fallback yang perlu kamu tahu.",
+      meta: trace.warnings.slice(0, 3).map((warning) => `${warning.phase}: ${warning.message}`).join(" • "),
+    });
+  }
 }
 
 export async function runAgentWorkflow({
@@ -253,9 +262,11 @@ export async function runAgentWorkflow({
   const intentSummary = (intent: Pick<AgentIntent, "kind" | "confidence" | "rationale"> | { kind: string; confidence: number; rationale: string }) => {
     const label = intent.kind === "conversation"
       ? "percakapan"
-      : intent.kind === "mixed"
-        ? "campuran"
-        : "perintah build";
+      : intent.kind === "inspection"
+        ? "audit baca-saja"
+        : intent.kind === "mixed"
+          ? "campuran"
+          : "perintah build";
     return `${label} (${Math.round(intent.confidence * 100)}%)`;
   };
 
@@ -412,7 +423,7 @@ export async function runAgentWorkflow({
   setWorkingMsg("Agent sedang berpikir…");
   pushAgentLiveItem({
     role: "tool",
-    tone: inputIntent.kind === "conversation" ? "default" : "working",
+    tone: inputIntent.kind === "command" || inputIntent.kind === "mixed" ? "working" : "default",
     text: `Intent kebaca sebagai ${intentSummary(inputIntent)}.`,
     meta: inputIntent.rationale,
   });
@@ -424,6 +435,7 @@ export async function runAgentWorkflow({
       if (caps.memory.session_entries > 0) memoryParts.push(`${caps.memory.session_entries} memori session`);
       if (caps.memory.project_entries > 0) memoryParts.push(`${caps.memory.project_entries} memori project`);
       const memoryLabel = memoryParts.length > 0 ? memoryParts.join(" + ") : "memory masih fresh";
+      const memoryBackendLabel = caps.memory.retrieval_backend ? `rag: ${caps.memory.retrieval_backend}` : null;
       const mcpLabel = mcpCount > 0
         ? `${mcpCount} MCP server siap dipakai`
         : "belum ada MCP server yang dikonfigurasi";
@@ -441,6 +453,9 @@ export async function runAgentWorkflow({
         meta: [
           caps.supports.autonomous_mcp_loop ? "autonomous tool loop aktif" : null,
           caps.supports.command_conversation_boundary ? "command/conversation boundary aktif" : null,
+          caps.supports.read_only_inspection_boundary ? "inspection boundary aktif" : null,
+          caps.supports.supabase_memory_backend ? "supabase memory backend siap" : null,
+          memoryBackendLabel,
           ...stackBits,
         ].filter(Boolean).join(" • ") || null,
       });
@@ -460,7 +475,7 @@ export async function runAgentWorkflow({
 
     pushAgentLiveItem({
       role: "tool",
-      tone: resolvedIntent.kind === "conversation" ? "default" : "success",
+      tone: resolvedIntent.kind === "command" || resolvedIntent.kind === "mixed" ? "success" : "default",
       text: `Backend intent final: ${intentSummary(resolvedIntent)}.`,
       meta: resolvedIntent.rationale,
     });
@@ -486,8 +501,10 @@ export async function runAgentWorkflow({
     let validation: ProjectValidationRun | null = null;
     let previewAudit: PreviewAuditResult | null = null;
 
-    if (resolvedIntent.kind === "conversation" && changes.length === 0 && actions.length === 0) {
-      finalStatus = "Conversation answered without file changes";
+    if ((resolvedIntent.kind === "conversation" || resolvedIntent.kind === "inspection") && changes.length === 0 && actions.length === 0) {
+      finalStatus = resolvedIntent.kind === "inspection"
+        ? "Inspection answered without file changes"
+        : "Conversation answered without file changes";
       finalToast = { kind: "success", message: "Jawaban siap, tidak ada perubahan file" };
     }
 
@@ -501,8 +518,8 @@ export async function runAgentWorkflow({
     const hasValidationIssues = Boolean(validation && !validation.ok);
     const hasPreviewIssues = Boolean(previewAudit && previewAudit.issues.length > 0);
 
-    if (resolvedIntent.kind === "conversation" && changes.length === 0 && actions.length === 0) {
-      // pure conversation, nothing else to do
+    if ((resolvedIntent.kind === "conversation" || resolvedIntent.kind === "inspection") && changes.length === 0 && actions.length === 0) {
+      // pure read-only run, nothing else to do
     } else if ((hasValidationIssues || hasPreviewIssues) && changes.length > 0) {
       setWorkingMsg("Memperbaiki hasil audit…");
       setEditorStatus("Fixing preview and validation issues...");

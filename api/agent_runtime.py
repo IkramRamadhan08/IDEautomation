@@ -195,6 +195,7 @@ class PreparedAgentContext:
     trace_skill_hits: list[dict[str, Any]]
     trace_mcp_servers: list[dict[str, Any]]
     trace_mcp_tools_used: list[dict[str, Any]]
+    trace_warnings: list[dict[str, str]]
 
     @property
     def is_full_agent(self) -> bool:
@@ -568,6 +569,7 @@ def prepare_agent_context(req: Any, ws_root: Path) -> PreparedAgentContext:
         trace_skill_hits=[],
         trace_mcp_servers=[],
         trace_mcp_tools_used=[],
+        trace_warnings=[],
     )
     extra_context = "\n\n".join([*_build_context_parts(ctx_stub, req), intent.prompt_block])
     asset_prompt = _build_asset_prompt(ctx_stub)
@@ -584,7 +586,7 @@ def _classify_intent_node(state: AgentRuntimeState) -> AgentRuntimeState:
         {
             "phase": "intent",
             "message": (
-                "Aku bedain dulu ini perintah build, percakapan biasa, atau campuran dua-duanya..."
+                "Aku bedain dulu ini perintah build, audit baca-saja, percakapan biasa, atau campuran dua-duanya..."
             ),
         },
     )
@@ -624,6 +626,8 @@ def _hydrate_memory_node(state: AgentRuntimeState) -> AgentRuntimeState:
         }
         for hit in [*memory_bundle.short_term, *memory_bundle.long_term]
     ]
+    for warning in memory_bundle.warnings:
+        ctx.trace_warnings.append({"phase": "memory", "message": str(warning)[:240]})
     if ctx.memory_prompt:
         ctx.extra_context = f"{ctx.extra_context}\n\n{ctx.memory_prompt}".strip()
     return {"context": ctx}
@@ -852,6 +856,7 @@ def _refine_node(state: AgentRuntimeState) -> AgentRuntimeState:
             "passes": 2,
         }
     except Exception:
+        ctx.trace_warnings.append({"phase": "refine", "message": "Refinement pass gagal, jadi draft pertama dipakai apa adanya."})
         return {"refine_skipped": True}
 
 
@@ -924,6 +929,7 @@ def _finalize_node(state: AgentRuntimeState) -> AgentRuntimeState:
         "skills": list(ctx.trace_skill_hits),
         "mcp_servers": list(ctx.trace_mcp_servers),
         "mcp_tools_used": list(ctx.trace_mcp_tools_used),
+        "warnings": list(ctx.trace_warnings),
     }
 
     return {
@@ -988,6 +994,7 @@ def run_agent_pipeline(req: Any, *, ws_root: Path, emit: EventEmitter | None = N
             "skills": list(ctx.trace_skill_hits),
             "mcp_servers": list(ctx.trace_mcp_servers),
             "mcp_tools_used": list(ctx.trace_mcp_tools_used),
+            "warnings": list(ctx.trace_warnings),
         }),
     }
     try:

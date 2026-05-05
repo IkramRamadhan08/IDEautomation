@@ -20,7 +20,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from api.settings import ROOT, ENV_PATH, load_settings
-from api.supabase_store import upsert_profile
+from api.supabase_store import has_supabase, upsert_profile
 from api import settings as settings_mod
 from api.app_state import CURRENT_SESSION_ID, CURRENT_USER_ID, STATE
 from api.auth_router import build_auth_router
@@ -38,9 +38,21 @@ from api.agent_skills import detect_project_stack
 
 app = FastAPI(title="Voice IDE Backend", version="0.1.0")
 
-# Serialize LLM calls to avoid provider rate-limit bursts (429).
+# Serialize LLM calls per provider to avoid provider-specific rate-limit bursts (429)
+# without making unrelated providers block each other.
 SCAFFOLD_LOCK = threading.Lock()
-AGENT_LOCK = threading.Lock()
+_AGENT_LOCKS: dict[str, threading.Lock] = {}
+_AGENT_LOCKS_GUARD = threading.Lock()
+
+
+def _agent_lock_for_current_provider() -> threading.Lock:
+    provider = str(getattr(settings_mod.settings, "llm_provider", None) or "default").strip().lower() or "default"
+    with _AGENT_LOCKS_GUARD:
+        lock = _AGENT_LOCKS.get(provider)
+        if lock is None:
+            lock = threading.Lock()
+            _AGENT_LOCKS[provider] = lock
+        return lock
 
 
 def _reload_settings():
@@ -1537,6 +1549,7 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
     stack = detect_project_stack(project_dir) if project_dir.exists() else None
     node_runtime = bool(_resolve_node_binary())
     browser_audit_ready = bool(project_dir.exists() and _browser_preview_audit_ready(project_dir))
+    memory_backend = "supabase-doc-chunks" if has_supabase() else "local-doc-chunks"
     return {
         "ok": True,
         "runtime": "langgraph",
@@ -1551,11 +1564,13 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "autonomous_mcp_loop": True,
             "interaction_intent_detection": True,
             "command_conversation_boundary": True,
+            "read_only_inspection_boundary": True,
+            "supabase_memory_backend": has_supabase(),
             "component_library_awareness": True,
             "headless_browser_runtime": browser_audit_ready,
             "playwright_preview_audit": browser_audit_ready,
             "webcontainer_runtime": False,
-            "browser_dom_audit": True,
+            "browser_dom_audit": browser_audit_ready,
             "preview_audit_mode": "browser" if browser_audit_ready else "html",
             "tool_actions": ["shell", "mcp"],
             "streaming_transport": True,
@@ -1566,6 +1581,7 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "memory_store": ".voiceide/agent-memory",
             "custom_skills_dir": [".voiceide/skills", f"{proj_root}/.voiceide/skills" if proj_root != "." else ".voiceide/skills"],
             "mcp_config_candidates": [".voiceide/mcp.json", f"{proj_root}/.voiceide/mcp.json" if proj_root != "." else ".voiceide/mcp.json", f"{proj_root}/mcp.json" if proj_root != "." else "mcp.json"],
+            "supabase_rag_table": "agent_memory_chunks" if has_supabase() else None,
             "mcp_loop_budget": 2,
         },
         "memory": {
@@ -1573,6 +1589,7 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "project_entries": memory_overview.project_entries,
             "latest_session_ts": memory_overview.latest_session_ts,
             "latest_project_ts": memory_overview.latest_project_ts,
+            "retrieval_backend": memory_backend,
         },
         "stack": {
             "component_libraries": list(stack.component_libraries) if stack else [],
@@ -1722,7 +1739,7 @@ def _run_agent_impl(req: AgentReq, event_cb=None):
     ws_root = _ws()
 
     try:
-        with AGENT_LOCK:
+        with _agent_lock_for_current_provider():
             pipeline = run_agent_pipeline(req, ws_root=ws_root, emit=emit)
 
         sug_spoken = str(pipeline.get("spoken") or "")

@@ -18,6 +18,7 @@ Voice IDE agent is being reset around explicit boundaries instead of procedural 
    - **short-term memory**: recent agent runs per session/user plus project-scoped short memory for the same user
    - retrieval is biased toward the same interaction kind so build memories do not swamp conversational context and vice versa
    - **long-term memory**: durable project docs like README, PRD, docs, project memory notes
+   - long-term docs are chunked for retrieval, and when Supabase is configured the chunk store can sync to `agent_memory_chunks` for a shared retrieval backend
    - retrieval is injected into agent context, not hidden in random helper code
 
 4. **Skill registry**
@@ -53,7 +54,7 @@ Voice IDE agent should:
 ### Delivery target
 
 Make the agent more reliable by separating:
-- intent classification
+- intent classification, including read-only inspection / audit mode
 - context building
 - memory retrieval
 - skill resolution

@@ -618,7 +618,7 @@ export async function uploadImageAsset(project_root: string, file: File): Promis
 
 export type AgentChange = { path: string; new_content: string; diff: string };
 export type AgentIntent = {
-  kind: "command" | "conversation" | "mixed";
+  kind: "command" | "conversation" | "mixed" | "inspection";
   confidence: number;
   rationale: string;
   should_write_files: boolean;
@@ -655,6 +655,10 @@ export type AgentRunTrace = {
     arguments?: Record<string, unknown>;
     text?: string;
   }>;
+  warnings?: Array<{
+    phase: string;
+    message: string;
+  }>;
 };
 export type AgentResult = {
   spoken: string;
@@ -678,6 +682,8 @@ export type AgentCapabilities = {
     autonomous_mcp_loop?: boolean;
     interaction_intent_detection?: boolean;
     command_conversation_boundary?: boolean;
+    read_only_inspection_boundary?: boolean;
+    supabase_memory_backend?: boolean;
     component_library_awareness?: boolean;
     headless_browser_runtime?: boolean;
     playwright_preview_audit?: boolean;
@@ -693,6 +699,7 @@ export type AgentCapabilities = {
     memory_store: string;
     custom_skills_dir: string[];
     mcp_config_candidates: string[];
+    supabase_rag_table?: string | null;
     mcp_loop_budget?: number;
   };
   memory: {
@@ -700,6 +707,7 @@ export type AgentCapabilities = {
     project_entries: number;
     latest_session_ts: number | null;
     latest_project_ts: number | null;
+    retrieval_backend?: string;
   };
   stack: {
     component_libraries: string[];

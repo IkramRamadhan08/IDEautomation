@@ -133,3 +133,57 @@ def archive_project(*, project_id: str, owner_id: str) -> dict[str, Any] | None:
     res = client.table("projects").update({"archived": True}).eq("id", project_id).eq("owner_id", owner_id).execute()
     data = getattr(res, "data", None) or []
     return data[0] if data else None
+
+
+def upsert_agent_memory_chunks(*, project_root: str, chunks: list[dict[str, Any]]) -> bool:
+    client = get_supabase_admin()
+    if not client or not chunks:
+        return False
+
+    payload: list[dict[str, Any]] = []
+    for chunk in chunks:
+        if not isinstance(chunk, dict):
+            continue
+        chunk_id = str(chunk.get("chunk_id") or "").strip()
+        source_path = str(chunk.get("source_path") or "").strip()
+        content = str(chunk.get("content") or "").strip()
+        if not chunk_id or not source_path or not content:
+            continue
+        payload.append({
+            "chunk_id": chunk_id,
+            "project_root": str(project_root or ".").strip() or ".",
+            "source_path": source_path,
+            "title": str(chunk.get("title") or source_path).strip() or source_path,
+            "content": content,
+            "chunk_index": int(chunk.get("chunk_index") or 0),
+            "chunk_count": max(1, int(chunk.get("chunk_count") or 1)),
+            "content_hash": str(chunk.get("content_hash") or chunk_id).strip() or chunk_id,
+            "updated_at": str(chunk.get("updated_at") or "").strip() or None,
+        })
+    if not payload:
+        return False
+
+    try:
+        client.table("agent_memory_chunks").upsert(payload).execute()
+        return True
+    except Exception:
+        return False
+
+
+def list_agent_memory_chunks(*, project_root: str, limit: int = 240) -> list[dict[str, Any]] | None:
+    client = get_supabase_admin()
+    if not client:
+        return None
+    try:
+        res = (
+            client.table("agent_memory_chunks")
+            .select("chunk_id, project_root, source_path, title, content, chunk_index, chunk_count, content_hash, updated_at")
+            .eq("project_root", str(project_root or ".").strip() or ".")
+            .order("updated_at", desc=True)
+            .limit(max(1, min(int(limit or 240), 1000)))
+            .execute()
+        )
+    except Exception:
+        return None
+    data = getattr(res, "data", None)
+    return data if isinstance(data, list) else []

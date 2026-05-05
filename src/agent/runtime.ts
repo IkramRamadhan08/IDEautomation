@@ -7,7 +7,7 @@ export type AgentQuickPrompt = {
 };
 
 export type AgentInputIntent = {
-  kind: "command" | "conversation" | "mixed";
+  kind: "command" | "conversation" | "mixed" | "inspection";
   confidence: number;
   rationale: string;
   shouldWriteFiles: boolean;
@@ -44,8 +44,10 @@ export type BuildModeProfile = {
 const PREVIEW_INTENT_RE = /\b(preview|run|launch|start|ship|deploy)\b/i;
 const VALIDATION_INTENT_RE = /\b(fix|bug|audit|review|polish|refine|build|production|preview|ship|launch|repair)\b/i;
 const AUDIT_INTENT_RE = /\b(audit|ux|ui|design|landing|hero|preview|polish|refine)\b/i;
-const COMMAND_RE = /\b(fix|build|ship|implement|create|add|remove|update|change|edit|refactor|debug|audit|repair|polish|review|wire|connect|integrate|generate|scaffold|run|start|launch|deploy|bikin|buat|tambahin|tambah|hapus|ubah|rapihin|benahin|perbaiki|jalanin|gas|lanjut|lanjutin|pastiin)\b/i;
-const BUILDER_RE = /\b(app|builder|feature|ui|ux|preview|project|repo|component|state|style|css|tsx|react|vite|file|folder|mcp|memory|agentic|agent)\b/i;
+const WRITE_RE = /\b(fix|build|ship|implement|create|add|remove|update|change|edit|refactor|repair|wire|connect|integrate|generate|scaffold|run|start|launch|deploy|bikin|buat|tambahin|tambah|hapus|ubah|rapihin|benahin|perbaiki|jalanin|gas|lanjut|lanjutin|pastiin)\b/i;
+const INSPECTION_RE = /\b(debug|audit|review|validate|check|inspect|analy[sz]e|cek|validasi|analisa|analisis)\b/i;
+const READONLY_AUDIT_RE = /\b(audit|review|cek|check|inspect|analy[sz]e|jelasin|explain|laporin|report)\b/i;
+const BUILDER_RE = /\b(app|builder|feature|ui|ux|preview|project|repo|component|state|style|css|tsx|react|vite|file|folder|mcp|memory|agentic|agent|graph|rag)\b/i;
 const CONVERSATION_RE = /\b(hi|hello|hey|thanks|thank you|status|update|udah|sudah|gimana|bro|bang|sip|mantap|jelasin|jelaskan|kenapa|why|brainstorm|ngobrol|chat)\b/i;
 
 const PROFILES: Record<BuildMode, BuildModeProfile> = {
@@ -180,16 +182,22 @@ export function getModeQuickPrompts(
 export function classifyAgentInputIntent(input: string, buildMode: BuildMode): AgentInputIntent {
   const normalizedInput = input.trim();
   const lowered = normalizedInput.toLowerCase();
-  let commandScore = 0;
+  let writeScore = 0;
+  let inspectionScore = 0;
   let conversationScore = 0;
   const signals: string[] = [];
 
-  if (COMMAND_RE.test(normalizedInput)) {
-    commandScore += 1.4;
+  if (WRITE_RE.test(normalizedInput)) {
+    writeScore += 1.45;
     signals.push("explicit build language");
   }
+  if (INSPECTION_RE.test(normalizedInput)) {
+    inspectionScore += 1.1;
+    signals.push("inspection language");
+  }
   if (BUILDER_RE.test(normalizedInput)) {
-    commandScore += 0.7;
+    writeScore += 0.55;
+    inspectionScore += 0.35;
     signals.push("app-builder context");
   }
   if (CONVERSATION_RE.test(normalizedInput)) {
@@ -197,22 +205,34 @@ export function classifyAgentInputIntent(input: string, buildMode: BuildMode): A
     signals.push("chat language");
   }
   if (normalizedInput.includes("?")) conversationScore += 0.2;
-  if (/\n/.test(normalizedInput)) commandScore += 0.15;
-  if (normalizedInput.split(/\s+/).length <= 4 && conversationScore > 0 && commandScore < 1.5) conversationScore += 0.45;
+  if (/\n/.test(normalizedInput)) {
+    writeScore += 0.15;
+    inspectionScore += 0.1;
+  }
+  if (normalizedInput.split(/\s+/).length <= 4 && conversationScore > 0 && writeScore < 1.5 && inspectionScore < 1.35) conversationScore += 0.45;
   if (/\b(agentic app builder|app builder)\b/i.test(lowered)) {
-    commandScore += 0.4;
+    writeScore += 0.4;
+    inspectionScore += 0.2;
     signals.push("agentic builder framing");
   }
 
-  let kind: AgentInputIntent["kind"] = "conversation";
-  if (commandScore >= 1.65 && conversationScore >= 0.95) kind = "mixed";
-  else if (commandScore >= 1.65) kind = "command";
-  else if (buildMode === "full-agent" && commandScore >= 1.1) kind = "command";
+  const explicitWrite = /\b(can you|please|tolong|pastiin|make sure|lanjut|gas|implement|build|fix|bikin|buat|tambahin|ubah|rapihin|perbaiki)\b/i.test(normalizedInput);
+  const readonlyAudit = READONLY_AUDIT_RE.test(normalizedInput);
+  if (explicitWrite) writeScore += 0.75;
 
-  const shouldWriteFiles = kind !== "conversation" && commandScore >= 1.4;
-  const shouldRunTools = shouldWriteFiles && commandScore >= 1.8;
-  const total = Math.max(commandScore + conversationScore, 0.001);
-  const confidence = Math.max(commandScore, conversationScore) / total;
+  let kind: AgentInputIntent["kind"] = "conversation";
+  if (writeScore >= 1.7 && conversationScore >= 0.95) kind = "mixed";
+  else if (explicitWrite || writeScore >= 1.85) kind = "command";
+  else if (inspectionScore >= 1.1 && writeScore < 1.7) kind = "inspection";
+  else if (buildMode === "full-agent" && writeScore >= 1.1) kind = "command";
+  else if (readonlyAudit && writeScore < 1.7) kind = "inspection";
+
+  if (kind === "mixed" && !explicitWrite && writeScore < 1.95) kind = readonlyAudit ? "inspection" : "conversation";
+
+  const shouldWriteFiles = (kind === "command" || kind === "mixed") && (explicitWrite || writeScore >= 1.95);
+  const shouldRunTools = shouldWriteFiles && (writeScore + inspectionScore) >= 2.15;
+  const total = Math.max(writeScore + inspectionScore + conversationScore, 0.001);
+  const confidence = Math.max(writeScore, inspectionScore, conversationScore) / total;
 
   return {
     kind,
@@ -229,9 +249,11 @@ export function getAgentRunPlan(buildMode: BuildMode, input: string, previewUrl:
   const wantsPreview = Boolean(previewUrl) || PREVIEW_INTENT_RE.test(normalizedInput);
   const wantsValidation = Boolean(previewUrl) || PREVIEW_INTENT_RE.test(normalizedInput) || VALIDATION_INTENT_RE.test(normalizedInput);
   const wantsAudit = Boolean(previewUrl) && AUDIT_INTENT_RE.test(normalizedInput);
-  const requestEditorStatus = intent.kind === "conversation"
-    ? "Agent lagi nangkep maksudmu dulu, belum masuk mode ubah file…"
-    : PROFILES[buildMode].requestEditorStatus;
+  const requestEditorStatus = intent.kind === "command" || intent.kind === "mixed"
+    ? PROFILES[buildMode].requestEditorStatus
+    : intent.kind === "inspection"
+      ? "Agent lagi audit dan baca context dulu, belum masuk mode ubah file…"
+      : "Agent lagi nangkep maksudmu dulu, belum masuk mode ubah file…";
 
   if (buildMode === "full-agent") {
     return {
