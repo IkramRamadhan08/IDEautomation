@@ -14,7 +14,6 @@ import {
   getWorkspace,
   listDir,
   readFile,
-  runStart,
   pickWorkspaceNative,
   provisionWorkspace,
   resetClientIdentity,
@@ -49,79 +48,16 @@ import {
 import { Topbar } from "./components/navigation/Topbar";
 import { AgentOrb } from "./components/agent/AgentOrb";
 import { runAgentWorkflow } from "./agent/workflow";
+import { errorMessage, notifyToast } from "./app/feedback";
+import { ensurePreviewRunningFlow, isHostedBrowser } from "./preview/runtime";
 
 const SettingsModal = lazy(() => import("./components/settings/SettingsModal").then((module) => ({ default: module.SettingsModal })));
 const HybridWorkspace = lazy(() => import("./modes/HybridWorkspace").then((module) => ({ default: module.HybridWorkspace })));
 const FullAgentWorkspace = lazy(() => import("./modes/FullAgentWorkspace").then((module) => ({ default: module.FullAgentWorkspace })));
 
-function unwrapErrorDetail(message: string): string {
-  const trimmed = message.trim();
-  if (!trimmed) return "Unknown error";
-  try {
-    const parsed = JSON.parse(trimmed);
-    if (parsed && typeof parsed === "object" && "detail" in parsed) {
-      const detail = (parsed as { detail?: unknown }).detail;
-      if (typeof detail === "string" && detail.trim()) return detail.trim();
-    }
-  } catch {
-    // fall through to raw text
-  }
-  return trimmed;
-}
-
-function normalizeErrorMessage(message: string): string {
-  const detail = unwrapErrorDetail(message);
-  const lower = detail.toLowerCase();
-
-  if (
-    lower.includes("exceeded your current quota") ||
-    lower.includes("insufficient_quota") ||
-    lower.includes("billing details")
-  ) {
-    return "Kuota API provider ini habis atau project API key-nya belum punya akses billing. Coba ganti model yang lebih ringan, pakai provider lain, atau cek quota/billing key yang sedang aktif.";
-  }
-
-  if (
-    lower.includes("does not have access to model") ||
-    lower.includes("model_not_found") ||
-    lower.includes("unknown model") ||
-    lower.includes("unsupported model")
-  ) {
-    return "Model yang dipilih belum bisa dipakai oleh API key ini. Coba pilih model lain yang lebih ringan atau yang memang aktif di akun/provider itu.";
-  }
-
-  if (
-    lower.includes("cannot run the javascript preview because npm/pnpm/yarn/bun is not installed") ||
-    lower.includes("javascript tooling is not available in this runtime")
-  ) {
-    return "Environment ini bisa ngedit file, tapi belum punya runtime JavaScript buat jalanin preview. Jadi agent masih bisa nulis kode, tapi preview live tidak bisa dinyalakan di host ini.";
-  }
-
-  if (
-    lower.includes("request entity too large") ||
-    lower.includes("function_payload_too_large") ||
-    lower.includes("payload too large")
-  ) {
-    return "Folder yang diimport kebesaran buat sekali kirim. Coba kecilkan isi import, buang file berat seperti build output, atau upload per bagian.";
-  }
-
-  return detail;
-}
-
-function errorMessage(error: unknown) {
-  const raw = error instanceof Error ? error.message : String(error);
-  return normalizeErrorMessage(raw);
-}
-
 function getDefaultAssistPaneWidth() {
   if (typeof window === "undefined") return 280;
   return Math.max(220, Math.min(280, Math.floor(window.innerWidth * 0.24)));
-}
-
-function isHostedBrowser() {
-  if (typeof window === "undefined") return false;
-  const host = window.location.hostname.toLowerCase();
-  return !["localhost", "127.0.0.1", "::1"].includes(host);
 }
 
 export default function App() {
@@ -710,11 +646,7 @@ export default function App() {
       refreshExplorer,
       ensurePreviewRunning,
       refreshPreviewFrame: () => setPreviewFrameKey((value) => value + 1),
-      notify: ({ kind, message }) => {
-        if (kind === "success") toast.success(message);
-        else if (kind === "warning") toast.warning(message);
-        else toast.error(message);
-      },
+      notify: (payload) => notifyToast(toast, payload),
       errorMessage,
       setBuffers,
       setAgentStatus,
@@ -729,27 +661,16 @@ export default function App() {
     });
   };
 
-  const ensurePreviewRunning = async () => {
-    if (!ws) return "";
-    if (isHostedBrowser()) {
-      const msg = "Embedded preview belum tersedia di deployment ini.";
-      setEditorStatus("Preview tidak tersedia di deployment ini");
-      toast(msg);
-      return "";
-    }
-    setEditorStatus(`Starting preview for ${selectedProject}...`);
-    try {
-      const r = await runStart(selectedProject);
-      setPreviewUrl(r.url);
-      setPreviewFrameKey((v) => v + 1);
-      setEditorStatus(`Preview live at ${r.url}`);
-      return r.url;
-    } catch (e) {
-      setEditorStatus("Failed to start preview");
-      toast.error("Gagal menjalankan preview: " + errorMessage(e));
-      return "";
-    }
-  };
+  const ensurePreviewRunning = async () => ensurePreviewRunningFlow({
+    workspacePath: ws,
+    selectedProject,
+    setEditorStatus,
+    setPreviewUrl,
+    refreshPreviewFrame: () => setPreviewFrameKey((value) => value + 1),
+    notifyInfo: (message) => toast(message),
+    notifyError: (message) => toast.error(message),
+    errorMessage,
+  });
 
   const quickSwitchBuildMode = (mode: BuildMode) => {
     setBuildMode(mode);
