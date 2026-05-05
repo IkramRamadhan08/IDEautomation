@@ -31,7 +31,25 @@ Voice IDE agent is being reset around explicit boundaries instead of procedural 
    - surfaces capability boundaries to the agent runtime
    - can execute MCP tool calls during the graph loop, then feed real tool results back into the next draft pass
 
+6. **Browser validation boundary**
+   - preview audit can fall back to static HTML inspection
+   - when Playwright + Node runtime are available, preview audit can inspect the live DOM in a real browser context
+   - browser-backed validation should stay honest about fallbacks and runtime gaps
+
 ## Current goal
+
+Make the agent a trustworthy app-builder, not just a code chatbot.
+
+### North star
+
+Voice IDE agent should:
+- distinguish chat from build work
+- operate inside bounded runtime/tool limits
+- understand the project's existing stack
+- validate outcomes through the browser when possible
+- report capabilities honestly instead of pretending unfinished runtime features already exist
+
+### Delivery target
 
 Make the agent more reliable by separating:
 - intent classification
@@ -43,6 +61,7 @@ Make the agent more reliable by separating:
 - refinement
 - finalization
 - run memory persistence
+- browser-backed preview validation
 
 ## Current limits
 

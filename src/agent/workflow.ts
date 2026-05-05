@@ -121,12 +121,16 @@ function formatValidationReport(validation: ProjectValidationRun, maxChars = 800
 function formatPreviewAuditReport(audit: PreviewAuditResult, maxChars = 4000) {
   const sections = [
     `summary: ${audit.summary}`,
+    `audit_mode: ${audit.audit_mode}`,
     audit.title ? `title: ${audit.title}` : "title: (missing)",
     audit.meta_description ? `meta: ${audit.meta_description}` : "meta: (missing)",
     audit.headings.length > 0 ? `headings: ${audit.headings.join(" | ")}` : "headings: (missing)",
     audit.buttons.length > 0 ? `buttons: ${audit.buttons.join(" | ")}` : "buttons: (none)",
+    audit.runtime_warnings.length > 0 ? `runtime_warnings:\n- ${audit.runtime_warnings.join("\n- ")}` : null,
+    audit.page_errors.length > 0 ? `page_errors:\n- ${audit.page_errors.join("\n- ")}` : null,
+    audit.console_errors.length > 0 ? `console_errors:\n- ${audit.console_errors.join("\n- ")}` : null,
     audit.issues.length > 0 ? `issues:\n- ${audit.issues.join("\n- ")}` : "issues: none",
-  ];
+  ].filter(Boolean);
 
   if (audit.excerpt.trim()) {
     sections.push(`excerpt:\n${audit.excerpt.trim()}`);
@@ -321,7 +325,7 @@ export async function runAgentWorkflow({
     if (!url) return null;
     setWorkingMsg("Mengaudit preview yang lagi live…");
     pushAgentLiveItem({ role: "assistant", tone: "working", text: "Aku cek tampilan live-nya juga, bukan cuma source code-nya." });
-    const audit = await auditPreview(url);
+    const audit = await auditPreview(url, selectedProject);
     appendLogSection(label, formatPreviewAuditReport(audit));
     pushAgentLiveItem({
       role: "tool",
@@ -362,7 +366,9 @@ export async function runAgentWorkflow({
       if (caps.stack.component_libraries.length > 0) stackBits.push(`ui libs: ${caps.stack.component_libraries.join(", ")}`);
       if (caps.stack.playwright) stackBits.push("playwright terdeteksi");
       else if (caps.stack.headless_browser) stackBits.push("headless browser terdeteksi");
-      if (caps.stack.webcontainer) stackBits.push("webcontainer terdeteksi");
+      if (caps.stack.node_runtime) stackBits.push(`preview audit: ${caps.stack.preview_audit_mode}`);
+      else stackBits.push("node runtime belum ada untuk browser audit");
+      if (caps.stack.webcontainer) stackBits.push("webcontainer package terdeteksi");
       pushAgentLiveItem({
         role: "tool",
         tone: "default",

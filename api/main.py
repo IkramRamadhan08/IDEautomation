@@ -11,6 +11,7 @@ import re
 import shlex
 import subprocess
 from html import unescape
+from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request as URLRequest, urlopen
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -402,6 +403,32 @@ def healthz():
 DANGEROUS_COMMAND_FRAGMENTS = ["rm -rf /", "mkfs", "dd if="]
 VALIDATION_SCRIPT_NAMES = ("lint", "build", "typecheck", "check")
 PREVIEW_AUDIT_HOSTS = {"localhost", "127.0.0.1", "::1"}
+PREVIEW_BROWSER_AUDIT_TIMEOUT_SECONDS = 18
+PREVIEW_BROWSER_AUDIT_SETTLE_MS = 600
+
+
+def _resolve_node_binary() -> str | None:
+    return shutil.which("node")
+
+
+def _playwright_audit_script() -> Path:
+    return ROOT / "scripts" / "preview-audit.mjs"
+
+
+def _project_uses_playwright(project_dir: Path) -> bool:
+    package_json = _read_json(project_dir / "package.json") or {}
+    for bucket in ("dependencies", "devDependencies"):
+        deps = package_json.get(bucket)
+        if not isinstance(deps, dict):
+            continue
+        names = {str(name).strip() for name in deps.keys()}
+        if "playwright" in names or "@playwright/test" in names:
+            return True
+    return False
+
+
+def _browser_preview_audit_ready(project_dir: Path) -> bool:
+    return bool(_resolve_node_binary() and _playwright_audit_script().exists() and _project_uses_playwright(project_dir))
 
 
 def _normalize_preview_url(preview_url: str) -> str:
@@ -429,29 +456,82 @@ def _extract_text_matches(pattern: str, html: str, limit: int) -> list[str]:
     return values
 
 
-def _fetch_preview_html(preview_url: str, attempts: int = 3) -> str:
-    last_error: Exception | None = None
-    for attempt in range(max(1, attempts)):
-        try:
-            req = URLRequest(
-                preview_url,
-                headers={
-                    "User-Agent": "VoiceIDE/0.1 (+preview-audit)",
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                },
-                method="GET",
-            )
-            with urlopen(req, timeout=8) as resp:  # nosec B310 - internal preview fetch
-                raw = resp.read(250_000)
-            return raw.decode("utf-8", errors="ignore")
-        except Exception as exc:
-            last_error = exc
-            if attempt < max(1, attempts) - 1:
-                time.sleep(0.8)
-    raise HTTPException(502, f"Preview audit fetch failed: {last_error}")
+def _build_preview_audit_result(
+    preview_url: str,
+    snapshot: dict,
+    *,
+    audit_mode: str,
+    max_excerpt_chars: int = 800,
+    runtime_warnings: list[str] | None = None,
+) -> dict:
+    title = str(snapshot.get("title") or "").strip()
+    meta_description = str(snapshot.get("meta_description") or "").strip()
+    headings = [str(item).strip()[:160] for item in (snapshot.get("headings") or []) if str(item).strip()][:3]
+    subheadings = [str(item).strip()[:160] for item in (snapshot.get("subheadings") or []) if str(item).strip()][:4]
+    buttons = [str(item).strip()[:160] for item in (snapshot.get("buttons") or []) if str(item).strip()][:8]
+    links = [str(item).strip()[:160] for item in (snapshot.get("links") or []) if str(item).strip()][:8]
+    excerpt = str(snapshot.get("excerpt") or "").strip()[:max_excerpt_chars]
+    form_count = max(0, int(snapshot.get("form_count") or 0))
+    input_count = max(0, int(snapshot.get("input_count") or 0))
+    word_count = max(0, int(snapshot.get("word_count") or 0))
+    image_count = max(0, int(snapshot.get("image_count") or 0))
+    images_missing_alt = max(0, int(snapshot.get("images_missing_alt") or 0))
+    console_errors = [str(item).strip()[:240] for item in (snapshot.get("console_errors") or []) if str(item).strip()][:8]
+    page_errors = [str(item).strip()[:240] for item in (snapshot.get("page_errors") or []) if str(item).strip()][:6]
+
+    issues: list[str] = []
+    if not title:
+        issues.append("Preview page is missing a <title> tag.")
+    if not meta_description:
+        issues.append("Preview page is missing a meta description.")
+    if not headings:
+        issues.append("Preview page has no visible H1 heading.")
+    if word_count < 40:
+        issues.append("Preview content is very sparse, which usually means the page feels unfinished.")
+    if not buttons and form_count == 0 and len(links) < 2:
+        issues.append("Preview has very little obvious interaction or navigation.")
+    if images_missing_alt > 0:
+        issues.append(f"Preview has {images_missing_alt} image(s) without useful alt text.")
+    if page_errors:
+        issues.append(f"Preview threw {len(page_errors)} runtime browser error(s).")
+    if console_errors:
+        issues.append(f"Preview logged {len(console_errors)} browser console warning/error message(s).")
+
+    summary_parts = [
+        f"mode={audit_mode}",
+        f"title={title or '(missing)'}",
+        f"h1={headings[0] if headings else '(missing)'}",
+        f"buttons={len(buttons)}",
+        f"links={len(links)}",
+        f"forms={form_count}",
+        f"words={word_count}",
+    ]
+
+    return {
+        "ok": len(issues) == 0,
+        "preview_url": preview_url,
+        "audit_mode": audit_mode,
+        "title": title,
+        "meta_description": meta_description,
+        "headings": headings,
+        "subheadings": subheadings,
+        "buttons": buttons,
+        "links": links,
+        "form_count": form_count,
+        "input_count": input_count,
+        "word_count": word_count,
+        "image_count": image_count,
+        "images_missing_alt": images_missing_alt,
+        "console_errors": console_errors,
+        "page_errors": page_errors,
+        "runtime_warnings": runtime_warnings or [],
+        "issues": issues,
+        "excerpt": excerpt,
+        "summary": "; ".join(summary_parts),
+    }
 
 
-def _audit_preview_html(preview_url: str, html: str, max_excerpt_chars: int = 800) -> dict:
+def _extract_preview_snapshot_from_html(html: str, max_excerpt_chars: int = 800) -> dict:
     title_match = re.search(r"<title[^>]*>(.*?)</title>", html, flags=re.IGNORECASE | re.DOTALL)
     title = _clean_html_text(title_match.group(1)) if title_match else ""
 
@@ -477,51 +557,104 @@ def _audit_preview_html(preview_url: str, html: str, max_excerpt_chars: int = 80
         if not alt_match or not _clean_html_text(alt_match.group(1)):
             images_missing_alt += 1
 
-    form_count = len(re.findall(r"<form\b", html, flags=re.IGNORECASE))
-    input_count = len(re.findall(r"<(input|textarea|select)\b", html, flags=re.IGNORECASE))
-    word_count = len(re.findall(r"\b\w+\b", body_text))
-
-    issues: list[str] = []
-    if not title:
-        issues.append("Preview page is missing a <title> tag.")
-    if not meta_description:
-        issues.append("Preview page is missing a meta description.")
-    if not headings:
-        issues.append("Preview page has no visible H1 heading.")
-    if word_count < 40:
-        issues.append("Preview content is very sparse, which usually means the page feels unfinished.")
-    if not buttons and form_count == 0 and len(links) < 2:
-        issues.append("Preview has very little obvious interaction or navigation.")
-    if images_missing_alt > 0:
-        issues.append(f"Preview has {images_missing_alt} image(s) without useful alt text.")
-
-    summary_parts = [
-        f"title={title or '(missing)'}",
-        f"h1={headings[0] if headings else '(missing)'}",
-        f"buttons={len(buttons)}",
-        f"links={len(links)}",
-        f"forms={form_count}",
-        f"words={word_count}",
-    ]
-
     return {
-        "ok": len(issues) == 0,
-        "preview_url": preview_url,
         "title": title,
         "meta_description": meta_description,
         "headings": headings,
         "subheadings": subheadings,
         "buttons": buttons,
         "links": links,
-        "form_count": form_count,
-        "input_count": input_count,
-        "word_count": word_count,
+        "form_count": len(re.findall(r"<form\b", html, flags=re.IGNORECASE)),
+        "input_count": len(re.findall(r"<(input|textarea|select)\b", html, flags=re.IGNORECASE)),
+        "word_count": len(re.findall(r"\b\w+\b", body_text)),
         "image_count": len(image_tags),
         "images_missing_alt": images_missing_alt,
-        "issues": issues,
+        "console_errors": [],
+        "page_errors": [],
         "excerpt": excerpt,
-        "summary": "; ".join(summary_parts),
     }
+
+
+def _fetch_preview_html(preview_url: str, attempts: int = 3) -> str:
+    last_error: Exception | None = None
+    for attempt in range(max(1, attempts)):
+        try:
+            req = URLRequest(
+                preview_url,
+                headers={
+                    "User-Agent": "VoiceIDE/0.1 (+preview-audit)",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                },
+                method="GET",
+            )
+            with urlopen(req, timeout=8) as resp:  # nosec B310 - internal preview fetch
+                raw = resp.read(250_000)
+            return raw.decode("utf-8", errors="ignore")
+        except Exception as exc:
+            last_error = exc
+            if attempt < max(1, attempts) - 1:
+                time.sleep(0.8)
+    raise HTTPException(502, f"Preview audit fetch failed: {last_error}")
+
+
+def _run_playwright_preview_audit(preview_url: str, project_dir: Path, max_excerpt_chars: int = 800) -> tuple[dict | None, str | None]:
+    if not _browser_preview_audit_ready(project_dir):
+        return None, "Playwright browser audit is not ready in this project/runtime yet, so preview audit fell back to HTML inspection."
+
+    node_bin = _resolve_node_binary()
+    script_path = _playwright_audit_script()
+    if not node_bin or not script_path.exists():
+        return None, "Node.js or the browser audit script is missing, so preview audit fell back to HTML inspection."
+
+    try:
+        proc = subprocess.run(
+            [node_bin, str(script_path), preview_url, "12000", str(PREVIEW_BROWSER_AUDIT_SETTLE_MS)],
+            cwd=str(project_dir),
+            capture_output=True,
+            text=True,
+            timeout=PREVIEW_BROWSER_AUDIT_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return None, "Playwright browser audit timed out, so preview audit fell back to HTML inspection."
+    except Exception as exc:
+        return None, f"Playwright browser audit failed to start ({exc}), so preview audit fell back to HTML inspection."
+
+    lines = [line.strip() for line in (proc.stdout or "").splitlines() if line.strip()]
+    payload_text = lines[-1] if lines else ""
+    if not payload_text:
+        stderr = (proc.stderr or "").strip()
+        detail = stderr[:200] if stderr else "no structured output"
+        return None, f"Playwright browser audit did not return usable output ({detail}), so preview audit fell back to HTML inspection."
+
+    try:
+        payload = json.loads(payload_text)
+    except Exception:
+        return None, "Playwright browser audit returned unreadable output, so preview audit fell back to HTML inspection."
+
+    if not isinstance(payload, dict) or not payload.get("ok"):
+        detail = str(payload.get("error") or proc.stderr or "browser launch failed").strip()[:240] if isinstance(payload, dict) else "browser launch failed"
+        return None, f"Playwright browser audit was unavailable ({detail}), so preview audit fell back to HTML inspection."
+
+    snapshot = payload.get("snapshot")
+    if not isinstance(snapshot, dict):
+        return None, "Playwright browser audit returned an invalid snapshot, so preview audit fell back to HTML inspection."
+
+    return _build_preview_audit_result(
+        preview_url,
+        snapshot,
+        audit_mode="browser",
+        max_excerpt_chars=max_excerpt_chars,
+    ), None
+
+
+def _audit_preview_html(preview_url: str, html: str, max_excerpt_chars: int = 800) -> dict:
+    snapshot = _extract_preview_snapshot_from_html(html, max_excerpt_chars=max_excerpt_chars)
+    return _build_preview_audit_result(
+        preview_url,
+        snapshot,
+        audit_mode="html",
+        max_excerpt_chars=max_excerpt_chars,
+    )
 
 
 def _run_shell_command(command: str, cwd: Path, timeout: int = 120) -> dict:
@@ -1309,13 +1442,34 @@ class PreviewAuditReq(BaseModel):
     preview_url: str
     attempts: int = 3
     max_excerpt_chars: int = 800
+    project_root: str = "."
+    mode: Literal["auto", "html", "browser"] = "auto"
 
 
 @app.post("/api/preview/audit")
 def preview_audit(req: PreviewAuditReq):
     preview_url = _normalize_preview_url(req.preview_url)
+    max_excerpt_chars = max(200, min(req.max_excerpt_chars, 4000))
+    project_root = (req.project_root or ".").strip() or "."
+    project_dir = safe_join(_ws(), project_root)
+    warnings: list[str] = []
+
+    requested_mode = str(req.mode or "auto").strip().lower()
+    if requested_mode not in {"auto", "html", "browser"}:
+        requested_mode = "auto"
+
+    if requested_mode != "html":
+        browser_audit, browser_warning = _run_playwright_preview_audit(preview_url, project_dir, max_excerpt_chars=max_excerpt_chars)
+        if browser_audit:
+            return browser_audit
+        if browser_warning:
+            warnings.append(browser_warning)
+
     html = _fetch_preview_html(preview_url, attempts=max(1, min(req.attempts, 5)))
-    return _audit_preview_html(preview_url, html, max_excerpt_chars=max(200, min(req.max_excerpt_chars, 4000)))
+    audit = _audit_preview_html(preview_url, html, max_excerpt_chars=max_excerpt_chars)
+    if warnings:
+        audit["runtime_warnings"] = [*audit.get("runtime_warnings", []), *warnings]
+    return audit
 
 
 class ProjectValidateReq(BaseModel):
@@ -1381,6 +1535,8 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
     tool_catalog = list_mcp_tools(ws_root, project_dir, refresh=False) if include_live_tools and servers else {}
     memory_overview = get_agent_memory_overview(ws_root, project_root=proj_root)
     stack = detect_project_stack(project_dir) if project_dir.exists() else None
+    node_runtime = bool(_resolve_node_binary())
+    browser_audit_ready = bool(project_dir.exists() and _browser_preview_audit_ready(project_dir))
     return {
         "ok": True,
         "runtime": "langgraph",
@@ -1396,9 +1552,11 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "interaction_intent_detection": True,
             "command_conversation_boundary": True,
             "component_library_awareness": True,
-            "headless_browser_runtime": bool(stack.has_headless_browser) if stack else False,
-            "webcontainer_runtime": bool(stack.has_webcontainer) if stack else False,
+            "headless_browser_runtime": browser_audit_ready,
+            "playwright_preview_audit": browser_audit_ready,
+            "webcontainer_runtime": False,
             "browser_dom_audit": True,
+            "preview_audit_mode": "browser" if browser_audit_ready else "html",
             "tool_actions": ["shell", "mcp"],
             "streaming_transport": True,
             "native_provider_token_streaming": False,
@@ -1421,6 +1579,8 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "headless_browser": bool(stack.has_headless_browser) if stack else False,
             "playwright": bool(stack.has_playwright) if stack else False,
             "webcontainer": bool(stack.has_webcontainer) if stack else False,
+            "node_runtime": node_runtime,
+            "preview_audit_mode": "browser" if browser_audit_ready else "html",
         },
         "discovered_mcp_servers": [
             {

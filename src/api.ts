@@ -543,6 +543,7 @@ export async function runClose(id: string): Promise<{ ok: boolean }> {
 export type PreviewAuditResult = {
   ok: boolean;
   preview_url: string;
+  audit_mode: "browser" | "html";
   title: string;
   meta_description: string;
   headings: string[];
@@ -554,16 +555,19 @@ export type PreviewAuditResult = {
   word_count: number;
   image_count: number;
   images_missing_alt: number;
+  console_errors: string[];
+  page_errors: string[];
+  runtime_warnings: string[];
   issues: string[];
   excerpt: string;
   summary: string;
 };
 
-export async function auditPreview(preview_url: string, attempts = 3): Promise<PreviewAuditResult> {
+export async function auditPreview(preview_url: string, project_root = ".", attempts = 3, mode: "auto" | "html" | "browser" = "auto"): Promise<PreviewAuditResult> {
   const r = await apiFetch(`/api/preview/audit`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ preview_url, attempts }),
+    body: JSON.stringify({ preview_url, project_root, attempts, mode }),
   });
   if (!r.ok) throw new Error(await r.text());
   return r.json();
@@ -643,8 +647,10 @@ export type AgentCapabilities = {
     command_conversation_boundary?: boolean;
     component_library_awareness?: boolean;
     headless_browser_runtime?: boolean;
+    playwright_preview_audit?: boolean;
     webcontainer_runtime?: boolean;
     browser_dom_audit?: boolean;
+    preview_audit_mode?: "browser" | "html";
     tool_actions: string[];
     streaming_transport: boolean;
     native_provider_token_streaming: boolean;
@@ -667,6 +673,8 @@ export type AgentCapabilities = {
     headless_browser: boolean;
     playwright: boolean;
     webcontainer: boolean;
+    node_runtime: boolean;
+    preview_audit_mode: "browser" | "html";
   };
   discovered_mcp_servers: Array<{
     name: string;
