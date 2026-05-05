@@ -9,7 +9,7 @@ from langgraph.graph import END, StateGraph
 
 from . import settings as settings_mod
 from .agent import suggest
-from .agent_mcp import discover_mcp_servers, format_mcp_prompt
+from .agent_mcp import discover_mcp_servers, execute_mcp_tool, format_mcp_prompt, format_mcp_results_prompt, list_mcp_tools
 from .agent_memory import remember_agent_run, retrieve_agent_memory
 from .agent_skills import format_skill_prompt, resolve_agent_skills
 from .fs import read_text, safe_join
@@ -25,13 +25,17 @@ _RESPONSE_CONTRACT = """Return ONLY valid JSON with this exact shape:
     {\"path\": \"relative/path\", \"new_content\": \"full content\"}
   ],
   \"actions\": [
-    {\"type\": \"shell\", \"command\": \"npm install ...\"}
+    {\"type\": \"shell\", \"command\": \"npm install ...\"},
+    {\"type\": \"mcp\", \"server\": \"github\", \"tool\": \"search_repos\", \"arguments\": {\"query\": \"voice ide\"}}
   ]
 }
 
 Shared rules:
 - changes must contain FULL file contents, not patches or snippets.
-- Use actions only for terminal steps that are truly needed, such as installs, generators, build/lint commands, or other project commands.
+- Use actions only for steps that are truly needed, such as installs, generators, build/lint commands, or MCP-backed tool lookups.
+- Use `type: \"mcp\"` only when a registered MCP integration would materially improve the answer.
+- If you need MCP before finalizing, return the MCP action(s) first and keep `changes` empty until the tool result comes back.
+- Do not mix exploratory MCP actions with final shell actions in the same pass unless absolutely unavoidable.
 - If current content is marked as coming from the editor buffer, trust it over on-disk file contents.
 - Reuse the existing stack and patterns unless there is a clear reason not to.
 - Avoid placeholder work, toy UIs, or generic scaffolding unless the user explicitly wants that.
@@ -196,6 +200,8 @@ class AgentRuntimeState(TypedDict, total=False):
     actions: list[dict[str, Any]]
     passes: int
     refine_skipped: bool
+    tool_iterations: int
+    mcp_call_count: int
     emit: EventEmitter | None
 
 
@@ -296,6 +302,37 @@ def _merge_action_sets(*batches: list[dict[str, Any]]) -> list[dict[str, Any]]:
             seen.add(key)
             merged.append(item)
     return merged
+
+
+_MAX_MCP_TOOL_LOOPS = 2
+_MAX_MCP_ACTIONS_PER_LOOP = 2
+
+
+def _normalize_mcp_action(item: Any) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+    if str(item.get("type") or "").strip().lower() != "mcp":
+        return None
+    server = str(item.get("server") or "").strip()
+    tool = str(item.get("tool") or item.get("name") or "").strip()
+    arguments = item.get("arguments")
+    if not isinstance(arguments, dict):
+        arguments = item.get("args") if isinstance(item.get("args"), dict) else {}
+    if not server or not tool:
+        return None
+    return {"type": "mcp", "server": server, "tool": tool, "arguments": arguments}
+
+
+def _split_runtime_actions(actions: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    mcp_actions: list[dict[str, Any]] = []
+    other_actions: list[dict[str, Any]] = []
+    for item in actions or []:
+        normalized_mcp = _normalize_mcp_action(item)
+        if normalized_mcp:
+            mcp_actions.append(normalized_mcp)
+        elif isinstance(item, dict):
+            other_actions.append(item)
+    return mcp_actions, other_actions
 
 
 def _should_run_refinement(*, build_mode: str, instruction: str, active_rel: str, preview_url: str | None, attached_assets: list[str]) -> bool:
@@ -554,7 +591,8 @@ def _inspect_mcp_node(state: AgentRuntimeState) -> AgentRuntimeState:
     _emit(state, "status", {"phase": "mcp", "message": "Cek capability boundary dari MCP registry..."})
     servers = discover_mcp_servers(ctx.ws_root, ctx.project_dir)
     ctx.mcp_servers = [server.name for server in servers]
-    ctx.mcp_prompt = format_mcp_prompt(servers)
+    tool_catalog = list_mcp_tools(ctx.ws_root, ctx.project_dir) if servers else {}
+    ctx.mcp_prompt = format_mcp_prompt(servers, tool_catalog=tool_catalog)
     if ctx.mcp_prompt:
         ctx.extra_context = f"{ctx.extra_context}\n\n{ctx.mcp_prompt}".strip()
     return {"context": ctx}
@@ -563,9 +601,26 @@ def _inspect_mcp_node(state: AgentRuntimeState) -> AgentRuntimeState:
 def _draft_node(state: AgentRuntimeState) -> AgentRuntimeState:
     ctx = state["context"]
     _emit(state, "status", {"phase": "context_ready", "message": "Konteks siap, agent mulai mikir..."})
-    _emit(state, "status", {"phase": "drafting", "message": "Lagi nulis draft perubahan pertama..."})
+    is_tool_follow_up = int(state.get("tool_iterations") or 0) > 0
+    _emit(
+        state,
+        "status",
+        {
+            "phase": "drafting",
+            "message": "Lagi nulis draft perubahan pertama..." if not is_tool_follow_up else "Hasil tool udah masuk, sekarang agent nyusun solusi finalnya...",
+        },
+    )
 
-    base_instruction = ctx.mode_profile.instruction_prefix + ctx.asset_prompt + state["input"]
+    follow_up_prefix = ""
+    if is_tool_follow_up:
+        follow_up_prefix = (
+            "MCP FOLLOW-UP MODE:\n"
+            "- Tool results are already included in context.\n"
+            "- Prefer producing the final implementation now.\n"
+            "- Ask for another MCP tool only if the current tool result is still insufficient.\n\n"
+        )
+
+    base_instruction = ctx.mode_profile.instruction_prefix + ctx.asset_prompt + follow_up_prefix + state["input"]
     try:
         sug = suggest(
             instruction=base_instruction,
@@ -600,7 +655,11 @@ def _draft_node(state: AgentRuntimeState) -> AgentRuntimeState:
     }
 
 
-def _should_refine_edge(state: AgentRuntimeState) -> str:
+def _route_after_draft(state: AgentRuntimeState) -> str:
+    mcp_actions, _other_actions = _split_runtime_actions(list(state.get("actions") or []))
+    if mcp_actions and int(state.get("tool_iterations") or 0) < _MAX_MCP_TOOL_LOOPS:
+        return "tooling"
+
     ctx = state["context"]
     changes = state.get("changes") or []
     if not changes:
@@ -614,6 +673,53 @@ def _should_refine_edge(state: AgentRuntimeState) -> str:
     ):
         return "refine"
     return "finalize"
+
+
+def _execute_mcp_node(state: AgentRuntimeState) -> AgentRuntimeState:
+    ctx = state["context"]
+    raw_actions = list(state.get("actions") or [])
+    mcp_actions, _other_actions = _split_runtime_actions(raw_actions)
+    if not mcp_actions:
+        return {"actions": raw_actions}
+
+    _emit(state, "status", {"phase": "tooling", "message": "Aku jalanin tool MCP dulu biar context-nya makin tajam..."})
+    executed_results = []
+    for action in mcp_actions[:_MAX_MCP_ACTIONS_PER_LOOP]:
+        server = str(action.get("server") or "").strip()
+        tool = str(action.get("tool") or "").strip()
+        arguments = action.get("arguments") if isinstance(action.get("arguments"), dict) else {}
+        _emit(state, "delta", {"message": f"MCP {server}.{tool} lagi dipanggil..."})
+        result = execute_mcp_tool(
+            ctx.ws_root,
+            ctx.project_dir,
+            server_name=server,
+            tool_name=tool,
+            arguments=arguments,
+        )
+        executed_results.append(result)
+        _emit(
+            state,
+            "delta",
+            {
+                "message": (
+                    f"MCP {server}.{tool} selesai, hasilnya masuk ke context."
+                    if result.ok
+                    else f"MCP {server}.{tool} gagal, tapi error-nya tetap kusimpen buat reasoning berikutnya."
+                )
+            },
+        )
+
+    results_prompt = format_mcp_results_prompt(executed_results)
+    if results_prompt:
+        ctx.extra_context = f"{ctx.extra_context}\n\n{results_prompt}".strip()
+
+    return {
+        "context": ctx,
+        "tool_iterations": int(state.get("tool_iterations") or 0) + 1,
+        "mcp_call_count": int(state.get("mcp_call_count") or 0) + len(executed_results),
+        "changes": [],
+        "actions": [],
+    }
 
 
 def _refine_node(state: AgentRuntimeState) -> AgentRuntimeState:
@@ -663,6 +769,8 @@ def _finalize_node(state: AgentRuntimeState) -> AgentRuntimeState:
         log = f"{log} mcp={','.join(ctx.mcp_servers)}".strip()
     if ctx.memory_prompt:
         log = f"{log} memory=on".strip()
+    if int(state.get("mcp_call_count") or 0) > 0:
+        log = f"{log} mcp_calls={int(state.get('mcp_call_count') or 0)}".strip()
 
     passes = int(state.get("passes") or 1)
     if passes >= 2:
@@ -710,13 +818,15 @@ _AGENT_GRAPH_BUILDER.add_node("memory", _hydrate_memory_node)
 _AGENT_GRAPH_BUILDER.add_node("skills", _resolve_skills_node)
 _AGENT_GRAPH_BUILDER.add_node("mcp", _inspect_mcp_node)
 _AGENT_GRAPH_BUILDER.add_node("draft", _draft_node)
+_AGENT_GRAPH_BUILDER.add_node("tooling", _execute_mcp_node)
 _AGENT_GRAPH_BUILDER.add_node("refine", _refine_node)
 _AGENT_GRAPH_BUILDER.add_node("finalize", _finalize_node)
 _AGENT_GRAPH_BUILDER.set_entry_point("memory")
 _AGENT_GRAPH_BUILDER.add_edge("memory", "skills")
 _AGENT_GRAPH_BUILDER.add_edge("skills", "mcp")
 _AGENT_GRAPH_BUILDER.add_edge("mcp", "draft")
-_AGENT_GRAPH_BUILDER.add_conditional_edges("draft", _should_refine_edge, {"refine": "refine", "finalize": "finalize"})
+_AGENT_GRAPH_BUILDER.add_conditional_edges("draft", _route_after_draft, {"tooling": "tooling", "refine": "refine", "finalize": "finalize"})
+_AGENT_GRAPH_BUILDER.add_edge("tooling", "draft")
 _AGENT_GRAPH_BUILDER.add_edge("refine", "finalize")
 _AGENT_GRAPH_BUILDER.add_edge("finalize", END)
 _AGENT_GRAPH = _AGENT_GRAPH_BUILDER.compile()
@@ -729,6 +839,8 @@ def run_agent_pipeline(req: Any, *, ws_root: Path, emit: EventEmitter | None = N
             "input": str(getattr(req, "input", "") or ""),
             "context": ctx,
             "request_preview_url": getattr(req, "preview_url", None),
+            "tool_iterations": 0,
+            "mcp_call_count": 0,
             "emit": emit,
         }
     )
