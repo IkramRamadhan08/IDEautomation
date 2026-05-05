@@ -8,6 +8,7 @@ interface AgentLiveStageProps {
   workingMsg?: string;
   emptyText?: string;
   compact?: boolean;
+  includeTools?: boolean;
 }
 
 function roleLabel(item: AgentLiveItem) {
@@ -28,12 +29,15 @@ export const AgentLiveStage: React.FC<AgentLiveStageProps> = ({
   workingMsg,
   emptyText = "Run agent untuk lihat percakapan kerja dan aksi yang lagi jalan.",
   compact = false,
+  includeTools = true,
 }) => {
+  const visibleItems = includeTools ? items : items.filter((item) => item.role !== "tool");
+
   return (
     <div className={`agentLiveStage ${compact ? "compact" : ""}`}>
-      {items.length === 0 ? <div className="agentLiveEmpty">{emptyText}</div> : null}
+      {visibleItems.length === 0 ? <div className="agentLiveEmpty">{emptyText}</div> : null}
 
-      {items.map((item) => (
+      {visibleItems.map((item) => (
         <div key={item.id} className={`agentLiveBubble ${item.role} ${item.tone || "default"}`}>
           <div className="agentLiveBubbleMeta">
             <span className="agentLiveBubbleIcon">{roleIcon(item)}</span>

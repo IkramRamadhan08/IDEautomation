@@ -187,6 +187,7 @@ export const FullAgentWorkspace: React.FC<FullAgentWorkspaceProps> = ({
               workingMsg={workingMsg}
               emptyText={agentReply || "Begitu Clara mulai jalan, brief, progress, dan aksinya bakal muncul di sini."}
               compact
+              includeTools={false}
             />
           </div>
 

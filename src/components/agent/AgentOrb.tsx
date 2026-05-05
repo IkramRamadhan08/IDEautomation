@@ -363,6 +363,7 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
                       agentStatus={agentStatus}
                       workingMsg={workingMsg}
                       emptyText={agentReply || "Begitu kamu run, progress Clara bakal muncul di sini."}
+                      includeTools={false}
                     />
 
                     {agentAuditTrail.length > 0 ? (

@@ -180,6 +180,7 @@ export const HybridWorkspace: React.FC<HybridWorkspaceProps> = ({
                   agentStatus={agentStatus === "thinking" ? "thinking" : agentStatus === "error" ? "error" : "idle"}
                   workingMsg={editorStatus}
                   compact
+                  includeTools={false}
                 />
               </div>
             ) : null}
