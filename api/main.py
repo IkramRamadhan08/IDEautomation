@@ -29,7 +29,8 @@ from api.projects_router import build_projects_router
 from api.preferences_router import build_preferences_router
 from api.settings_router import build_settings_router
 from api.fs import list_tree, read_text, write_text, diff_text, safe_join
-from api.agent_mcp import discover_mcp_servers
+from api.agent_mcp import discover_mcp_servers, list_mcp_tools
+from api.agent_memory import get_agent_memory_overview
 from api.agent_runtime import run_agent_pipeline
 
 
@@ -1371,22 +1372,26 @@ class ImageAssetResp(BaseModel):
 
 
 @app.get("/api/agent/capabilities")
-def agent_capabilities(project_root: str = "."):
+def agent_capabilities(project_root: str = ".", include_live_tools: bool = False):
     ws_root = _ws()
     proj_root = (project_root or ".").strip() or "."
     project_dir = safe_join(ws_root, proj_root)
     servers = discover_mcp_servers(ws_root, project_dir) if project_dir.exists() else []
+    tool_catalog = list_mcp_tools(ws_root, project_dir, refresh=False) if include_live_tools and servers else {}
+    memory_overview = get_agent_memory_overview(ws_root, project_root=proj_root)
     return {
         "ok": True,
         "runtime": "langgraph",
         "supports": {
             "graph_runtime": True,
             "short_term_memory_rag": True,
+            "project_scoped_short_memory": True,
             "long_term_memory_rag": True,
             "skill_registry": True,
             "mcp_registry": True,
-            "mcp_tool_execution": False,
-            "tool_actions": ["shell"],
+            "mcp_tool_execution": True,
+            "autonomous_mcp_loop": True,
+            "tool_actions": ["shell", "mcp"],
             "streaming_transport": True,
             "native_provider_token_streaming": False,
         },
@@ -1395,6 +1400,13 @@ def agent_capabilities(project_root: str = "."):
             "memory_store": ".voiceide/agent-memory",
             "custom_skills_dir": [".voiceide/skills", f"{proj_root}/.voiceide/skills" if proj_root != "." else ".voiceide/skills"],
             "mcp_config_candidates": [".voiceide/mcp.json", f"{proj_root}/.voiceide/mcp.json" if proj_root != "." else ".voiceide/mcp.json", f"{proj_root}/mcp.json" if proj_root != "." else "mcp.json"],
+            "mcp_loop_budget": 2,
+        },
+        "memory": {
+            "session_entries": memory_overview.session_entries,
+            "project_entries": memory_overview.project_entries,
+            "latest_session_ts": memory_overview.latest_session_ts,
+            "latest_project_ts": memory_overview.latest_project_ts,
         },
         "discovered_mcp_servers": [
             {
@@ -1403,6 +1415,14 @@ def agent_capabilities(project_root: str = "."):
                 "target": server.target,
                 "tools": server.tools,
                 "source": server.source,
+                "live_tools": [
+                    {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "input_schema": tool.input_schema,
+                    }
+                    for tool in (tool_catalog.get(server.name) or [])[:12]
+                ],
             }
             for server in servers
         ],

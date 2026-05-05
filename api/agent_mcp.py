@@ -8,6 +8,7 @@ import os
 import time
 from typing import Any
 
+from anyio import BrokenResourceError
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamablehttp_client
@@ -263,12 +264,57 @@ def _stringify_tool_payload(payload: dict[str, Any]) -> str:
     return text[:6000]
 
 
+def _is_ignorable_exit_error(exc: BaseException) -> bool:
+    if isinstance(exc, BrokenResourceError):
+        return True
+    nested = getattr(exc, "exceptions", None)
+    if isinstance(nested, tuple) and nested:
+        return all(_is_ignorable_exit_error(item) for item in nested)
+    return False
+
+
 async def _call_tool_async(server: MCPServerInfo, tool_name: str, arguments: dict[str, Any]) -> MCPToolCallResult:
     started = time.perf_counter()
+    payload: dict[str, Any] | None = None
 
-    async def _invoke(session: ClientSession) -> MCPToolCallResult:
-        result = await session.call_tool(tool_name, arguments=arguments, read_timeout_seconds=server.timeout_seconds)
+    async def _capture_result(session: ClientSession) -> None:
+        nonlocal payload
+        await session.list_tools()
+        result = await asyncio.wait_for(session.call_tool(tool_name, arguments=arguments), timeout=server.timeout_seconds)
         payload = result.model_dump(mode="json") if hasattr(result, "model_dump") else {}
+
+    try:
+        if server.transport == "stdio":
+            if not server.command:
+                raise RuntimeError(f"MCP stdio server '{server.name}' is missing a command")
+            params = StdioServerParameters(
+                command=server.command,
+                args=list(server.args or []),
+                env={**os.environ, **(server.env or {})},
+                cwd=server.cwd,
+            )
+            try:
+                async with stdio_client(params) as (read, write):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        await _capture_result(session)
+            except BaseException as exc:
+                if payload is None or not _is_ignorable_exit_error(exc):
+                    raise
+        elif server.transport == "http":
+            async with streamablehttp_client(
+                server.target,
+                headers=server.headers or None,
+                timeout=server.timeout_seconds,
+                sse_read_timeout=max(server.timeout_seconds, 60.0),
+            ) as (read, write, _get_session_id):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    await _capture_result(session)
+        else:
+            raise RuntimeError(f"Unsupported MCP transport: {server.transport}")
+
+        payload = payload or {}
         duration_ms = int((time.perf_counter() - started) * 1000)
         ok = not bool(payload.get("isError") or payload.get("is_error"))
         text = _stringify_tool_payload(payload)
@@ -282,32 +328,6 @@ async def _call_tool_async(server: MCPServerInfo, tool_name: str, arguments: dic
             duration_ms=duration_ms,
             error=None if ok else (text or "MCP tool returned an error result"),
         )
-
-    try:
-        if server.transport == "stdio":
-            if not server.command:
-                raise RuntimeError(f"MCP stdio server '{server.name}' is missing a command")
-            params = StdioServerParameters(
-                command=server.command,
-                args=list(server.args or []),
-                env={**os.environ, **(server.env or {})},
-                cwd=server.cwd,
-            )
-            async with stdio_client(params) as (read, write):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    return await _invoke(session)
-        if server.transport == "http":
-            async with streamablehttp_client(
-                server.target,
-                headers=server.headers or None,
-                timeout=server.timeout_seconds,
-                sse_read_timeout=max(server.timeout_seconds, 60.0),
-            ) as (read, write, _get_session_id):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    return await _invoke(session)
-        raise RuntimeError(f"Unsupported MCP transport: {server.transport}")
     except Exception as exc:
         duration_ms = int((time.perf_counter() - started) * 1000)
         return MCPToolCallResult(
@@ -316,7 +336,7 @@ async def _call_tool_async(server: MCPServerInfo, tool_name: str, arguments: dic
             arguments=arguments,
             ok=False,
             text="",
-            raw={},
+            raw=payload or {},
             duration_ms=duration_ms,
             error=str(exc),
         )

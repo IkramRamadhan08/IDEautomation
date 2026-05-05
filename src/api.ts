@@ -613,10 +613,60 @@ export async function uploadImageAsset(project_root: string, file: File): Promis
 
 export type AgentChange = { path: string; new_content: string; diff: string };
 export type AgentResult = { spoken: string; log: string; changes: AgentChange[]; actions: Array<{ type: string; [key: string]: unknown }> };
+export type AgentCapabilities = {
+  ok: boolean;
+  runtime: string;
+  supports: {
+    graph_runtime: boolean;
+    short_term_memory_rag: boolean;
+    project_scoped_short_memory?: boolean;
+    long_term_memory_rag: boolean;
+    skill_registry: boolean;
+    mcp_registry: boolean;
+    mcp_tool_execution: boolean;
+    autonomous_mcp_loop?: boolean;
+    tool_actions: string[];
+    streaming_transport: boolean;
+    native_provider_token_streaming: boolean;
+  };
+  boundaries: {
+    project_root: string;
+    memory_store: string;
+    custom_skills_dir: string[];
+    mcp_config_candidates: string[];
+    mcp_loop_budget?: number;
+  };
+  memory: {
+    session_entries: number;
+    project_entries: number;
+    latest_session_ts: number | null;
+    latest_project_ts: number | null;
+  };
+  discovered_mcp_servers: Array<{
+    name: string;
+    transport: string;
+    target: string;
+    tools: string[];
+    source: string;
+    live_tools?: Array<{
+      name: string;
+      description: string;
+      input_schema: Record<string, unknown>;
+    }>;
+  }>;
+};
 export type AgentStreamEvent = {
   event: "status" | "delta" | "done" | "error";
   data: Record<string, unknown>;
 };
+
+export async function fetchAgentCapabilities(project_root: string, includeLiveTools = false): Promise<AgentCapabilities> {
+  const params = new URLSearchParams({ project_root });
+  if (includeLiveTools) params.set("include_live_tools", "true");
+  const r = await apiFetch(`/api/agent/capabilities?${params.toString()}`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
 
 function parseSseChunk(chunk: string): AgentStreamEvent[] {
   const out: AgentStreamEvent[] = [];

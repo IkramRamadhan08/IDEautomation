@@ -10,7 +10,7 @@ Voice IDE agent is being reset around explicit boundaries instead of procedural 
    - keeps refinement optional and explicit
 
 2. **Memory / RAG**
-   - **short-term memory**: recent agent runs per session/user
+   - **short-term memory**: recent agent runs per session/user plus project-scoped short memory for the same user
    - **long-term memory**: durable project docs like README, PRD, docs, project memory notes
    - retrieval is injected into agent context, not hidden in random helper code
 
@@ -19,10 +19,10 @@ Voice IDE agent is being reset around explicit boundaries instead of procedural 
    - optional custom project skills from `.voiceide/skills/*.md`
    - matched by request/context before drafting
 
-4. **MCP registry**
+4. **MCP registry + execution loop**
    - discovers declared MCP servers from workspace or project config
    - surfaces capability boundaries to the agent runtime
-   - execution loops can be added later without collapsing the rest of the architecture
+   - can execute MCP tool calls during the graph loop, then feed real tool results back into the next draft pass
 
 ## Current goal
 
@@ -38,7 +38,7 @@ Make the agent more reliable by separating:
 
 ## Current limits
 
-- MCP discovery exists before full MCP tool-execution loops
+- MCP now has a bounded execution loop, but still depends on valid project/workspace MCP config
 - RAG is lexical/project-local for now, not embedding-based
 - frontend still has some state coupling that should be moved into dedicated controllers/hooks
 

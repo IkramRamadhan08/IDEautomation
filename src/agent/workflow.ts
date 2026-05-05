@@ -2,6 +2,7 @@ import type { Dispatch, SetStateAction } from "react";
 import {
   applyMany,
   auditPreview,
+  fetchAgentCapabilities,
   streamAgent,
   terminalRun,
   validateProject,
@@ -55,8 +56,12 @@ type WorkflowArgs = {
 const PHASE_LABELS: Record<string, string> = {
   queued: "Masuk antrean kerja…",
   starting: "Nyusun konteks kerja…",
+  memory: "Ngambil memory yang relevan…",
+  skills: "Milih skill yang paling kepake…",
+  mcp: "Ngecek integrasi MCP yang tersedia…",
   context_ready: "Konteks siap, mulai ngerjain…",
   drafting: "Lagi nulis solusi pertamanya…",
+  tooling: "Lagi jalanin tool agent…",
   refining: "Lagi merapikan hasil…",
   diffing: "Lagi nyusun patch yang rapi…",
 };
@@ -64,8 +69,12 @@ const PHASE_LABELS: Record<string, string> = {
 const PHASE_SPEECH: Record<string, string> = {
   queued: "Oke, gue terima task-nya dulu.",
   starting: "Gue cek konteks project sama file yang lagi relevan.",
+  memory: "Gue tarik dulu memori session sama memori project yang masih nyambung sama task ini.",
+  skills: "Sekarang gue pilih skill kerja yang paling cocok buat ngerjain ini.",
+  mcp: "Gue cek juga ada integrasi MCP apa aja yang bisa dipakai kalau butuh context tambahan.",
   context_ready: "Konteksnya udah kebaca, sekarang gue cari jalur yang paling masuk akal.",
   drafting: "Ketemu arah awalnya, gue mulai nulis perubahan.",
+  tooling: "Ada info yang lebih aman diambil lewat tool dulu, jadi gue jalanin itu sebentar.",
   refining: "Gue rapihin dulu biar hasilnya nggak terasa asal jadi.",
   diffing: "Terakhir, gue susun patch-nya biar rapi dipasang ke project.",
 };
@@ -235,6 +244,15 @@ export async function runAgentWorkflow({
 
   const runShellActionsForPass = async (actions: AgentAction[]) => {
     for (const action of actions) {
+      if (action.type === "mcp") {
+        pushAgentLiveItem({
+          role: "tool",
+          tone: "error",
+          text: "Ada action MCP mentah yang lolos ke frontend. Harusnya ini udah diberesin di backend agent loop.",
+          meta: JSON.stringify(action),
+        });
+        continue;
+      }
       if (action.type !== "shell" || typeof action.command !== "string") continue;
       setWorkingMsg(`Menjalankan: ${action.command}`);
       pushAgentLiveItem({ role: "tool", tone: "working", text: "Aku jalanin command tambahan buat ngeberesin flow.", meta: action.command });
@@ -311,6 +329,27 @@ export async function runAgentWorkflow({
   setAgentLiveItems([{ id: makeAgentLiveId(), role: "user", tone: "default", text: agentInput.trim() }]);
   setEditorStatus(requestEditorStatus);
   setWorkingMsg("Agent sedang berpikir…");
+
+  void fetchAgentCapabilities(selectedProject, false)
+    .then((caps) => {
+      const mcpCount = caps.discovered_mcp_servers.length;
+      const memoryParts = [];
+      if (caps.memory.session_entries > 0) memoryParts.push(`${caps.memory.session_entries} memori session`);
+      if (caps.memory.project_entries > 0) memoryParts.push(`${caps.memory.project_entries} memori project`);
+      const memoryLabel = memoryParts.length > 0 ? memoryParts.join(" + ") : "memory masih fresh";
+      const mcpLabel = mcpCount > 0
+        ? `${mcpCount} MCP server siap dipakai`
+        : "belum ada MCP server yang dikonfigurasi";
+      pushAgentLiveItem({
+        role: "tool",
+        tone: "default",
+        text: `Capability check: ${memoryLabel}, ${mcpLabel}.`,
+        meta: caps.supports.autonomous_mcp_loop ? "autonomous tool loop aktif" : null,
+      });
+    })
+    .catch(() => {
+      // capability preflight is helpful, but should never block the run
+    });
 
   try {
     const res = await runAgentPass(agentInput, requestEditorStatus);
