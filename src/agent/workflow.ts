@@ -563,7 +563,6 @@ export async function runAgentWorkflow({
     if (finalToast.kind === "success") {
       notify(finalToast);
     } else if (finalToast.kind === "warning") {
-      pushAgentLiveItem({ role: "assistant", tone: "error", text: "Perubahannya udah kepasang, tapi masih ada beberapa hal yang menurutku perlu review manual." });
       notify(finalToast);
     } else {
       notify(finalToast);
@@ -572,7 +571,6 @@ export async function runAgentWorkflow({
   } catch (error) {
     setEditorStatus("Agent failed");
     setAgentStatus("error");
-    pushAgentLiveItem({ role: "assistant", tone: "error", text: "Aku mentok di tengah jalan. Coba cek error ini dulu ya.", meta: errorMessage(error) });
     notify({ kind: "error", message: `Agent error: ${errorMessage(error)}` });
   } finally {
     setWorkingMsg("");

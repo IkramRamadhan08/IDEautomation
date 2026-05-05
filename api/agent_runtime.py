@@ -719,7 +719,7 @@ def _draft_node(state: AgentRuntimeState) -> AgentRuntimeState:
     except RuntimeError:
         if not (ctx.is_full_agent and ctx.hybrid_seed_needed and ctx.intent.should_write_files):
             raise
-        spoken = "Aku siapin baseline runnable buat project yang dipilih supaya preview bisa jalan, lalu kamu bisa iterasi lagi dari situ."
+        spoken = ""
         log = f"provider={settings_mod.settings.llm_provider} full-agent-mode=seed-only"
         changes = []
         actions = []
