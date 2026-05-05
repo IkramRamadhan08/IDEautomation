@@ -9,6 +9,9 @@ from langgraph.graph import END, StateGraph
 
 from . import settings as settings_mod
 from .agent import suggest
+from .agent_mcp import discover_mcp_servers, format_mcp_prompt
+from .agent_memory import remember_agent_run, retrieve_agent_memory
+from .agent_skills import format_skill_prompt, resolve_agent_skills
 from .fs import read_text, safe_join
 from .hybrid import build_hybrid_seed, merge_hybrid_seed, should_seed_hybrid
 
@@ -172,6 +175,11 @@ class PreparedAgentContext:
     attached_assets: list[str]
     extra_context: str
     asset_prompt: str
+    memory_prompt: str
+    skill_prompt: str
+    mcp_prompt: str
+    resolved_skill_ids: list[str]
+    mcp_servers: list[str]
 
     @property
     def is_full_agent(self) -> bool:
@@ -493,12 +501,63 @@ def prepare_agent_context(req: Any, ws_root: Path) -> PreparedAgentContext:
         attached_assets=attached_assets,
         extra_context="",
         asset_prompt="",
+        memory_prompt="",
+        skill_prompt="",
+        mcp_prompt="",
+        resolved_skill_ids=[],
+        mcp_servers=[],
     )
     extra_context = "\n\n".join(_build_context_parts(ctx_stub, req))
     asset_prompt = _build_asset_prompt(ctx_stub)
     ctx_stub.extra_context = extra_context
     ctx_stub.asset_prompt = asset_prompt
     return ctx_stub
+
+
+def _hydrate_memory_node(state: AgentRuntimeState) -> AgentRuntimeState:
+    ctx = state["context"]
+    _emit(state, "status", {"phase": "memory", "message": "Ngambil short-term sama long-term memory dulu..."})
+    memory_bundle = retrieve_agent_memory(
+        ctx.ws_root,
+        project_dir=ctx.project_dir,
+        project_root=ctx.project_root,
+        query=state["input"],
+        active_rel=ctx.active_rel,
+        open_files=ctx.open_files,
+    )
+    ctx.memory_prompt = memory_bundle.prompt
+    if ctx.memory_prompt:
+        ctx.extra_context = f"{ctx.extra_context}\n\n{ctx.memory_prompt}".strip()
+    return {"context": ctx}
+
+
+def _resolve_skills_node(state: AgentRuntimeState) -> AgentRuntimeState:
+    ctx = state["context"]
+    _emit(state, "status", {"phase": "skills", "message": "Nyocokin skill yang relevan buat task ini..."})
+    skills = resolve_agent_skills(
+        ctx.ws_root,
+        project_dir=ctx.project_dir,
+        query=state["input"],
+        build_mode=ctx.mode_profile.build_mode,
+        active_rel=ctx.active_rel,
+        preview_url=state.get("request_preview_url"),
+    )
+    ctx.resolved_skill_ids = [skill.skill_id for skill in skills]
+    ctx.skill_prompt = format_skill_prompt(skills)
+    if ctx.skill_prompt:
+        ctx.extra_context = f"{ctx.extra_context}\n\n{ctx.skill_prompt}".strip()
+    return {"context": ctx}
+
+
+def _inspect_mcp_node(state: AgentRuntimeState) -> AgentRuntimeState:
+    ctx = state["context"]
+    _emit(state, "status", {"phase": "mcp", "message": "Cek capability boundary dari MCP registry..."})
+    servers = discover_mcp_servers(ctx.ws_root, ctx.project_dir)
+    ctx.mcp_servers = [server.name for server in servers]
+    ctx.mcp_prompt = format_mcp_prompt(servers)
+    if ctx.mcp_prompt:
+        ctx.extra_context = f"{ctx.extra_context}\n\n{ctx.mcp_prompt}".strip()
+    return {"context": ctx}
 
 
 def _draft_node(state: AgentRuntimeState) -> AgentRuntimeState:
@@ -598,6 +657,12 @@ def _finalize_node(state: AgentRuntimeState) -> AgentRuntimeState:
     persona_tag = f"persona={ctx.mode_profile.persona_name.lower()}"
     if persona_tag not in log:
         log = f"{log} {persona_tag}".strip()
+    if ctx.resolved_skill_ids:
+        log = f"{log} skills={','.join(ctx.resolved_skill_ids)}".strip()
+    if ctx.mcp_servers:
+        log = f"{log} mcp={','.join(ctx.mcp_servers)}".strip()
+    if ctx.memory_prompt:
+        log = f"{log} memory=on".strip()
 
     passes = int(state.get("passes") or 1)
     if passes >= 2:
@@ -641,10 +706,16 @@ def _finalize_node(state: AgentRuntimeState) -> AgentRuntimeState:
 
 
 _AGENT_GRAPH_BUILDER = StateGraph(AgentRuntimeState)
+_AGENT_GRAPH_BUILDER.add_node("memory", _hydrate_memory_node)
+_AGENT_GRAPH_BUILDER.add_node("skills", _resolve_skills_node)
+_AGENT_GRAPH_BUILDER.add_node("mcp", _inspect_mcp_node)
 _AGENT_GRAPH_BUILDER.add_node("draft", _draft_node)
 _AGENT_GRAPH_BUILDER.add_node("refine", _refine_node)
 _AGENT_GRAPH_BUILDER.add_node("finalize", _finalize_node)
-_AGENT_GRAPH_BUILDER.set_entry_point("draft")
+_AGENT_GRAPH_BUILDER.set_entry_point("memory")
+_AGENT_GRAPH_BUILDER.add_edge("memory", "skills")
+_AGENT_GRAPH_BUILDER.add_edge("skills", "mcp")
+_AGENT_GRAPH_BUILDER.add_edge("mcp", "draft")
 _AGENT_GRAPH_BUILDER.add_conditional_edges("draft", _should_refine_edge, {"refine": "refine", "finalize": "finalize"})
 _AGENT_GRAPH_BUILDER.add_edge("refine", "finalize")
 _AGENT_GRAPH_BUILDER.add_edge("finalize", END)
@@ -661,9 +732,22 @@ def run_agent_pipeline(req: Any, *, ws_root: Path, emit: EventEmitter | None = N
             "emit": emit,
         }
     )
-    return {
+    final_result = {
         "spoken": str(result.get("spoken") or ""),
         "log": str(result.get("log") or ""),
         "changes": list(result.get("changes") or []),
         "actions": list(result.get("actions") or []),
     }
+    try:
+        remember_agent_run(
+            ws_root,
+            project_root=ctx.project_root,
+            build_mode=ctx.mode_profile.build_mode,
+            user_input=str(getattr(req, "input", "") or ""),
+            spoken=final_result["spoken"],
+            changes=final_result["changes"],
+            actions=final_result["actions"],
+        )
+    except Exception:
+        pass
+    return final_result

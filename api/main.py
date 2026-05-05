@@ -29,6 +29,7 @@ from api.projects_router import build_projects_router
 from api.preferences_router import build_preferences_router
 from api.settings_router import build_settings_router
 from api.fs import list_tree, read_text, write_text, diff_text, safe_join
+from api.agent_mcp import discover_mcp_servers
 from api.agent_runtime import run_agent_pipeline
 
 
@@ -1367,6 +1368,45 @@ class ImageAssetResp(BaseModel):
     name: str
     content_type: str | None = None
     size: int
+
+
+@app.get("/api/agent/capabilities")
+def agent_capabilities(project_root: str = "."):
+    ws_root = _ws()
+    proj_root = (project_root or ".").strip() or "."
+    project_dir = safe_join(ws_root, proj_root)
+    servers = discover_mcp_servers(ws_root, project_dir) if project_dir.exists() else []
+    return {
+        "ok": True,
+        "runtime": "langgraph",
+        "supports": {
+            "graph_runtime": True,
+            "short_term_memory_rag": True,
+            "long_term_memory_rag": True,
+            "skill_registry": True,
+            "mcp_registry": True,
+            "mcp_tool_execution": False,
+            "tool_actions": ["shell"],
+            "streaming_transport": True,
+            "native_provider_token_streaming": False,
+        },
+        "boundaries": {
+            "project_root": proj_root,
+            "memory_store": ".voiceide/agent-memory",
+            "custom_skills_dir": [".voiceide/skills", f"{proj_root}/.voiceide/skills" if proj_root != "." else ".voiceide/skills"],
+            "mcp_config_candidates": [".voiceide/mcp.json", f"{proj_root}/.voiceide/mcp.json" if proj_root != "." else ".voiceide/mcp.json", f"{proj_root}/mcp.json" if proj_root != "." else "mcp.json"],
+        },
+        "discovered_mcp_servers": [
+            {
+                "name": server.name,
+                "transport": server.transport,
+                "target": server.target,
+                "tools": server.tools,
+                "source": server.source,
+            }
+            for server in servers
+        ],
+    }
 
 
 # Project builder endpoint (v0): scaffold a new app from scratch.
