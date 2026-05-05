@@ -53,6 +53,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const providerKey = llmProviderDraft;
   const providerStatus = providerKey ? settings?.providers?.[providerKey] ?? null : null;
+  const modelOptionsId = `model-options-${providerKey || "none"}`;
 
   return (
     <div className="modalBackdrop" onClick={onClose}>
@@ -132,11 +133,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           <div className="settingsSection">
             <label className="settingsLabel">Model</label>
-            <select className="settingsInput settingsSelect" value={modelDraft} onChange={(e) => onModelDraftChange(e.target.value)} disabled={modelsLoading || models.length === 0}>
-              {models.length === 0 ? <option value="">No models loaded</option> : null}
+            <input
+              className="settingsInput"
+              value={modelDraft}
+              onChange={(e) => onModelDraftChange(e.target.value)}
+              list={modelOptionsId}
+              placeholder={llmProviderDraft ? "Pilih dari list atau ketik manual…" : "Pilih provider dulu…"}
+              disabled={!llmProviderDraft || modelsLoading}
+            />
+            <datalist id={modelOptionsId}>
               {models.map((model) => <option key={model} value={model}>{model}</option>)}
-            </select>
-            <div className="settingsSubtle compactHint">{modelsLoading ? "Loading…" : modelsError || ""}</div>
+            </datalist>
+            <div className="settingsSubtle compactHint">
+              {modelsLoading ? "Loading…" : modelsError || (models.length > 0 ? `${models.length} model siap dipilih, atau ketik manual.` : "Belum ada model yang dimuat.")}
+            </div>
           </div>
 
           <div className="settingsActions settingsSectionWide">

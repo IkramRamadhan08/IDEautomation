@@ -241,11 +241,42 @@ def list_models(provider: str) -> list[str]:
     if provider not in SUPPORTED_PROVIDERS:
         raise RuntimeError(f"Unsupported provider: {provider}")
     if provider == OPENAI_PROVIDER:
-        return ["gpt-5.4", "gpt-5.4-mini"]
+        return [
+            "gpt-5.4-mini",
+            "gpt-4o-mini",
+            "gpt-4.1-mini",
+            "o4-mini",
+            "gpt-5.4",
+            "gpt-5-mini",
+            "gpt-4.1",
+            "gpt-4o",
+            "o3-mini",
+            "o3",
+        ]
     if provider == ANTHROPIC_PROVIDER:
-        return ["claude-sonnet-4-0"]
+        return [
+            "claude-3-5-haiku-latest",
+            "claude-3-5-sonnet-latest",
+            "claude-3-7-sonnet-latest",
+            "claude-sonnet-4-0",
+            "claude-opus-4-0",
+        ]
     if provider == OPENROUTER_PROVIDER:
-        return ["openai/gpt-5.4", "anthropic/claude-sonnet-4"]
+        return [
+            "openai/gpt-5.4-mini",
+            "openai/gpt-4o-mini",
+            "openai/gpt-4.1-mini",
+            "google/gemini-2.5-flash",
+            "anthropic/claude-3.5-haiku",
+            "openai/gpt-5.4",
+            "openai/gpt-4.1",
+            "anthropic/claude-sonnet-4",
+            "anthropic/claude-3.7-sonnet",
+            "google/gemini-2.5-pro",
+            "meta-llama/llama-3.3-70b-instruct",
+            "deepseek/deepseek-chat-v3-0324",
+            "deepseek/deepseek-r1",
+        ]
     return []
 
 

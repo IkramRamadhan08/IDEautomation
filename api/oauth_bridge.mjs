@@ -105,13 +105,50 @@ async function openrouterJson({ model, system, user }) {
 
 async function listModels({ provider }) {
   if (provider === "openai" || provider === "openai-codex") {
-    return { models: ["gpt-5.4", "gpt-5.4-mini"] };
+    return {
+      models: [
+        "gpt-5.4-mini",
+        "gpt-4o-mini",
+        "gpt-4.1-mini",
+        "o4-mini",
+        "gpt-5.4",
+        "gpt-5-mini",
+        "gpt-4.1",
+        "gpt-4o",
+        "o3-mini",
+        "o3",
+      ],
+    };
   }
   if (provider === "anthropic") {
-    return { models: ["claude-sonnet-4-0"] };
+    return {
+      models: [
+        "claude-3-5-haiku-latest",
+        "claude-3-5-sonnet-latest",
+        "claude-3-7-sonnet-latest",
+        "claude-sonnet-4-0",
+        "claude-opus-4-0",
+      ],
+    };
   }
   if (provider === "openrouter") {
-    return { models: ["openai/gpt-5.4", "anthropic/claude-sonnet-4"] };
+    return {
+      models: [
+        "openai/gpt-5.4-mini",
+        "openai/gpt-4o-mini",
+        "openai/gpt-4.1-mini",
+        "google/gemini-2.5-flash",
+        "anthropic/claude-3.5-haiku",
+        "openai/gpt-5.4",
+        "openai/gpt-4.1",
+        "anthropic/claude-sonnet-4",
+        "anthropic/claude-3.7-sonnet",
+        "google/gemini-2.5-pro",
+        "meta-llama/llama-3.3-70b-instruct",
+        "deepseek/deepseek-chat-v3-0324",
+        "deepseek/deepseek-r1",
+      ],
+    };
   }
   return { models: [] };
 }

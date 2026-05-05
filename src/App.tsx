@@ -602,11 +602,29 @@ export default function App() {
   };
 
   const loadProviderModels = async (p: ProviderChoice) => {
+    if (!p) {
+      setModels([]);
+      setModelsError("");
+      return;
+    }
     setModelsLoading(true);
+    setModelsError("");
     try {
       const res = await getModels(p);
-      setModels(res.models || []);
-      if (res.models?.length && !modelDraft) setModelDraft(res.models[0]);
+      const nextModels = Array.from(new Set(res.models || []));
+      setModels(nextModels);
+      setModelDraft((current) => {
+        if (current && nextModels.includes(current)) return current;
+        const fallback = p === "openai"
+          ? settings?.openai_model
+          : p === "anthropic"
+            ? settings?.anthropic_model
+            : p === "openrouter"
+              ? settings?.openrouter_model
+              : "";
+        if (fallback && nextModels.includes(fallback)) return fallback;
+        return current || fallback || nextModels[0] || "";
+      });
     } catch (e) {
       setModelsError(errorMessage(e));
     } finally {
@@ -1075,7 +1093,19 @@ export default function App() {
           modelsLoading={modelsLoading}
           modelsError={modelsError}
           onClose={() => setSettingsOpen(false)}
-          onLlmProviderChange={p => { setLlmProviderDraft(p); void loadProviderModels(p); }}
+          onLlmProviderChange={p => {
+            setLlmProviderDraft(p);
+            setModelDraft(
+              p === "openai"
+                ? (settings?.openai_model || "")
+                : p === "anthropic"
+                  ? (settings?.anthropic_model || "")
+                  : p === "openrouter"
+                    ? (settings?.openrouter_model || "")
+                    : "",
+            );
+            void loadProviderModels(p);
+          }}
           onBuildModeDraftChange={setBuildModeDraft}
           onModelDraftChange={setModelDraft}
           onApiKeyChange={(p, k) => {
