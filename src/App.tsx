@@ -56,7 +56,7 @@ import {
 
 import { Topbar } from "./components/navigation/Topbar";
 import { AgentOrb } from "./components/agent/AgentOrb";
-import { buildAgentRunPlan, buildRepairPrompt } from "./agent/modeOrchestration";
+import { buildRepairPrompt, getAgentRunPlan } from "./agent/runtime";
 
 const SettingsModal = lazy(() => import("./components/settings/SettingsModal").then((module) => ({ default: module.SettingsModal })));
 const HybridWorkspace = lazy(() => import("./modes/HybridWorkspace").then((module) => ({ default: module.HybridWorkspace })));
@@ -703,7 +703,7 @@ export default function App() {
   const runAgentAndAutoApply = async () => {
     if (!agentInput.trim() || agentStatus === "thinking") return;
 
-    const runPlan = buildAgentRunPlan(buildMode, agentInput, previewUrl);
+    const runPlan = getAgentRunPlan(buildMode, agentInput, previewUrl);
     const { requestEditorStatus, shouldDrivePreview, shouldRunValidation, shouldAuditPreview } = runPlan;
     let workingBuffers = buffers;
     let combinedActions: AgentAction[] = [];

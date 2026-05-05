@@ -2,7 +2,7 @@ import React from "react";
 import Draggable from "react-draggable";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, Paperclip, SendHorizontal, Play, Sparkles, MessageSquarePlus } from "lucide-react";
-import { getBuildModeProfile, getModeQuickPrompts } from "../../agent/modeProfiles";
+import { getBuildModeProfile, getModeQuickPrompts } from "../../agent/runtime";
 import { AgentLiveStage } from "./AgentLiveStage";
 import { type AgentAction, type AgentLiveItem, type BuildMode, type UploadedImageAsset } from "../../types";
 

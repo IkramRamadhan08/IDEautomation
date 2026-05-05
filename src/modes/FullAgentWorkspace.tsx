@@ -2,7 +2,7 @@ import React from "react";
 import { Bot, Image as ImageIcon, Play, Sparkles, Wand2 } from "lucide-react";
 import { PreviewPane } from "../components/preview/PreviewPane";
 import { AgentLiveStage } from "../components/agent/AgentLiveStage";
-import { getBuildModeProfile } from "../agent/modeProfiles";
+import { getBuildModeProfile } from "../agent/runtime";
 import { type AgentAction, type AgentLiveItem } from "../types";
 
 interface FullAgentWorkspaceProps {

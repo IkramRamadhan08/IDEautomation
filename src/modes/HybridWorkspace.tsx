@@ -3,7 +3,7 @@ import { FileExplorer } from "../components/explorer/FileExplorer";
 import { MonacoEditor } from "../components/editor/MonacoEditor";
 import { PreviewPane } from "../components/preview/PreviewPane";
 import { AgentLiveStage } from "../components/agent/AgentLiveStage";
-import { getBuildModeProfile } from "../agent/modeProfiles";
+import { getBuildModeProfile } from "../agent/runtime";
 import { type AgentAction, type AgentLiveItem, type ExplorerItem, type FileBuffer } from "../types";
 
 interface HybridWorkspaceProps {
