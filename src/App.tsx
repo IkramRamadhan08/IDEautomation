@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { Toaster, toast } from "sonner";
 import { supabase } from "./lib/supabase";
@@ -50,6 +50,7 @@ import {
   type HostedProject as HostedProjectType,
   type AgentAction,
   type AgentChange,
+  type AgentLiveItem,
   type UploadedImageAsset,
 } from "./types";
 
@@ -153,6 +154,8 @@ export default function App() {
 
   const [agentOrbPosition, setAgentOrbPosition] = useState<{ x: number; y: number } | null>(null);
   const [workingMsg, setWorkingMsg] = useState<string>("");
+  const [agentLiveItems, setAgentLiveItems] = useState<AgentLiveItem[]>([]);
+  const [agentRunViewPinned, setAgentRunViewPinned] = useState(false);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<SettingsInfo | null>(null);
@@ -183,7 +186,35 @@ export default function App() {
 
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const agentLiveIdRef = useRef(0);
   const hasVerifiedHostedAuth = Boolean(settings?.supabase_enabled && googleAuth?.authenticated);
+
+  const makeAgentLiveId = useCallback(() => `agent-live-${Date.now()}-${agentLiveIdRef.current++}`,
+    []);
+
+  const pushAgentLiveItem = useCallback((item: Omit<AgentLiveItem, "id">) => {
+    setAgentLiveItems((prev) => [...prev, { ...item, id: makeAgentLiveId() }]);
+  }, [makeAgentLiveId]);
+
+  const appendAssistantLiveText = useCallback((chunk: string, tone: AgentLiveItem["tone"] = "default") => {
+    const clean = chunk.trim();
+    if (!clean) return;
+    setAgentLiveItems((prev) => {
+      const next = [...prev];
+      const last = next[next.length - 1];
+      if (last && last.role === "assistant" && last.tone === tone) {
+        last.text = `${last.text}${last.text ? " " : ""}${clean}`;
+        return next;
+      }
+      next.push({ id: makeAgentLiveId(), role: "assistant", tone, text: clean });
+      return next;
+    });
+  }, [makeAgentLiveId]);
+
+  const resetAgentRunView = useCallback(() => {
+    setAgentRunViewPinned(false);
+    setAgentLiveItems([]);
+  }, []);
 
   const bindFolderInputRef = (node: HTMLInputElement | null) => {
     folderInputRef.current = node;
@@ -696,6 +727,12 @@ export default function App() {
       if (changes.length === 0) return;
       setWorkingMsg(`Menerapkan ${changes.length} perubahan…`);
       setEditorStatus(`${statusLabel} ${changes.length} file changes...`);
+      pushAgentLiveItem({
+        role: "tool",
+        tone: "success",
+        text: `Aku terapin ${changes.length} file ke project dulu.`,
+        meta: changes.slice(0, 3).map((change) => change.path).join(" • ") || null,
+      });
       await applyMany(changes.map((c) => ({ path: c.path, content: c.new_content })), true);
       syncBuffers(changes);
       await refreshExplorer();
@@ -705,11 +742,19 @@ export default function App() {
       for (const action of actions) {
         if (action.type !== "shell" || typeof action.command !== "string") continue;
         setWorkingMsg(`Menjalankan: ${action.command}`);
+        pushAgentLiveItem({ role: "tool", tone: "working", text: "Aku jalanin command tambahan buat ngeberesin flow.", meta: action.command });
         try {
           const runRes = await terminalRun(action.command, selectedProject !== "." ? selectedProject : undefined);
           appendLogSection(runRes.ok ? "TERMINAL STDOUT" : "TERMINAL STDERR", runRes.ok ? runRes.stdout : runRes.stderr);
+          pushAgentLiveItem({
+            role: "tool",
+            tone: runRes.ok ? "success" : "error",
+            text: runRes.ok ? "Command-nya selesai tanpa masalah." : "Command-nya jalan, tapi keluar sinyal error yang perlu dicek.",
+            meta: action.command,
+          });
         } catch (e) {
           appendLogSection("TERMINAL ERROR", errorMessage(e));
+          pushAgentLiveItem({ role: "tool", tone: "error", text: "Ada command yang gagal dieksekusi.", meta: errorMessage(e) });
         }
       }
     };
@@ -717,6 +762,11 @@ export default function App() {
     const refreshPreviewSurface = async () => {
       if (!shouldDrivePreview) return previewUrl || "";
       setWorkingMsg(previewUrl ? "Menyegarkan preview…" : "Menyalakan preview…");
+      pushAgentLiveItem({
+        role: "tool",
+        tone: "working",
+        text: previewUrl ? "Aku refresh preview biar hasil terbaru langsung kelihatan." : "Aku nyalain preview dulu biar hasilnya bisa dilihat hidup.",
+      });
       if (previewUrl) {
         setPreviewFrameKey((v) => v + 1);
         setEditorStatus("Preview refreshed after agent changes");
@@ -727,16 +777,30 @@ export default function App() {
 
     const runValidationPass = async (label: string) => {
       setWorkingMsg("Menjalankan validasi proyek…");
+      pushAgentLiveItem({ role: "assistant", tone: "working", text: "Sekarang aku validasi dulu, biar nggak cuma kelihatan jadi tapi juga aman dijalanin." });
       const validation = await validateProject(selectedProject);
       appendLogSection(label, formatValidationReport(validation));
+      pushAgentLiveItem({
+        role: "tool",
+        tone: validation.ok ? "success" : "error",
+        text: validation.ok ? "Validasinya lolos." : "Validasinya nemu problem yang harus kubenerin lagi.",
+        meta: label,
+      });
       return validation;
     };
 
     const runPreviewAuditPass = async (url: string, label: string) => {
       if (!url) return null;
       setWorkingMsg("Mengaudit preview yang lagi live…");
+      pushAgentLiveItem({ role: "assistant", tone: "working", text: "Aku cek tampilan live-nya juga, bukan cuma source code-nya." });
       const audit = await auditPreview(url);
       appendLogSection(label, formatPreviewAuditReport(audit));
+      pushAgentLiveItem({
+        role: "tool",
+        tone: audit.issues.length === 0 ? "success" : "error",
+        text: audit.issues.length === 0 ? "Preview-nya aman, nggak ada temuan visual penting." : `Preview audit nemu ${audit.issues.length} hal yang masih perlu dirapihin.`,
+        meta: label,
+      });
       return audit;
     };
 
@@ -749,7 +813,17 @@ export default function App() {
       diffing: "Lagi nyusun patch yang rapi…",
     };
 
+    const phaseSpeech: Record<string, string> = {
+      queued: "Oke, gue terima task-nya dulu.",
+      starting: "Gue cek konteks project sama file yang lagi relevan.",
+      context_ready: "Konteksnya udah kebaca, sekarang gue cari jalur yang paling masuk akal.",
+      drafting: "Ketemu arah awalnya, gue mulai nulis perubahan.",
+      refining: "Gue rapihin dulu biar hasilnya nggak terasa asal jadi.",
+      diffing: "Terakhir, gue susun patch-nya biar rapi dipasang ke project.",
+    };
+
     const runAgentPass = async (prompt: string, passEditorStatus: string, resetReply = true) => {
+      const seenPhases = new Set<string>();
       if (resetReply) setAgentReply("");
       return streamAgent(
         prompt,
@@ -759,6 +833,10 @@ export default function App() {
             const message = typeof event.data.message === "string" ? event.data.message : "";
             setWorkingMsg(message || phaseLabels[phase] || "Agent lagi kerja…");
             if (phase) setEditorStatus(phaseLabels[phase] || passEditorStatus);
+            if (phase && !seenPhases.has(phase)) {
+              seenPhases.add(phase);
+              pushAgentLiveItem({ role: "assistant", tone: "working", text: phaseSpeech[phase] || message || "Gue lagi jalan." });
+            }
             return;
           }
           if (event.event === "delta") {
@@ -766,6 +844,7 @@ export default function App() {
             const message = typeof event.data.message === "string" ? event.data.message : "";
             if (spokenChunk) {
               setAgentReply((prev) => (prev ? `${prev} ${spokenChunk}` : spokenChunk));
+              appendAssistantLiveText(spokenChunk);
             }
             if (message) {
               setWorkingMsg(message);
@@ -785,6 +864,12 @@ export default function App() {
     };
 
     setAgentStatus("thinking");
+    setAgentWidgetOpen(true);
+    setAgentRunViewPinned(true);
+    setAgentReply("");
+    setAgentLog("");
+    setAgentActions([]);
+    setAgentLiveItems([{ id: makeAgentLiveId(), role: "user", tone: "default", text: agentInput.trim() }]);
     setEditorStatus(requestEditorStatus);
     setWorkingMsg("Agent sedang berpikir…");
     try {
@@ -823,10 +908,12 @@ export default function App() {
       if ((hasValidationIssues || hasPreviewIssues) && changes.length > 0) {
         setWorkingMsg("Memperbaiki hasil audit…");
         setEditorStatus("Fixing preview and validation issues...");
+        pushAgentLiveItem({ role: "assistant", tone: "working", text: "Aku nemu beberapa issue, jadi aku lanjut pass kedua buat beresin sisanya." });
 
         const validationReport = validation && !validation.ok ? formatValidationReport(validation, 6000) : null;
         const previewAuditReport = previewAudit && previewAudit.issues.length > 0 ? formatPreviewAuditReport(previewAudit, 3500) : null;
 
+        const repairSeenPhases = new Set<string>();
         const repairRes = await streamAgent(
           buildRepairPrompt(buildMode, agentInput, validationReport, previewAuditReport),
           (event) => {
@@ -835,6 +922,10 @@ export default function App() {
               const message = typeof event.data.message === "string" ? event.data.message : "";
               setWorkingMsg(message || phaseLabels[phase] || "Lagi memperbaiki hasil audit…");
               if (phase) setEditorStatus(phaseLabels[phase] || "Fixing preview and validation issues...");
+              if (phase && !repairSeenPhases.has(phase)) {
+                repairSeenPhases.add(phase);
+                pushAgentLiveItem({ role: "assistant", tone: "working", text: phaseSpeech[phase] || message || "Aku lanjut ngerjain pass perbaikan." });
+              }
               return;
             }
             if (event.event === "delta") {
@@ -842,6 +933,7 @@ export default function App() {
               const message = typeof event.data.message === "string" ? event.data.message : "";
               if (spokenChunk) {
                 setAgentReply((prev) => (prev ? `${prev} ${spokenChunk}` : spokenChunk));
+                appendAssistantLiveText(spokenChunk);
               }
               if (message) setWorkingMsg(message);
             }
@@ -897,13 +989,20 @@ export default function App() {
       }
 
       setEditorStatus(finalStatus);
-      if (finalToast.kind === "success") toast.success(finalToast.message);
-      else if (finalToast.kind === "warning") toast.warning(finalToast.message);
-      else toast.error(finalToast.message);
+      if (finalToast.kind === "success") {
+        pushAgentLiveItem({ role: "assistant", tone: "success", text: "Sip, jalur utamanya udah beres. Tinggal kamu review hasil akhirnya." });
+        toast.success(finalToast.message);
+      } else if (finalToast.kind === "warning") {
+        pushAgentLiveItem({ role: "assistant", tone: "error", text: "Perubahannya udah kepasang, tapi masih ada beberapa hal yang menurutku perlu review manual." });
+        toast.warning(finalToast.message);
+      } else {
+        toast.error(finalToast.message);
+      }
       setAgentStatus("idle");
     } catch (e) {
       setEditorStatus("Agent failed");
       setAgentStatus("error");
+      pushAgentLiveItem({ role: "assistant", tone: "error", text: "Aku mentok di tengah jalan. Coba cek error ini dulu ya.", meta: errorMessage(e) });
       toast.error("Agent error: " + errorMessage(e));
     } finally {
       setWorkingMsg("");
@@ -1040,6 +1139,7 @@ export default function App() {
       previewFrameKey={previewFrameKey}
       attachedAssetName={attachedImage?.name || null}
       recentActions={agentActions}
+      agentLiveItems={agentLiveItems}
       onRefreshExplorer={refreshExplorer}
       onToggleDir={toggleTreeDir}
       onOpenFile={openFile}
@@ -1066,6 +1166,7 @@ export default function App() {
       agentReply={agentReply}
       agentLog={agentLog}
       agentActions={agentActions}
+      agentLiveItems={agentLiveItems}
       attachedAssetName={attachedImage?.name || null}
       onEnsurePreviewRunning={ensurePreviewRunning}
     />
@@ -1155,6 +1256,8 @@ export default function App() {
         agentWidgetOpen={agentWidgetOpen}
         agentOrbPosition={agentOrbPosition}
         workingMsg={workingMsg}
+        agentLiveItems={agentLiveItems}
+        agentRunViewPinned={agentRunViewPinned}
         editorStatus={editorStatus}
         activeFile={activeFile}
         previewUrl={previewUrl}
@@ -1167,6 +1270,7 @@ export default function App() {
         onRunAgent={runAgentAndAutoApply}
         onEnsurePreviewRunning={ensurePreviewRunning}
         onToggleOpen={() => setAgentWidgetOpen(v => !v)}
+        onResetRunView={resetAgentRunView}
         onSetPosition={setAgentOrbPosition}
       />
     </div>

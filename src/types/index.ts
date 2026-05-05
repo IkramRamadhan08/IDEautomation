@@ -15,6 +15,13 @@ export type HostedProject = {
 };
 export type RunInfo = { id: string; project_root: string; url: string; running: boolean };
 export type AgentAction = { type: string; [key: string]: unknown };
+export type AgentLiveItem = {
+  id: string;
+  role: "user" | "assistant" | "tool";
+  text: string;
+  tone?: "default" | "working" | "success" | "error";
+  meta?: string | null;
+};
 export type WorkspaceInfo = { path: string | null; default: string | null };
 export type WorkspaceProvisionInfo = { ok: boolean; path: string; created: boolean; managed: boolean };
 export type IdentityInfo = {

@@ -1,9 +1,10 @@
 import React from "react";
 import Draggable from "react-draggable";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, Paperclip, SendHorizontal, Play, Sparkles } from "lucide-react";
+import { X, Paperclip, SendHorizontal, Play, Sparkles, MessageSquarePlus } from "lucide-react";
 import { getBuildModeProfile, getModeQuickPrompts } from "../../agent/modeProfiles";
-import { type AgentAction, type BuildMode, type UploadedImageAsset } from "../../types";
+import { AgentLiveStage } from "./AgentLiveStage";
+import { type AgentAction, type AgentLiveItem, type BuildMode, type UploadedImageAsset } from "../../types";
 
 type OrbMode = "idle" | "playful" | "curious" | "sleepy" | "sleeping" | "working" | "celebrate" | "surprised" | "error";
 
@@ -17,6 +18,8 @@ interface AgentOrbProps {
   agentWidgetOpen: boolean;
   agentOrbPosition: { x: number; y: number } | null;
   workingMsg: string;
+  agentLiveItems: AgentLiveItem[];
+  agentRunViewPinned: boolean;
   editorStatus: string;
   activeFile: string;
   previewUrl: string;
@@ -29,6 +32,7 @@ interface AgentOrbProps {
   onRunAgent: () => void;
   onEnsurePreviewRunning: () => void;
   onToggleOpen: () => void;
+  onResetRunView: () => void;
   onSetPosition: (pos: { x: number; y: number } | null) => void;
 }
 
@@ -46,6 +50,8 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
   agentWidgetOpen,
   agentOrbPosition,
   workingMsg,
+  agentLiveItems,
+  agentRunViewPinned,
   editorStatus,
   activeFile,
   previewUrl,
@@ -58,6 +64,7 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
   onRunAgent,
   onEnsurePreviewRunning,
   onToggleOpen,
+  onResetRunView,
   onSetPosition,
 }) => {
   const nodeRef = React.useRef(null);
@@ -81,6 +88,7 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
   const logLines = compactLogLines(agentLog);
   const activeFileName = activeFile.split("/").pop() || activeFile;
   const promptHasIntent = agentInput.trim().length > 8;
+  const showRunExperience = agentRunViewPinned || agentStatus === "thinking";
   const contextChips = [
     `${modeProfile.personaName} • ${modeProfile.personaRole}`,
     activeFileName ? `File: ${activeFileName}` : null,
@@ -332,73 +340,90 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
                   </div>
                 ) : null}
 
-                <textarea
-                  className="textarea promptBox agentOrbPrompt"
-                  placeholder={buildMode === "full-agent"
-                    ? "Kasih brief, target produk, atau suruh Clara ambil alih build-nya..."
-                    : "Ceritain blocker, file yang lagi susah, atau minta Raka bantu di titik ini..."}
-                  value={agentInput}
-                  onChange={(e) => onAgentInputChange(e.target.value)}
-                />
+                {showRunExperience ? (
+                  <>
+                    <div className="agentOrbRunHeader">
+                      <div>
+                        <div className="agentOrbSectionLabel">Live run</div>
+                        <div className="agentOrbRunTitle">{agentStatus === "thinking" ? "Clara lagi kerja sambil ngomong" : "Run terakhir Clara"}</div>
+                      </div>
+                      {agentStatus !== "thinking" ? (
+                        <button className="btn subtleBtn agentOrbNewTaskBtn" onClick={onResetRunView}>
+                          <MessageSquarePlus size={14} />
+                          <span>Brief baru</span>
+                        </button>
+                      ) : null}
+                    </div>
 
-                <div className="agentOrbQuickGrid">
-                  {quickPrompts.slice(0, 4).map((item) => (
-                    <button
-                      key={item.label}
-                      className="agentOrbQuickAction"
-                      onClick={() => item.prompt ? applyQuickPrompt(item.prompt) : item.action?.()}
-                    >
-                      {item.action ? <Play size={13} /> : <Sparkles size={13} />}
-                      <span>{item.label}</span>
-                    </button>
-                  ))}
-                </div>
+                    <AgentLiveStage
+                      items={agentLiveItems}
+                      agentStatus={agentStatus}
+                      workingMsg={workingMsg}
+                      emptyText={agentReply || "Begitu kamu run, progress Clara bakal muncul di sini."}
+                    />
 
-                <div className="agentOrbActions">
-                  <button className="btn subtleBtn" onClick={onPickAgentImage} disabled={imageUploading}>
-                    <Paperclip size={14} />
-                    <span>{imageUploading ? "Uploading..." : "Attach"}</span>
-                  </button>
-                  <button className="btn primary" onClick={onRunAgent} disabled={agentStatus === "thinking" || !agentInput.trim()}>
-                    <SendHorizontal size={14} />
-                    <span>{agentStatus === "thinking" ? "Running..." : "Run"}</span>
-                  </button>
-                </div>
-
-                {attachedImage ? (
-                  <div className="attachedImageChip">
-                    <span className="attachedImageName">{attachedImage.name}</span>
-                    <span className="attachedImagePath">{attachedImage.path}</span>
-                    <button className="attachedImageRemove" onClick={onClearAttachedImage} aria-label="Remove attached image">
-                      ×
-                    </button>
-                  </div>
-                ) : null}
-
-                {agentStatus === "thinking" ? (
-                  <div className="agentOrbThinking">
-                    <span className="spinner" />
-                    <span>{workingMsg || "Working…"}</span>
-                  </div>
-                ) : null}
-
-                {agentReply ? <div className="agentOrbReply">{agentReply}</div> : null}
-
-                {agentActions.length > 0 ? (
-                  <div className="agentOrbSection">
-                    <div className="agentOrbSectionLabel">Recent actions</div>
-                    <div className="agentOrbSteps">
-                      {agentActions.slice(-3).map((act, index) => (
-                        <div key={index} className="agentOrbStep">
-                          <span className="agentOrbStepIcon">⚡</span>
-                          <span>{String(act.type)}: {String(act.command || act.path || "")}</span>
+                    {agentActions.length > 0 ? (
+                      <div className="agentOrbSection">
+                        <div className="agentOrbSectionLabel">Aksi terbaru</div>
+                        <div className="agentOrbSteps">
+                          {agentActions.slice(-3).map((act, index) => (
+                            <div key={index} className="agentOrbStep">
+                              <span className="agentOrbStepIcon">⚡</span>
+                              <span>{String(act.type)}: {String(act.command || act.path || "")}</span>
+                            </div>
+                          ))}
                         </div>
+                      </div>
+                    ) : null}
+
+                    {logLines.length > 0 ? <pre className="agentOrbLog">{logLines.join("\n")}</pre> : null}
+                  </>
+                ) : (
+                  <>
+                    <textarea
+                      className="textarea promptBox agentOrbPrompt"
+                      placeholder={buildMode === "full-agent"
+                        ? "Kasih brief, target produk, atau suruh Clara ambil alih build-nya..."
+                        : "Ceritain blocker, file yang lagi susah, atau minta Raka bantu di titik ini..."}
+                      value={agentInput}
+                      onChange={(e) => onAgentInputChange(e.target.value)}
+                    />
+
+                    <div className="agentOrbQuickGrid">
+                      {quickPrompts.slice(0, 4).map((item) => (
+                        <button
+                          key={item.label}
+                          className="agentOrbQuickAction"
+                          onClick={() => item.prompt ? applyQuickPrompt(item.prompt) : item.action?.()}
+                        >
+                          {item.action ? <Play size={13} /> : <Sparkles size={13} />}
+                          <span>{item.label}</span>
+                        </button>
                       ))}
                     </div>
-                  </div>
-                ) : null}
 
-                {logLines.length > 0 ? <pre className="agentOrbLog">{logLines.join("\n")}</pre> : null}
+                    <div className="agentOrbActions">
+                      <button className="btn subtleBtn" onClick={onPickAgentImage} disabled={imageUploading}>
+                        <Paperclip size={14} />
+                        <span>{imageUploading ? "Uploading..." : "Attach"}</span>
+                      </button>
+                      <button className="btn primary" onClick={onRunAgent} disabled={!agentInput.trim()}>
+                        <SendHorizontal size={14} />
+                        <span>Run</span>
+                      </button>
+                    </div>
+
+                    {attachedImage ? (
+                      <div className="attachedImageChip">
+                        <span className="attachedImageName">{attachedImage.name}</span>
+                        <span className="attachedImagePath">{attachedImage.path}</span>
+                        <button className="attachedImageRemove" onClick={onClearAttachedImage} aria-label="Remove attached image">
+                          ×
+                        </button>
+                      </div>
+                    ) : null}
+                  </>
+                )}
               </div>
             </motion.div>
           )}

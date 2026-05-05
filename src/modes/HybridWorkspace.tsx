@@ -2,8 +2,9 @@ import React from "react";
 import { FileExplorer } from "../components/explorer/FileExplorer";
 import { MonacoEditor } from "../components/editor/MonacoEditor";
 import { PreviewPane } from "../components/preview/PreviewPane";
+import { AgentLiveStage } from "../components/agent/AgentLiveStage";
 import { getBuildModeProfile } from "../agent/modeProfiles";
-import { type AgentAction, type ExplorerItem, type FileBuffer } from "../types";
+import { type AgentAction, type AgentLiveItem, type ExplorerItem, type FileBuffer } from "../types";
 
 interface HybridWorkspaceProps {
   ws: string | null;
@@ -26,6 +27,7 @@ interface HybridWorkspaceProps {
   previewFrameKey: number;
   attachedAssetName?: string | null;
   recentActions: AgentAction[];
+  agentLiveItems: AgentLiveItem[];
   onRefreshExplorer: () => void | Promise<void>;
   onToggleDir: (path: string) => void | Promise<void>;
   onOpenFile: (path: string) => void | Promise<void>;
@@ -61,6 +63,7 @@ export const HybridWorkspace: React.FC<HybridWorkspaceProps> = ({
   previewFrameKey,
   attachedAssetName,
   recentActions,
+  agentLiveItems,
   onRefreshExplorer,
   onToggleDir,
   onOpenFile,
@@ -161,6 +164,22 @@ export const HybridWorkspace: React.FC<HybridWorkspaceProps> = ({
                 ) : null}
               </div>
             </div>
+            {agentLiveItems.length > 0 || agentStatus === "thinking" ? (
+              <div className="missionCard hybridLiveCard">
+                <div className="missionCardHeader">
+                  <div>
+                    <div className="missionCardEyebrow">Live interaction</div>
+                    <div className="missionCardTitle">Raka lagi jelasin langkahnya</div>
+                  </div>
+                </div>
+                <AgentLiveStage
+                  items={agentLiveItems.slice(-6)}
+                  agentStatus={agentStatus === "thinking" ? "thinking" : agentStatus === "error" ? "error" : "idle"}
+                  workingMsg={editorStatus}
+                  compact
+                />
+              </div>
+            ) : null}
             <PreviewPane ws={ws} previewUrl={previewUrl} previewFrameKey={previewFrameKey} onEnsurePreviewRunning={onEnsurePreviewRunning} isSmall />
           </aside>
         </>

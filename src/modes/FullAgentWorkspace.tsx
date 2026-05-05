@@ -1,8 +1,9 @@
 import React from "react";
 import { Bot, Image as ImageIcon, Play, Sparkles, Wand2 } from "lucide-react";
 import { PreviewPane } from "../components/preview/PreviewPane";
+import { AgentLiveStage } from "../components/agent/AgentLiveStage";
 import { getBuildModeProfile } from "../agent/modeProfiles";
-import { type AgentAction } from "../types";
+import { type AgentAction, type AgentLiveItem } from "../types";
 
 interface FullAgentWorkspaceProps {
   ws: string | null;
@@ -14,6 +15,7 @@ interface FullAgentWorkspaceProps {
   agentReply: string;
   agentLog: string;
   agentActions: AgentAction[];
+  agentLiveItems: AgentLiveItem[];
   attachedAssetName?: string | null;
   onEnsurePreviewRunning: () => void | Promise<string | void>;
 }
@@ -35,6 +37,7 @@ export const FullAgentWorkspace: React.FC<FullAgentWorkspaceProps> = ({
   agentReply,
   agentLog,
   agentActions,
+  agentLiveItems,
   attachedAssetName,
   onEnsurePreviewRunning,
 }) => {
@@ -170,12 +173,18 @@ export const FullAgentWorkspace: React.FC<FullAgentWorkspaceProps> = ({
           <div className="missionCard">
             <div className="missionCardHeader">
               <div>
-                <div className="missionCardEyebrow">Latest reply</div>
-                <div className="missionCardTitle">Working summary</div>
+                <div className="missionCardEyebrow">Live interaction</div>
+                <div className="missionCardTitle">Clara lagi ngomong sambil kerja</div>
               </div>
               <Sparkles size={16} />
             </div>
-            <div className="missionReply">{agentReply || "Clara will summarize the current build pass here after she moves."}</div>
+            <AgentLiveStage
+              items={agentLiveItems}
+              agentStatus={agentStatus}
+              workingMsg={workingMsg}
+              emptyText={agentReply || "Begitu Clara mulai jalan, brief, progress, dan aksinya bakal muncul di sini."}
+              compact
+            />
           </div>
 
           <div className="missionCard">
