@@ -56,6 +56,9 @@ export type SettingsInfo = {
   openai_model: string;
   anthropic_model: string;
   openrouter_model: string;
+  friendly_free_tier_mode: boolean;
+  agent_refinement_mode: "auto" | "off" | "always";
+  agent_min_gap_seconds: number;
   openai_api_key_set: boolean;
   anthropic_api_key_set: boolean;
   openrouter_api_key_set: boolean;
@@ -76,6 +79,9 @@ export type SettingsUpdate = Partial<{
   openai_model: string;
   anthropic_model: string;
   openrouter_model: string;
+  friendly_free_tier_mode: boolean;
+  agent_refinement_mode: "auto" | "off" | "always";
+  agent_min_gap_seconds: number;
   openai_api_key: string | null;
   anthropic_api_key: string | null;
   openrouter_api_key: string | null;
@@ -547,6 +553,108 @@ export async function uploadImageAsset(project_root: string, file: File): Promis
 }
 
 export type AgentChange = { path: string; new_content: string; diff: string };
+export type AgentResult = { spoken: string; log: string; changes: AgentChange[]; actions: Array<{ type: string; [key: string]: unknown }> };
+export type AgentStreamEvent = {
+  event: "status" | "delta" | "done" | "error";
+  data: Record<string, unknown>;
+};
+
+function parseSseChunk(chunk: string): AgentStreamEvent[] {
+  const out: AgentStreamEvent[] = [];
+  const messages = chunk.split("\n\n");
+  for (const rawMessage of messages) {
+    const message = rawMessage.trim();
+    if (!message) continue;
+    let eventName = "status";
+    const dataLines: string[] = [];
+    for (const line of message.split("\n")) {
+      if (line.startsWith("event:")) eventName = line.slice(6).trim();
+      else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+    }
+    if (!dataLines.length) continue;
+    try {
+      out.push({
+        event: eventName as AgentStreamEvent["event"],
+        data: JSON.parse(dataLines.join("\n")) as Record<string, unknown>,
+      });
+    } catch {
+      out.push({ event: "error", data: { message: "Invalid stream payload" } });
+    }
+  }
+  return out;
+}
+
+export async function streamAgent(
+  input: string,
+  onEvent: (event: AgentStreamEvent) => void,
+  active_file?: string | null,
+  selection?: string | null,
+  project_root?: string | null,
+  build_mode?: BuildMode,
+  asset_paths?: string[],
+  current_content?: string | null,
+  open_files?: string[],
+  preview_url?: string | null,
+  editor_status?: string | null,
+): Promise<AgentResult> {
+  const r = await apiFetch(`/api/agent`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Accept": "text/event-stream" },
+    body: JSON.stringify({
+      input,
+      mode: "type",
+      active_file,
+      selection,
+      current_content,
+      open_files,
+      project_root,
+      build_mode,
+      preview_url,
+      editor_status,
+      asset_paths,
+      stream: true,
+    }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  if (!r.body) throw new Error("Streaming response body is missing");
+
+  const reader = r.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalResult: AgentResult | null = null;
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
+    for (const part of parts) {
+      for (const event of parseSseChunk(part + "\n\n")) {
+        onEvent(event);
+        if (event.event === "done" && event.data.result) {
+          finalResult = event.data.result as AgentResult;
+        }
+        if (event.event === "error") {
+          const message = typeof event.data.message === "string" ? event.data.message : "Agent stream failed";
+          throw new Error(message);
+        }
+      }
+    }
+  }
+
+  if (buffer.trim()) {
+    for (const event of parseSseChunk(buffer)) {
+      onEvent(event);
+      if (event.event === "done" && event.data.result) {
+        finalResult = event.data.result as AgentResult;
+      }
+    }
+  }
+
+  if (!finalResult) throw new Error("Agent stream ended before delivering a final result");
+  return finalResult;
+}
 
 export async function agent(
   input: string,
@@ -559,7 +667,7 @@ export async function agent(
   open_files?: string[],
   preview_url?: string | null,
   editor_status?: string | null,
-): Promise<{ spoken: string; log: string; changes: AgentChange[]; actions: Array<{ type: string; [key: string]: unknown }> }> {
+): Promise<AgentResult> {
   const r = await apiFetch(`/api/agent`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

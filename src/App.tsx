@@ -5,7 +5,7 @@ import { supabase } from "./lib/supabase";
 
 import "./app.css";
 import {
-  agent,
+  streamAgent,
   applyMany,
   detectProjects,
   getIdentity,
@@ -722,12 +722,38 @@ export default function App() {
       return audit;
     };
 
-    setAgentStatus("thinking");
-    setEditorStatus(requestEditorStatus);
-    setWorkingMsg("Agent sedang berpikir…");
-    try {
-      const res = await agent(
-        agentInput,
+    const phaseLabels: Record<string, string> = {
+      queued: "Masuk antrean kerja…",
+      starting: "Nyusun konteks kerja…",
+      context_ready: "Konteks siap, mulai ngerjain…",
+      drafting: "Lagi nulis solusi pertamanya…",
+      refining: "Lagi merapikan hasil…",
+      diffing: "Lagi nyusun patch yang rapi…",
+    };
+
+    const runAgentPass = async (prompt: string, passEditorStatus: string, resetReply = true) => {
+      if (resetReply) setAgentReply("");
+      return streamAgent(
+        prompt,
+        (event) => {
+          if (event.event === "status") {
+            const phase = typeof event.data.phase === "string" ? event.data.phase : "";
+            const message = typeof event.data.message === "string" ? event.data.message : "";
+            setWorkingMsg(message || phaseLabels[phase] || "Agent lagi kerja…");
+            if (phase) setEditorStatus(phaseLabels[phase] || passEditorStatus);
+            return;
+          }
+          if (event.event === "delta") {
+            const spokenChunk = typeof event.data.spoken_chunk === "string" ? event.data.spoken_chunk : "";
+            const message = typeof event.data.message === "string" ? event.data.message : "";
+            if (spokenChunk) {
+              setAgentReply((prev) => (prev ? `${prev} ${spokenChunk}` : spokenChunk));
+            }
+            if (message) {
+              setWorkingMsg(message);
+            }
+          }
+        },
         activeFile || null,
         null,
         selectedProject,
@@ -736,8 +762,15 @@ export default function App() {
         activeFile ? (workingBuffers[activeFile]?.content ?? null) : null,
         openFiles,
         previewUrl || null,
-        requestEditorStatus,
+        passEditorStatus,
       );
+    };
+
+    setAgentStatus("thinking");
+    setEditorStatus(requestEditorStatus);
+    setWorkingMsg("Agent sedang berpikir…");
+    try {
+      const res = await runAgentPass(agentInput, requestEditorStatus);
       setAgentReply(res.spoken);
       setAgentLog(res.log);
 
@@ -776,8 +809,25 @@ export default function App() {
         const validationReport = validation && !validation.ok ? formatValidationReport(validation, 6000) : null;
         const previewAuditReport = previewAudit && previewAudit.issues.length > 0 ? formatPreviewAuditReport(previewAudit, 3500) : null;
 
-        const repairRes = await agent(
+        const repairRes = await streamAgent(
           buildRepairPrompt(buildMode, agentInput, validationReport, previewAuditReport),
+          (event) => {
+            if (event.event === "status") {
+              const phase = typeof event.data.phase === "string" ? event.data.phase : "";
+              const message = typeof event.data.message === "string" ? event.data.message : "";
+              setWorkingMsg(message || phaseLabels[phase] || "Lagi memperbaiki hasil audit…");
+              if (phase) setEditorStatus(phaseLabels[phase] || "Fixing preview and validation issues...");
+              return;
+            }
+            if (event.event === "delta") {
+              const spokenChunk = typeof event.data.spoken_chunk === "string" ? event.data.spoken_chunk : "";
+              const message = typeof event.data.message === "string" ? event.data.message : "";
+              if (spokenChunk) {
+                setAgentReply((prev) => (prev ? `${prev} ${spokenChunk}` : spokenChunk));
+              }
+              if (message) setWorkingMsg(message);
+            }
+          },
           activeFile || null,
           null,
           selectedProject,

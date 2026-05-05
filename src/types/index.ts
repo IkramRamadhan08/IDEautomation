@@ -57,6 +57,9 @@ export type SettingsInfo = {
   openai_model: string;
   anthropic_model: string;
   openrouter_model: string;
+  friendly_free_tier_mode: boolean;
+  agent_refinement_mode: "auto" | "off" | "always";
+  agent_min_gap_seconds: number;
   openai_api_key_set: boolean;
   anthropic_api_key_set: boolean;
   openrouter_api_key_set: boolean;
@@ -76,6 +79,9 @@ export type SettingsUpdate = Partial<{
   openai_model: string;
   anthropic_model: string;
   openrouter_model: string;
+  friendly_free_tier_mode: boolean;
+  agent_refinement_mode: "auto" | "off" | "always";
+  agent_min_gap_seconds: number;
   openai_api_key: string | null;
   anthropic_api_key: string | null;
   openrouter_api_key: string | null;

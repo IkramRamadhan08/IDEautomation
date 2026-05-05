@@ -160,6 +160,26 @@ def _merge_action_sets(*batches: list[dict]) -> list[dict]:
             out.append(item)
     return out
 
+
+def _spoken_stream_chunks(text: str, *, max_chars: int = 28) -> list[str]:
+    clean = " ".join(str(text or "").split())
+    if not clean:
+        return []
+
+    words = clean.split(" ")
+    chunks: list[str] = []
+    current = ""
+    for word in words:
+        candidate = word if not current else f"{current} {word}"
+        if current and len(candidate) > max_chars:
+            chunks.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
+
 # Local app: allow frontend dev server
 app.add_middleware(
     CORSMiddleware,
@@ -1649,6 +1669,8 @@ def _run_agent_impl(req: AgentReq, event_cb=None):
             "actions": normalized_actions,
             "no_changes": len(out_changes) == 0 and len(normalized_actions) == 0,
         }
+        for chunk in _spoken_stream_chunks(sug_spoken):
+            emit("delta", {"spoken_chunk": chunk})
         emit("done", {"message": "Beres, hasil agent siap dipakai.", "result": result})
         return result
     except RuntimeError as exc:
@@ -1664,21 +1686,40 @@ def agent(req: AgentReq):
     """Suggest a multi-file patch. Adds per-file unified diffs."""
     if req.stream:
         def event_stream():
-            queue: list[str] = []
+            import queue as queue_mod
+
+            stream_queue: queue_mod.Queue[str | None] = queue_mod.Queue()
 
             def push(event: str, data: dict):
-                queue.append(f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n")
+                stream_queue.put(f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n")
 
-            push("status", {"phase": "queued", "message": "Agent diterima, mulai jalan..."})
-            try:
-                _run_agent_impl(req, event_cb=push)
-            except HTTPException as exc:
-                push("error", {"message": str(exc.detail)})
-            except Exception as exc:
-                push("error", {"message": str(exc)})
-            for item in queue:
+            def worker():
+                push("status", {"phase": "queued", "message": "Agent diterima, mulai jalan..."})
+                try:
+                    _run_agent_impl(req, event_cb=push)
+                except HTTPException as exc:
+                    push("error", {"message": str(exc.detail)})
+                except Exception as exc:
+                    push("error", {"message": str(exc)})
+                finally:
+                    stream_queue.put(None)
+
+            threading.Thread(target=worker, daemon=True).start()
+
+            while True:
+                item = stream_queue.get()
+                if item is None:
+                    break
                 yield item
 
-        return StreamingResponse(event_stream(), media_type="text/event-stream")
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     return _run_agent_impl(req)
