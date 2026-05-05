@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 import urllib.parse
 import urllib.request
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -19,22 +21,62 @@ from .oauth_runtime import (
     openai_generate_json,
     openrouter_generate_json,
     require_provider_connected,
+    get_provider_cooldown_remaining,
 )
 
 _REF_CACHE: dict[str, tuple[float, str]] = {}
 _SCAFFOLD_CACHE: dict[str, tuple[float, "ScaffoldResult"]] = {}
 _PRD_CACHE: dict[str, tuple[float, dict[str, str]]] = {}
 _LLM_LAST_CALL_TS: float = 0.0
+_LLM_RATE_LOCK = threading.Lock()
+_LLM_CALL_HISTORY: dict[str, deque[float]] = {}
 _DEFAULT_MIN_LLM_GAP_SECONDS: float = 4.0
+_DEFAULT_FRIENDLY_RPM: int = 8
+_DEFAULT_STANDARD_RPM: int = 15
 
 
-def _throttle_llm_calls(min_gap_seconds: float) -> None:
+def _effective_requests_per_minute(provider: str) -> int:
+    settings = settings_mod.settings
+    per_provider = {
+        OPENAI_PROVIDER: getattr(settings, "openai_requests_per_minute", None),
+        ANTHROPIC_PROVIDER: getattr(settings, "anthropic_requests_per_minute", None),
+        OPENROUTER_PROVIDER: getattr(settings, "openrouter_requests_per_minute", None),
+    }.get(provider)
+    default_rpm = _DEFAULT_FRIENDLY_RPM if bool(getattr(settings, "friendly_free_tier_mode", True)) else _DEFAULT_STANDARD_RPM
+    candidates = [per_provider, getattr(settings, "agent_requests_per_minute", default_rpm), default_rpm]
+    for value in candidates:
+        try:
+            rpm = int(value)
+        except Exception:
+            continue
+        return max(0, rpm)
+    return default_rpm
+
+
+def _throttle_llm_calls(provider: str, min_gap_seconds: float) -> None:
     global _LLM_LAST_CALL_TS
-    now = time.time()
-    gap = now - _LLM_LAST_CALL_TS
-    if gap < min_gap_seconds:
-        time.sleep(min_gap_seconds - gap)
-    _LLM_LAST_CALL_TS = time.time()
+    rpm = _effective_requests_per_minute(provider)
+    bucket = provider or "default"
+
+    while True:
+        with _LLM_RATE_LOCK:
+            now = time.time()
+            history = _LLM_CALL_HISTORY.setdefault(bucket, deque())
+            while history and now - history[0] >= 60.0:
+                history.popleft()
+
+            wait_for_gap = max(0.0, min_gap_seconds - (now - _LLM_LAST_CALL_TS))
+            wait_for_rpm = 0.0
+            if rpm > 0 and len(history) >= rpm:
+                wait_for_rpm = max(0.0, 60.0 - (now - history[0]))
+            wait_for_provider_cooldown = get_provider_cooldown_remaining(provider)
+            wait_seconds = max(wait_for_gap, wait_for_rpm, wait_for_provider_cooldown)
+            if wait_seconds <= 0:
+                reserve_ts = time.time()
+                history.append(reserve_ts)
+                _LLM_LAST_CALL_TS = reserve_ts
+                return
+        time.sleep(wait_seconds)
 
 
 def _effective_min_gap_seconds() -> float:
@@ -222,7 +264,7 @@ def _provider_and_model() -> tuple[str, str]:
 
 def _generate_json(*, system: str, user: str) -> tuple[str, str, dict[str, Any]]:
     provider, model = _provider_and_model()
-    _throttle_llm_calls(_effective_min_gap_seconds())
+    _throttle_llm_calls(provider, _effective_min_gap_seconds())
 
     if provider == OPENAI_PROVIDER:
         raw = openai_generate_json(model=model, system=system, user=user)

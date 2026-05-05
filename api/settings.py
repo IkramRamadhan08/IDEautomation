@@ -29,6 +29,10 @@ class Settings(BaseModel):
     friendly_free_tier_mode: bool = True
     agent_refinement_mode: Literal["auto", "off", "always"] = "auto"
     agent_min_gap_seconds: float = 4.0
+    agent_requests_per_minute: int = 8
+    openai_requests_per_minute: int | None = None
+    anthropic_requests_per_minute: int | None = None
+    openrouter_requests_per_minute: int | None = None
     openai_api_key_set: bool = False
     anthropic_api_key_set: bool = False
     openrouter_api_key_set: bool = False
@@ -71,6 +75,18 @@ def load_settings() -> Settings:
     if agent_min_gap_seconds < 0.0:
         agent_min_gap_seconds = 0.0
 
+    default_agent_rpm = 8 if raw_friendly_mode not in {"0", "false", "no", "off"} else 15
+
+    def parse_optional_int(key: str, default: int | None = None) -> int | None:
+        raw = str(g(key, "") or "").strip()
+        if not raw:
+            return default
+        try:
+            value = int(raw)
+        except Exception:
+            return default
+        return max(0, value)
+
     return Settings(
         default_workspace=(g("DEFAULT_WORKSPACE", "") or "").strip() or None,
         llm_provider=llm_provider,  # type: ignore[arg-type]
@@ -81,6 +97,10 @@ def load_settings() -> Settings:
         friendly_free_tier_mode=raw_friendly_mode not in {"0", "false", "no", "off"},
         agent_refinement_mode=raw_refinement_mode,  # type: ignore[arg-type]
         agent_min_gap_seconds=agent_min_gap_seconds,
+        agent_requests_per_minute=parse_optional_int("AGENT_REQUESTS_PER_MINUTE", default_agent_rpm) or default_agent_rpm,
+        openai_requests_per_minute=parse_optional_int("OPENAI_REQUESTS_PER_MINUTE"),
+        anthropic_requests_per_minute=parse_optional_int("ANTHROPIC_REQUESTS_PER_MINUTE"),
+        openrouter_requests_per_minute=parse_optional_int("OPENROUTER_REQUESTS_PER_MINUTE"),
         openai_api_key_set=bool((g("OPENAI_API_KEY", "") or "").strip()),
         anthropic_api_key_set=bool((g("ANTHROPIC_API_KEY", "") or "").strip()),
         openrouter_api_key_set=bool((g("OPENROUTER_API_KEY", "") or "").strip()),

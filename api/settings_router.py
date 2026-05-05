@@ -32,6 +32,10 @@ class SettingsInfo(BaseModel):
     friendly_free_tier_mode: bool = True
     agent_refinement_mode: str = "auto"
     agent_min_gap_seconds: float = 4.0
+    agent_requests_per_minute: int = 8
+    openai_requests_per_minute: int | None = None
+    anthropic_requests_per_minute: int | None = None
+    openrouter_requests_per_minute: int | None = None
     openai_api_key_set: bool = False
     anthropic_api_key_set: bool = False
     openrouter_api_key_set: bool = False
@@ -51,6 +55,10 @@ class SettingsUpdateReq(BaseModel):
     friendly_free_tier_mode: bool | None = None
     agent_refinement_mode: str | None = None
     agent_min_gap_seconds: float | None = None
+    agent_requests_per_minute: int | None = None
+    openai_requests_per_minute: int | None = None
+    anthropic_requests_per_minute: int | None = None
+    openrouter_requests_per_minute: int | None = None
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None
     openrouter_api_key: str | None = None
@@ -75,6 +83,10 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
             friendly_free_tier_mode=bool(getattr(s, "friendly_free_tier_mode", True)),
             agent_refinement_mode=str(getattr(s, "agent_refinement_mode", "auto")),
             agent_min_gap_seconds=float(getattr(s, "agent_min_gap_seconds", 4.0) or 4.0),
+            agent_requests_per_minute=int(getattr(s, "agent_requests_per_minute", 8) or 8),
+            openai_requests_per_minute=getattr(s, "openai_requests_per_minute", None),
+            anthropic_requests_per_minute=getattr(s, "anthropic_requests_per_minute", None),
+            openrouter_requests_per_minute=getattr(s, "openrouter_requests_per_minute", None),
             openai_api_key_set=s.openai_api_key_set,
             anthropic_api_key_set=getattr(s, "anthropic_api_key_set", False),
             openrouter_api_key_set=getattr(s, "openrouter_api_key_set", False),
@@ -174,6 +186,10 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
             ("FRIENDLY_FREE_TIER_MODE", None if req.friendly_free_tier_mode is None else ("true" if req.friendly_free_tier_mode else "false")),
             ("AGENT_REFINEMENT_MODE", req.agent_refinement_mode),
             ("AGENT_MIN_GAP_SECONDS", None if req.agent_min_gap_seconds is None else str(req.agent_min_gap_seconds)),
+            ("AGENT_REQUESTS_PER_MINUTE", None if req.agent_requests_per_minute is None else str(req.agent_requests_per_minute)),
+            ("OPENAI_REQUESTS_PER_MINUTE", None if req.openai_requests_per_minute is None else str(req.openai_requests_per_minute)),
+            ("ANTHROPIC_REQUESTS_PER_MINUTE", None if req.anthropic_requests_per_minute is None else str(req.anthropic_requests_per_minute)),
+            ("OPENROUTER_REQUESTS_PER_MINUTE", None if req.openrouter_requests_per_minute is None else str(req.openrouter_requests_per_minute)),
             ("OPENAI_API_KEY", req.openai_api_key),
             ("ANTHROPIC_API_KEY", req.anthropic_api_key),
             ("OPENROUTER_API_KEY", req.openrouter_api_key),

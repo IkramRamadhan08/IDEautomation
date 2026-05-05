@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import os
+import threading
 import time
 from contextvars import ContextVar
 from pathlib import Path
@@ -28,6 +29,8 @@ ANTHROPIC_LOGIN_HINT = "Masukkan Anthropic API key di Settings."
 OPENROUTER_LOGIN_HINT = "Masukkan OpenRouter API key di Settings."
 
 CURRENT_PROFILE_ID: ContextVar[str | None] = ContextVar("voiceide_profile_id", default=None)
+_PROVIDER_COOLDOWN_LOCK = threading.Lock()
+_PROVIDER_COOLDOWN_UNTIL: dict[str, float] = {}
 
 def _google_oauth_client_id() -> str:
     return (os.getenv("GOOGLE_OAUTH_CLIENT_ID") or os.getenv("GEMINI_OAUTH_CLIENT_ID") or "").strip()
@@ -207,10 +210,29 @@ def _extract_retry_after_seconds(exc: HTTPError) -> float | None:
         return None
 
 
-def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str]) -> tuple[int, dict[str, Any] | None, str]:
+def _set_provider_cooldown(provider: str | None, wait_seconds: float) -> None:
+    if not provider or wait_seconds <= 0:
+        return
+    until = time.time() + max(0.0, wait_seconds)
+    with _PROVIDER_COOLDOWN_LOCK:
+        _PROVIDER_COOLDOWN_UNTIL[provider] = max(until, _PROVIDER_COOLDOWN_UNTIL.get(provider, 0.0))
+
+
+def get_provider_cooldown_remaining(provider: str | None) -> float:
+    if not provider:
+        return 0.0
+    with _PROVIDER_COOLDOWN_LOCK:
+        until = _PROVIDER_COOLDOWN_UNTIL.get(provider, 0.0)
+    return max(0.0, until - time.time())
+
+
+def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str], *, provider: str | None = None) -> tuple[int, dict[str, Any] | None, str]:
     body = json.dumps(payload).encode("utf-8")
     req = Request(url, data=body, method="POST", headers={"Content-Type": "application/json", **headers})
     max_attempts = 3 if _friendly_free_tier_mode() else 1
+    cooldown = get_provider_cooldown_remaining(provider)
+    if cooldown > 0:
+        time.sleep(cooldown)
     for attempt in range(1, max_attempts + 1):
         try:
             with urlopen(req, timeout=180) as resp:
@@ -222,12 +244,14 @@ def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str]) -> tu
                 data = json.loads(raw) if raw else None
             except Exception:
                 data = None
-            if exc.code == 429 and attempt < max_attempts:
+            if exc.code == 429:
                 wait_seconds = _extract_retry_after_seconds(exc)
                 if wait_seconds is None:
-                    wait_seconds = min(12.0, 2.0 * attempt)
-                time.sleep(wait_seconds)
-                continue
+                    wait_seconds = min(20.0, 4.0 * attempt)
+                _set_provider_cooldown(provider, wait_seconds)
+                if attempt < max_attempts:
+                    time.sleep(wait_seconds)
+                    continue
             return exc.code, data, raw
         except URLError as exc:
             if attempt < max_attempts:
@@ -295,6 +319,7 @@ def openai_generate_json(*, model: str, system: str, user: str) -> dict[str, Any
             "text": {"format": {"type": "text"}},
         },
         {"Authorization": f"Bearer {api_key}"},
+        provider=OPENAI_PROVIDER,
     )
     if status < 200 or status >= 300:
         error = ((data or {}).get("error") or {}).get("message") if isinstance(data, dict) else None
@@ -315,6 +340,7 @@ def anthropic_generate_json(*, model: str, system: str, user: str) -> dict[str, 
             "messages": [{"role": "user", "content": user}],
         },
         {"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+        provider=ANTHROPIC_PROVIDER,
     )
     if status < 200 or status >= 300:
         error = ((data or {}).get("error") or {}).get("message") if isinstance(data, dict) else None
@@ -340,6 +366,7 @@ def openrouter_generate_json(*, model: str, system: str, user: str) -> dict[str,
             ],
         },
         {"Authorization": f"Bearer {api_key}"},
+        provider=OPENROUTER_PROVIDER,
     )
     if status < 200 or status >= 300:
         error = ((data or {}).get("error") or {}).get("message") if isinstance(data, dict) else None
