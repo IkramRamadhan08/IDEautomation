@@ -297,7 +297,6 @@ export async function runAgentWorkflow({
           if (phase) setEditorStatus(PHASE_LABELS[phase] || passEditorStatus);
           if (phase && !seenPhases.has(phase)) {
             seenPhases.add(phase);
-            pushAgentLiveItem({ role: "assistant", tone: "working", text: PHASE_SPEECH[phase] || message || "Gue lagi jalan." });
           }
           return;
         }
