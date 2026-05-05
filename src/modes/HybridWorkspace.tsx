@@ -3,7 +3,6 @@ import { FileExplorer } from "../components/explorer/FileExplorer";
 import { MonacoEditor } from "../components/editor/MonacoEditor";
 import { PreviewPane } from "../components/preview/PreviewPane";
 import { AgentLiveStage } from "../components/agent/AgentLiveStage";
-import { AgentAuditTrail } from "../components/agent/AgentAuditTrail";
 import { getBuildModeProfile } from "../agent/runtime";
 import { type AgentAction, type AgentAuditSnapshot, type AgentLiveItem, type ExplorerItem, type FileBuffer } from "../types";
 
@@ -181,18 +180,8 @@ export const HybridWorkspace: React.FC<HybridWorkspaceProps> = ({
                   workingMsg={editorStatus}
                   compact
                   includeTools={false}
+                  conversationOnly
                 />
-              </div>
-            ) : null}
-            {agentAuditTrail.length > 0 ? (
-              <div className="missionCard hybridLiveCard">
-                <div className="missionCardHeader">
-                  <div>
-                    <div className="missionCardEyebrow">Audit trail</div>
-                    <div className="missionCardTitle">Jejak reasoning yang bisa diaudit</div>
-                  </div>
-                </div>
-                <AgentAuditTrail snapshots={agentAuditTrail} compact />
               </div>
             ) : null}
             <PreviewPane ws={ws} previewUrl={previewUrl} previewFrameKey={previewFrameKey} onEnsurePreviewRunning={onEnsurePreviewRunning} isSmall />

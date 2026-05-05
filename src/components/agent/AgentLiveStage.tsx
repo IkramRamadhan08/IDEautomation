@@ -9,6 +9,7 @@ interface AgentLiveStageProps {
   emptyText?: string;
   compact?: boolean;
   includeTools?: boolean;
+  conversationOnly?: boolean;
 }
 
 function roleLabel(item: AgentLiveItem) {
@@ -27,11 +28,17 @@ export const AgentLiveStage: React.FC<AgentLiveStageProps> = ({
   items,
   agentStatus,
   workingMsg,
-  emptyText = "Run agent untuk lihat percakapan kerja dan aksi yang lagi jalan.",
+  emptyText = "Run agent untuk lihat jawaban Clara muncul live di sini.",
   compact = false,
   includeTools = true,
+  conversationOnly = false,
 }) => {
-  const visibleItems = includeTools ? items : items.filter((item) => item.role !== "tool");
+  const visibleItems = items.filter((item) => {
+    if (!includeTools && item.role === "tool") return false;
+    if (!conversationOnly) return true;
+    if (item.role === "user") return true;
+    return item.role === "assistant" && (item.tone === "default" || item.tone === "error" || !item.tone);
+  });
 
   return (
     <div className={`agentLiveStage ${compact ? "compact" : ""}`}>
