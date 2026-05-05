@@ -24,6 +24,7 @@ playwright-report/
 
 # local runtime data
 .voiceide-users.json
+.voiceide-home/
 *.log
 
 # misc
@@ -31,6 +32,5 @@ playwright-report/
 
 # legacy local oauth state
 .voiceide-oauth-state/
-
 
 .vercel
