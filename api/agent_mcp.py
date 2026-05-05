@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 import json
+import os
+import time
 from typing import Any
+
+from mcp import ClientSession
+from mcp.client.stdio import StdioServerParameters, stdio_client
+from mcp.client.streamable_http import streamablehttp_client
 
 
 @dataclass(frozen=True)
@@ -14,6 +21,37 @@ class MCPServerInfo:
     tools: list[str]
     source: str
     enabled: bool = True
+    command: str | None = None
+    args: list[str] | None = None
+    cwd: str | None = None
+    env: dict[str, str] | None = None
+    headers: dict[str, str] | None = None
+    timeout_seconds: float = 30.0
+
+
+@dataclass(frozen=True)
+class MCPToolInfo:
+    server: str
+    name: str
+    description: str
+    input_schema: dict[str, Any]
+    source: str
+
+
+@dataclass(frozen=True)
+class MCPToolCallResult:
+    server: str
+    tool: str
+    arguments: dict[str, Any]
+    ok: bool
+    text: str
+    raw: dict[str, Any]
+    duration_ms: int
+    error: str | None = None
+
+
+_TOOL_CACHE_TTL_SECONDS = 45.0
+_LIVE_TOOL_CACHE: dict[str, tuple[float, list[MCPToolInfo]]] = {}
 
 
 def _candidate_configs(ws_root: Path, project_dir: Path) -> list[Path]:
@@ -28,23 +66,71 @@ def _candidate_configs(ws_root: Path, project_dir: Path) -> list[Path]:
     return out
 
 
-def _normalize_server(name: str, raw: dict[str, Any], source: str) -> MCPServerInfo | None:
+def _normalize_dict_of_str(raw: Any) -> dict[str, str] | None:
+    if not isinstance(raw, dict):
+        return None
+    out: dict[str, str] = {}
+    for key, value in raw.items():
+        key_str = str(key or "").strip()
+        if not key_str:
+            continue
+        out[key_str] = str(value or "")
+    return out or None
+
+
+def _resolve_cwd(raw_cwd: str | None, project_dir: Path, ws_root: Path) -> str | None:
+    cwd = str(raw_cwd or "").strip()
+    if not cwd:
+        return None
+    candidate = Path(cwd)
+    if not candidate.is_absolute():
+        candidate = (project_dir / candidate).resolve()
+    try:
+        candidate.relative_to(ws_root.resolve())
+    except Exception:
+        return str(project_dir)
+    return str(candidate)
+
+
+def _normalize_server(name: str, raw: dict[str, Any], source: str, *, project_dir: Path, ws_root: Path) -> MCPServerInfo | None:
     if not isinstance(raw, dict):
         return None
     enabled = bool(raw.get("enabled", True))
     command = str(raw.get("command") or "").strip()
     url = str(raw.get("url") or "").strip()
-    args = raw.get("args") if isinstance(raw.get("args"), list) else []
+    args = [str(arg) for arg in raw.get("args", [])] if isinstance(raw.get("args"), list) else []
     tools = [str(item).strip() for item in (raw.get("tools") or []) if str(item).strip()]
+    env = _normalize_dict_of_str(raw.get("env"))
+    headers = _normalize_dict_of_str(raw.get("headers"))
+    try:
+        timeout_seconds = float(raw.get("timeout_seconds") or 30.0)
+    except Exception:
+        timeout_seconds = 30.0
+    timeout_seconds = max(3.0, min(120.0, timeout_seconds))
+    cwd = _resolve_cwd(str(raw.get("cwd") or "").strip() or None, project_dir, ws_root)
+
     if command:
-        target = " ".join([command, *[str(arg) for arg in args[:6]]]).strip()
+        target = " ".join([command, *args[:6]]).strip()
         transport = "stdio"
     elif url:
         target = url
         transport = "http"
     else:
         return None
-    return MCPServerInfo(name=name, transport=transport, target=target, tools=tools[:12], source=source, enabled=enabled)
+    return MCPServerInfo(
+        name=name,
+        transport=transport,
+        target=target,
+        tools=tools[:24],
+        source=source,
+        enabled=enabled,
+        command=command or None,
+        args=args[:24] or None,
+        cwd=cwd,
+        env=env,
+        headers=headers,
+        timeout_seconds=timeout_seconds,
+    )
 
 
 def discover_mcp_servers(ws_root: Path, project_dir: Path) -> list[MCPServerInfo]:
@@ -59,7 +145,7 @@ def discover_mcp_servers(ws_root: Path, project_dir: Path) -> list[MCPServerInfo
         if not isinstance(raw_servers, dict):
             continue
         for name, raw in raw_servers.items():
-            server = _normalize_server(str(name), raw, str(config_path))
+            server = _normalize_server(str(name), raw, str(config_path), project_dir=project_dir, ws_root=ws_root)
             if not server or not server.enabled:
                 continue
             key = (server.name, server.target)
@@ -70,14 +156,221 @@ def discover_mcp_servers(ws_root: Path, project_dir: Path) -> list[MCPServerInfo
     return servers
 
 
-def format_mcp_prompt(servers: list[MCPServerInfo]) -> str:
+def _server_cache_key(server: MCPServerInfo) -> str:
+    return f"{server.name}|{server.transport}|{server.target}"
+
+
+def _resolve_server(ws_root: Path, project_dir: Path, server_name: str) -> MCPServerInfo:
+    wanted = str(server_name or "").strip().lower()
+    for server in discover_mcp_servers(ws_root, project_dir):
+        if server.name.strip().lower() == wanted:
+            return server
+    raise RuntimeError(f"MCP server '{server_name}' is not configured for this workspace")
+
+
+async def _list_tools_async(server: MCPServerInfo) -> list[MCPToolInfo]:
+    if server.transport == "stdio":
+        if not server.command:
+            raise RuntimeError(f"MCP stdio server '{server.name}' is missing a command")
+        params = StdioServerParameters(
+            command=server.command,
+            args=list(server.args or []),
+            env={**os.environ, **(server.env or {})},
+            cwd=server.cwd,
+        )
+        async with stdio_client(params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                result = await session.list_tools()
+    elif server.transport == "http":
+        async with streamablehttp_client(
+            server.target,
+            headers=server.headers or None,
+            timeout=server.timeout_seconds,
+            sse_read_timeout=max(server.timeout_seconds, 60.0),
+        ) as (read, write, _get_session_id):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                result = await session.list_tools()
+    else:
+        raise RuntimeError(f"Unsupported MCP transport: {server.transport}")
+
+    tools: list[MCPToolInfo] = []
+    for tool in result.tools:
+        schema = tool.inputSchema if isinstance(tool.inputSchema, dict) else {}
+        tools.append(
+            MCPToolInfo(
+                server=server.name,
+                name=str(tool.name),
+                description=str(tool.description or "").strip(),
+                input_schema=schema,
+                source=server.source,
+            )
+        )
+    return tools
+
+
+def list_mcp_tools(ws_root: Path, project_dir: Path, *, refresh: bool = False) -> dict[str, list[MCPToolInfo]]:
+    now = time.time()
+    out: dict[str, list[MCPToolInfo]] = {}
+    for server in discover_mcp_servers(ws_root, project_dir):
+        key = _server_cache_key(server)
+        cached = _LIVE_TOOL_CACHE.get(key)
+        if not refresh and cached and (now - cached[0]) < _TOOL_CACHE_TTL_SECONDS:
+            out[server.name] = cached[1]
+            continue
+        try:
+            tools = asyncio.run(_list_tools_async(server))
+        except Exception:
+            tools = []
+        _LIVE_TOOL_CACHE[key] = (now, tools)
+        out[server.name] = tools
+    return out
+
+
+def _stringify_tool_payload(payload: dict[str, Any]) -> str:
+    content = payload.get("content")
+    parts: list[str] = []
+    if isinstance(content, list):
+        for item in content[:8]:
+            if not isinstance(item, dict):
+                continue
+            item_type = str(item.get("type") or "").strip().lower()
+            if item_type == "text" and str(item.get("text") or "").strip():
+                parts.append(str(item.get("text") or "").strip())
+            elif item_type == "resource_link":
+                uri = str(item.get("uri") or "").strip()
+                name = str(item.get("name") or uri or "resource").strip()
+                if uri:
+                    parts.append(f"{name}: {uri}")
+            elif item_type == "image" and item.get("mimeType"):
+                parts.append(f"[image result: {item.get('mimeType')}]")
+
+    structured = payload.get("structuredContent")
+    if isinstance(structured, (dict, list)) and not parts:
+        try:
+            parts.append(json.dumps(structured, ensure_ascii=False))
+        except Exception:
+            parts.append(str(structured))
+
+    if not parts:
+        try:
+            parts.append(json.dumps(payload, ensure_ascii=False))
+        except Exception:
+            parts.append(str(payload))
+
+    text = "\n".join(part for part in parts if part).strip()
+    return text[:6000]
+
+
+async def _call_tool_async(server: MCPServerInfo, tool_name: str, arguments: dict[str, Any]) -> MCPToolCallResult:
+    started = time.perf_counter()
+
+    async def _invoke(session: ClientSession) -> MCPToolCallResult:
+        result = await session.call_tool(tool_name, arguments=arguments, read_timeout_seconds=server.timeout_seconds)
+        payload = result.model_dump(mode="json") if hasattr(result, "model_dump") else {}
+        duration_ms = int((time.perf_counter() - started) * 1000)
+        ok = not bool(payload.get("isError") or payload.get("is_error"))
+        text = _stringify_tool_payload(payload)
+        return MCPToolCallResult(
+            server=server.name,
+            tool=tool_name,
+            arguments=arguments,
+            ok=ok,
+            text=text,
+            raw=payload,
+            duration_ms=duration_ms,
+            error=None if ok else (text or "MCP tool returned an error result"),
+        )
+
+    try:
+        if server.transport == "stdio":
+            if not server.command:
+                raise RuntimeError(f"MCP stdio server '{server.name}' is missing a command")
+            params = StdioServerParameters(
+                command=server.command,
+                args=list(server.args or []),
+                env={**os.environ, **(server.env or {})},
+                cwd=server.cwd,
+            )
+            async with stdio_client(params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    return await _invoke(session)
+        if server.transport == "http":
+            async with streamablehttp_client(
+                server.target,
+                headers=server.headers or None,
+                timeout=server.timeout_seconds,
+                sse_read_timeout=max(server.timeout_seconds, 60.0),
+            ) as (read, write, _get_session_id):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    return await _invoke(session)
+        raise RuntimeError(f"Unsupported MCP transport: {server.transport}")
+    except Exception as exc:
+        duration_ms = int((time.perf_counter() - started) * 1000)
+        return MCPToolCallResult(
+            server=server.name,
+            tool=tool_name,
+            arguments=arguments,
+            ok=False,
+            text="",
+            raw={},
+            duration_ms=duration_ms,
+            error=str(exc),
+        )
+
+
+def execute_mcp_tool(
+    ws_root: Path,
+    project_dir: Path,
+    *,
+    server_name: str,
+    tool_name: str,
+    arguments: dict[str, Any] | None = None,
+) -> MCPToolCallResult:
+    server = _resolve_server(ws_root, project_dir, server_name)
+    args = arguments if isinstance(arguments, dict) else {}
+    return asyncio.run(_call_tool_async(server, tool_name, args))
+
+
+def format_mcp_prompt(servers: list[MCPServerInfo], tool_catalog: dict[str, list[MCPToolInfo]] | None = None) -> str:
     if not servers:
         return ""
     lines = [
         "REGISTERED MCP INTEGRATIONS:",
-        "These integrations exist for this workspace. Treat them as available capability boundaries and prefer matching your plan to them when relevant.",
+        "These integrations exist for this workspace. Use MCP only when external project context or tool-backed lookup would materially improve the answer.",
+        "If you need MCP before finalizing, return an action like {\"type\": \"mcp\", \"server\": \"name\", \"tool\": \"tool_name\", \"arguments\": {}} and leave changes empty until the tool result comes back.",
     ]
+    live_catalog = tool_catalog or {}
     for server in servers:
-        tools = ", ".join(server.tools) if server.tools else "(tool list not declared)"
-        lines.append(f"- {server.name} via {server.transport} [{server.source}] -> {server.target}\n  tools: {tools}")
+        declared = ", ".join(server.tools) if server.tools else "(tool list not declared)"
+        lines.append(f"- {server.name} via {server.transport} [{server.source}] -> {server.target}\n  declared tools: {declared}")
+        live_tools = live_catalog.get(server.name) or []
+        if live_tools:
+            preview = []
+            for tool in live_tools[:8]:
+                label = tool.name
+                if tool.description:
+                    label += f": {tool.description[:100]}"
+                preview.append(label)
+            lines.append("  live tools: " + " | ".join(preview))
+    return "\n".join(lines)
+
+
+def format_mcp_results_prompt(results: list[MCPToolCallResult]) -> str:
+    if not results:
+        return ""
+    lines = [
+        "MCP TOOL RESULTS:",
+        "These are real tool results retrieved during the agent loop. Use them directly in the next reasoning pass.",
+    ]
+    for result in results:
+        status = "ok" if result.ok else "error"
+        lines.append(
+            f"- {result.server}.{result.tool} ({status}, {result.duration_ms}ms)\n"
+            f"  arguments: {json.dumps(result.arguments, ensure_ascii=False)}\n"
+            f"  result: {(result.text or result.error or '').strip()[:4000]}"
+        )
     return "\n".join(lines)
