@@ -1,3 +1,5 @@
+import { supabase } from "./lib/supabase";
+
 export type WorkspaceInfo = { path: string | null; default: string | null };
 export type WorkspaceProvisionInfo = { ok: boolean; path: string; created: boolean; managed: boolean };
 export type HostedProject = {
@@ -179,7 +181,6 @@ async function apiFetch(path: string, init: RequestInit = {}): Promise<Response>
   headers.set("X-VoiceIDE-User", getUserId());
 
   try {
-    const { supabase } = await import("./lib/supabase");
     const { data } = await supabase.auth.getSession();
     const token = data.session?.access_token?.trim();
     if (token) headers.set("Authorization", `Bearer ${token}`);
