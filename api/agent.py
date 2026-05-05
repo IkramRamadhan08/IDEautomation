@@ -25,7 +25,7 @@ _REF_CACHE: dict[str, tuple[float, str]] = {}
 _SCAFFOLD_CACHE: dict[str, tuple[float, "ScaffoldResult"]] = {}
 _PRD_CACHE: dict[str, tuple[float, dict[str, str]]] = {}
 _LLM_LAST_CALL_TS: float = 0.0
-_MIN_LLM_GAP_SECONDS: float = 1.2
+_DEFAULT_MIN_LLM_GAP_SECONDS: float = 4.0
 
 
 def _throttle_llm_calls(min_gap_seconds: float) -> None:
@@ -35,6 +35,14 @@ def _throttle_llm_calls(min_gap_seconds: float) -> None:
     if gap < min_gap_seconds:
         time.sleep(min_gap_seconds - gap)
     _LLM_LAST_CALL_TS = time.time()
+
+
+def _effective_min_gap_seconds() -> float:
+    try:
+        value = float(getattr(settings_mod.settings, "agent_min_gap_seconds", _DEFAULT_MIN_LLM_GAP_SECONDS) or _DEFAULT_MIN_LLM_GAP_SECONDS)
+    except Exception:
+        value = _DEFAULT_MIN_LLM_GAP_SECONDS
+    return max(0.0, value)
 
 
 @dataclass
@@ -214,7 +222,7 @@ def _provider_and_model() -> tuple[str, str]:
 
 def _generate_json(*, system: str, user: str) -> tuple[str, str, dict[str, Any]]:
     provider, model = _provider_and_model()
-    _throttle_llm_calls(_MIN_LLM_GAP_SECONDS)
+    _throttle_llm_calls(_effective_min_gap_seconds())
 
     if provider == OPENAI_PROVIDER:
         raw = openai_generate_json(model=model, system=system, user=user)

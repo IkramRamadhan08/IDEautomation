@@ -14,6 +14,7 @@ from urllib.request import Request as URLRequest, urlopen
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from api.settings import ROOT, ENV_PATH, load_settings
@@ -99,23 +100,30 @@ def _resolve_related_files(active_rel: str, content: str, file_candidates: set[s
 
 
 def _should_run_refinement(*, build_mode: str, instruction: str, active_rel: str, preview_url: str | None, attached_assets: list[str]) -> bool:
+    refinement_mode = str(getattr(settings_mod.settings, "agent_refinement_mode", "auto") or "auto").strip().lower()
+    if refinement_mode == "off":
+        return False
+    if refinement_mode == "always":
+        return True
+
+    friendly_mode = bool(getattr(settings_mod.settings, "friendly_free_tier_mode", True))
     if build_mode == "full-agent":
-        return True
-    if preview_url:
-        return True
-    if attached_assets:
-        return True
+        return not friendly_mode
+    if preview_url or attached_assets:
+        return not friendly_mode
 
     hint = (instruction or "").lower()
-    refine_keywords = (
+    strong_refine_keywords = (
         "polish", "refine", "audit", "review", "production", "ux", "ui", "layout", "spacing",
-        "responsive", "design", "landing", "dashboard", "improve", "better", "fix", "bug",
-        "preview", "hero", "copy", "theme", "style", "visual", "state",
+        "responsive", "design", "landing", "dashboard", "improve", "better", "theme", "style", "visual", "state",
     )
-    if any(word in hint for word in refine_keywords):
-        return True
+    bugfix_keywords = ("fix", "bug", "error", "broken", "crash")
+    if any(word in hint for word in strong_refine_keywords):
+        return not friendly_mode
+    if any(word in hint for word in bugfix_keywords):
+        return False
 
-    return PurePosixPath(active_rel or "").suffix in _FRONTEND_EXTS
+    return PurePosixPath(active_rel or "").suffix in _FRONTEND_EXTS and not friendly_mode
 
 
 def _merge_change_sets(*batches: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -1223,6 +1231,7 @@ class AgentReq(BaseModel):
     preview_url: str | None = None
     editor_status: str | None = None
     asset_paths: list[str] | None = None
+    stream: bool = False
 
 
 class ImageAssetResp(BaseModel):
@@ -1340,9 +1349,15 @@ async def upload_image_asset(project_root: str = Form("."), file: UploadFile = F
     return ImageAssetResp(ok=True, path=rel, name=candidate.name, content_type=content_type or None, size=len(data))
 
 
-@app.post("/api/agent")
-def agent(req: AgentReq):
-    """Suggest a multi-file patch. Adds per-file unified diffs."""
+def _run_agent_impl(req: AgentReq, event_cb=None):
+    def emit(event: str, data: dict):
+        if event_cb:
+            try:
+                event_cb(event, data)
+            except Exception:
+                pass
+
+    emit("status", {"phase": "starting", "message": "Nyusun konteks kerja dulu..."})
     ws_root = _ws()
     project_root = (req.project_root or ".").strip() or "."
     project_dir = safe_join(ws_root, project_root)
@@ -1474,6 +1489,8 @@ def agent(req: AgentReq):
         from .agent import suggest
         from .hybrid import merge_hybrid_seed
 
+        emit("status", {"phase": "context_ready", "message": "Konteks siap, agent mulai mikir..."})
+
         context_parts: list[str] = [
             f"Build mode: {build_mode}",
             f"Agent persona: {mode_spec.persona_name} ({mode_spec.persona_label})",
@@ -1513,6 +1530,7 @@ def agent(req: AgentReq):
         base_instruction = mode_spec.instruction_prefix + asset_prompt + req.input
         extra_context = "\n\n".join(context_parts)
 
+        emit("status", {"phase": "drafting", "message": "Lagi nulis draft perubahan pertama..."})
         try:
             with AGENT_LOCK:
                 sug = suggest(
@@ -1537,6 +1555,8 @@ def agent(req: AgentReq):
             normalized_changes = []
             normalized_actions = []
 
+        emit("delta", {"message": "Draft pertama jadi, lagi rapihin hasilnya...", "changes_so_far": len(normalized_changes)})
+
         if normalized_changes and _should_run_refinement(
             build_mode=build_mode,
             instruction=req.input,
@@ -1552,6 +1572,7 @@ def agent(req: AgentReq):
                     draft_relevant[rel] = content[:30_000]
 
             refinement_instruction = mode_spec.instruction_prefix + asset_prompt + mode_spec.refinement_prefix + req.input
+            emit("status", {"phase": "refining", "message": "Lagi cek ulang biar hasilnya lebih rapi..."})
             try:
                 with AGENT_LOCK:
                     refined = suggest(
@@ -1570,6 +1591,8 @@ def agent(req: AgentReq):
                 sug_log = f"{sug_log} persona={mode_spec.persona_name.lower()} passes=2"
             except Exception:
                 sug_log = f"{sug_log} persona={mode_spec.persona_name.lower()} passes=1 refine=skipped"
+        else:
+            sug_log = f"{sug_log} persona={mode_spec.persona_name.lower()} passes=1"
 
         if f"persona={mode_spec.persona_name.lower()}" not in sug_log:
             sug_log = f"{sug_log} persona={mode_spec.persona_name.lower()}"
@@ -1598,6 +1621,7 @@ def agent(req: AgentReq):
             if hybrid_seed_needed and "full-agent-mode" not in sug_log:
                 sug_log = f"{sug_log} full-agent-mode=seeded"
 
+        emit("status", {"phase": "diffing", "message": "Lagi nyusun diff biar siap dipakai UI..."})
         out_changes: list[dict[str, str]] = []
         for ch in normalized_changes:
             if not isinstance(ch, dict):
@@ -1618,14 +1642,43 @@ def agent(req: AgentReq):
                 "diff": diff_text(old, nc, filename=p),
             })
 
-        return {
+        result = {
             "spoken": sug_spoken,
             "log": sug_log,
             "changes": out_changes,
             "actions": normalized_actions,
             "no_changes": len(out_changes) == 0 and len(normalized_actions) == 0,
         }
+        emit("done", {"message": "Beres, hasil agent siap dipakai.", "result": result})
+        return result
     except RuntimeError as exc:
+        emit("error", {"message": str(exc)})
         raise HTTPException(400, str(exc))
     except Exception as exc:
+        emit("error", {"message": str(exc)})
         raise HTTPException(500, str(exc))
+
+
+@app.post("/api/agent")
+def agent(req: AgentReq):
+    """Suggest a multi-file patch. Adds per-file unified diffs."""
+    if req.stream:
+        def event_stream():
+            queue: list[str] = []
+
+            def push(event: str, data: dict):
+                queue.append(f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n")
+
+            push("status", {"phase": "queued", "message": "Agent diterima, mulai jalan..."})
+            try:
+                _run_agent_impl(req, event_cb=push)
+            except HTTPException as exc:
+                push("error", {"message": str(exc.detail)})
+            except Exception as exc:
+                push("error", {"message": str(exc)})
+            for item in queue:
+                yield item
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+    return _run_agent_impl(req)

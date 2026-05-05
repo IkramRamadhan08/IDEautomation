@@ -29,6 +29,9 @@ class SettingsInfo(BaseModel):
     openai_model: str
     anthropic_model: str
     openrouter_model: str
+    friendly_free_tier_mode: bool = True
+    agent_refinement_mode: str = "auto"
+    agent_min_gap_seconds: float = 4.0
     openai_api_key_set: bool = False
     anthropic_api_key_set: bool = False
     openrouter_api_key_set: bool = False
@@ -45,6 +48,9 @@ class SettingsUpdateReq(BaseModel):
     openai_model: str | None = None
     anthropic_model: str | None = None
     openrouter_model: str | None = None
+    friendly_free_tier_mode: bool | None = None
+    agent_refinement_mode: str | None = None
+    agent_min_gap_seconds: float | None = None
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None
     openrouter_api_key: str | None = None
@@ -66,6 +72,9 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
             openai_model=s.openai_model,
             anthropic_model=getattr(s, "anthropic_model", "claude-sonnet-4-0"),
             openrouter_model=getattr(s, "openrouter_model", "openai/gpt-5.4"),
+            friendly_free_tier_mode=bool(getattr(s, "friendly_free_tier_mode", True)),
+            agent_refinement_mode=str(getattr(s, "agent_refinement_mode", "auto")),
+            agent_min_gap_seconds=float(getattr(s, "agent_min_gap_seconds", 4.0) or 4.0),
             openai_api_key_set=s.openai_api_key_set,
             anthropic_api_key_set=getattr(s, "anthropic_api_key_set", False),
             openrouter_api_key_set=getattr(s, "openrouter_api_key_set", False),
@@ -152,7 +161,7 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
                 changed.append("anthropic_model")
             if req.openrouter_model is not None:
                 changed.append("openrouter_model")
-            return {"ok": True, "changed": changed, "storage": "hosted_preferences"}
+            return {"ok": True, "changed": changed, "storage": "hosted_preferences", "note": "Advanced local runtime knobs stay env-backed for now."}
 
         mapping: list[tuple[str, str | None]] = [
             ("DEFAULT_WORKSPACE", req.default_workspace if req.default_workspace is not None else None),
@@ -162,6 +171,9 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
             ("OPENAI_CODEX_MODEL", req.openai_model),
             ("ANTHROPIC_MODEL", req.anthropic_model),
             ("OPENROUTER_MODEL", req.openrouter_model),
+            ("FRIENDLY_FREE_TIER_MODE", None if req.friendly_free_tier_mode is None else ("true" if req.friendly_free_tier_mode else "false")),
+            ("AGENT_REFINEMENT_MODE", req.agent_refinement_mode),
+            ("AGENT_MIN_GAP_SECONDS", None if req.agent_min_gap_seconds is None else str(req.agent_min_gap_seconds)),
             ("OPENAI_API_KEY", req.openai_api_key),
             ("ANTHROPIC_API_KEY", req.anthropic_api_key),
             ("OPENROUTER_API_KEY", req.openrouter_api_key),

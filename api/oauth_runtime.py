@@ -4,12 +4,13 @@ import base64
 import hashlib
 import json
 import os
+import time
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 from api.secrets_store import get_provider_secret, has_provider_secret
 
@@ -192,20 +193,47 @@ def exchange_google_identity_code(*, code: str, verifier: str, redirect_uri: str
     }
 
 
+def _friendly_free_tier_mode() -> bool:
+    return bool(getattr(__import__("api.settings", fromlist=["settings"]).settings, "friendly_free_tier_mode", True))
+
+
+def _extract_retry_after_seconds(exc: HTTPError) -> float | None:
+    header = (exc.headers.get("Retry-After") or "").strip()
+    if not header:
+        return None
+    try:
+        return max(0.0, float(header))
+    except Exception:
+        return None
+
+
 def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str]) -> tuple[int, dict[str, Any] | None, str]:
     body = json.dumps(payload).encode("utf-8")
     req = Request(url, data=body, method="POST", headers={"Content-Type": "application/json", **headers})
-    try:
-        with urlopen(req, timeout=180) as resp:
-            raw = resp.read().decode("utf-8", "replace")
-            return resp.status, json.loads(raw) if raw else {}, raw
-    except HTTPError as exc:
-        raw = exc.read().decode("utf-8", "replace")
+    max_attempts = 3 if _friendly_free_tier_mode() else 1
+    for attempt in range(1, max_attempts + 1):
         try:
-            data = json.loads(raw) if raw else None
-        except Exception:
-            data = None
-        return exc.code, data, raw
+            with urlopen(req, timeout=180) as resp:
+                raw = resp.read().decode("utf-8", "replace")
+                return resp.status, json.loads(raw) if raw else {}, raw
+        except HTTPError as exc:
+            raw = exc.read().decode("utf-8", "replace")
+            try:
+                data = json.loads(raw) if raw else None
+            except Exception:
+                data = None
+            if exc.code == 429 and attempt < max_attempts:
+                wait_seconds = _extract_retry_after_seconds(exc)
+                if wait_seconds is None:
+                    wait_seconds = min(12.0, 2.0 * attempt)
+                time.sleep(wait_seconds)
+                continue
+            return exc.code, data, raw
+        except URLError as exc:
+            if attempt < max_attempts:
+                time.sleep(min(8.0, 1.5 * attempt))
+                continue
+            return 599, None, str(exc)
 
 
 def list_models(provider: str) -> list[str]:
