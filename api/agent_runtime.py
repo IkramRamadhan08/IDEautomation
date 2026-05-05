@@ -9,6 +9,7 @@ from langgraph.graph import END, StateGraph
 
 from . import settings as settings_mod
 from .agent import suggest
+from .agent_intent import AgentIntent, classify_agent_intent
 from .agent_mcp import discover_mcp_servers, execute_mcp_tool, format_mcp_prompt, format_mcp_results_prompt, list_mcp_tools
 from .agent_memory import remember_agent_run, retrieve_agent_memory
 from .agent_skills import format_skill_prompt, resolve_agent_skills
@@ -31,6 +32,9 @@ _RESPONSE_CONTRACT = """Return ONLY valid JSON with this exact shape:
 }
 
 Shared rules:
+- This product is an agentic app builder. Treat implementation commands differently from normal conversation.
+- If the user is mainly chatting, asking for explanation, or checking status, keep `changes` and `actions` empty unless they explicitly ask to modify the project.
+- If the user mixed conversation with a concrete build request, put the conversation in `spoken` and keep edits scoped to the explicit implementation ask.
 - changes must contain FULL file contents, not patches or snippets.
 - Use actions only for steps that are truly needed, such as installs, generators, build/lint commands, or MCP-backed tool lookups.
 - Use `type: \"mcp\"` only when a registered MCP integration would materially improve the answer.
@@ -66,6 +70,7 @@ AGENT_MODE_PROFILES: dict[BuildMode, AgentModeProfile] = {
         system_prompt=(
             """You are Clara, a senior female product engineer working inside a local IDE.
 You are autonomous, opinionated, detail-oriented, and responsible for shipping a coherent result from rough brief to usable product.
+This workspace is an agentic app builder, so you must distinguish build commands from normal conversation instead of editing files for every message.
 
 Your job:
 - understand the user's actual goal,
@@ -116,6 +121,7 @@ IMPLEMENTATION QUALITY BAR:
         system_prompt=(
             """You are Raka, a senior male IDE copilot working inside a project workspace.
 You are observant, sharp, collaborative, and strongest when pairing with a user who is actively building.
+This workspace is an agentic app builder, so you must distinguish build commands from normal conversation instead of editing files for every message.
 
 Your job:
 - watch the user's current context,
@@ -182,6 +188,7 @@ class PreparedAgentContext:
     memory_prompt: str
     skill_prompt: str
     mcp_prompt: str
+    intent: AgentIntent
     resolved_skill_ids: list[str]
     mcp_servers: list[str]
 
@@ -202,6 +209,7 @@ class AgentRuntimeState(TypedDict, total=False):
     refine_skipped: bool
     tool_iterations: int
     mcp_call_count: int
+    intent: dict[str, Any]
     emit: EventEmitter | None
 
 
@@ -210,6 +218,7 @@ class AgentRuntimeResult(TypedDict):
     log: str
     changes: list[dict[str, str]]
     actions: list[dict[str, Any]]
+    intent: dict[str, Any]
 
 
 def get_agent_mode_profile(build_mode: str | None) -> AgentModeProfile:
@@ -418,6 +427,12 @@ def prepare_agent_context(req: Any, ws_root: Path) -> PreparedAgentContext:
     ]
     current_from_buffer = isinstance(getattr(req, "current_content", None), str) and bool(active_rel)
     project_name = project_dir.name if project_root != "." else ws_root.name
+    intent = classify_agent_intent(
+        getattr(req, "input", "") or "",
+        build_mode=mode_profile.build_mode,
+        active_file=active_rel,
+        open_files=open_files,
+    )
 
     try:
         current = req.current_content if current_from_buffer else (read_text(project_dir, active_rel) if active_rel else "")
@@ -541,14 +556,40 @@ def prepare_agent_context(req: Any, ws_root: Path) -> PreparedAgentContext:
         memory_prompt="",
         skill_prompt="",
         mcp_prompt="",
+        intent=intent,
         resolved_skill_ids=[],
         mcp_servers=[],
     )
-    extra_context = "\n\n".join(_build_context_parts(ctx_stub, req))
+    extra_context = "\n\n".join([*_build_context_parts(ctx_stub, req), intent.prompt_block])
     asset_prompt = _build_asset_prompt(ctx_stub)
     ctx_stub.extra_context = extra_context
     ctx_stub.asset_prompt = asset_prompt
     return ctx_stub
+
+
+def _classify_intent_node(state: AgentRuntimeState) -> AgentRuntimeState:
+    ctx = state["context"]
+    _emit(
+        state,
+        "status",
+        {
+            "phase": "intent",
+            "message": (
+                "Aku bedain dulu ini perintah build, percakapan biasa, atau campuran dua-duanya..."
+            ),
+        },
+    )
+    return {
+        "context": ctx,
+        "intent": {
+            "kind": ctx.intent.kind,
+            "confidence": ctx.intent.confidence,
+            "rationale": ctx.intent.rationale,
+            "should_write_files": ctx.intent.should_write_files,
+            "should_run_tools": ctx.intent.should_run_tools,
+            "wants_app_builder": ctx.intent.wants_app_builder,
+        },
+    }
 
 
 def _hydrate_memory_node(state: AgentRuntimeState) -> AgentRuntimeState:
@@ -558,6 +599,7 @@ def _hydrate_memory_node(state: AgentRuntimeState) -> AgentRuntimeState:
         ctx.ws_root,
         project_dir=ctx.project_dir,
         project_root=ctx.project_root,
+        interaction_kind=ctx.intent.kind,
         query=state["input"],
         active_rel=ctx.active_rel,
         open_files=ctx.open_files,
@@ -620,7 +662,8 @@ def _draft_node(state: AgentRuntimeState) -> AgentRuntimeState:
             "- Ask for another MCP tool only if the current tool result is still insufficient.\n\n"
         )
 
-    base_instruction = ctx.mode_profile.instruction_prefix + ctx.asset_prompt + follow_up_prefix + state["input"]
+    intent_prefix = ctx.intent.prompt_block + "\n"
+    base_instruction = ctx.mode_profile.instruction_prefix + intent_prefix + ctx.asset_prompt + follow_up_prefix + state["input"]
     try:
         sug = suggest(
             instruction=base_instruction,
@@ -656,11 +699,14 @@ def _draft_node(state: AgentRuntimeState) -> AgentRuntimeState:
 
 
 def _route_after_draft(state: AgentRuntimeState) -> str:
+    ctx = state["context"]
+    if not ctx.intent.should_write_files:
+        return "finalize"
+
     mcp_actions, _other_actions = _split_runtime_actions(list(state.get("actions") or []))
-    if mcp_actions and int(state.get("tool_iterations") or 0) < _MAX_MCP_TOOL_LOOPS:
+    if ctx.intent.should_run_tools and mcp_actions and int(state.get("tool_iterations") or 0) < _MAX_MCP_TOOL_LOOPS:
         return "tooling"
 
-    ctx = state["context"]
     changes = state.get("changes") or []
     if not changes:
         return "finalize"
@@ -731,7 +777,14 @@ def _refine_node(state: AgentRuntimeState) -> AgentRuntimeState:
         if rel and isinstance(content, str):
             draft_relevant[rel] = content[:30_000]
 
-    refinement_instruction = ctx.mode_profile.instruction_prefix + ctx.asset_prompt + ctx.mode_profile.refinement_prefix + state["input"]
+    refinement_instruction = (
+        ctx.mode_profile.instruction_prefix
+        + ctx.intent.prompt_block
+        + "\n"
+        + ctx.asset_prompt
+        + ctx.mode_profile.refinement_prefix
+        + state["input"]
+    )
     _emit(state, "status", {"phase": "refining", "message": "Lagi cek ulang biar hasilnya lebih rapi..."})
     try:
         refined = suggest(
@@ -760,9 +813,21 @@ def _finalize_node(state: AgentRuntimeState) -> AgentRuntimeState:
     normalized_actions = list(state.get("actions") or [])
     spoken = str(state.get("spoken") or "")
     log = str(state.get("log") or "")
+    intent_payload = dict(state.get("intent") or {
+        "kind": ctx.intent.kind,
+        "confidence": ctx.intent.confidence,
+        "rationale": ctx.intent.rationale,
+        "should_write_files": ctx.intent.should_write_files,
+        "should_run_tools": ctx.intent.should_run_tools,
+        "wants_app_builder": ctx.intent.wants_app_builder,
+    })
+    if not ctx.intent.should_write_files:
+        normalized_changes = []
+        normalized_actions = []
     persona_tag = f"persona={ctx.mode_profile.persona_name.lower()}"
     if persona_tag not in log:
         log = f"{log} {persona_tag}".strip()
+    log = f"{log} intent={ctx.intent.kind}".strip()
     if ctx.resolved_skill_ids:
         log = f"{log} skills={','.join(ctx.resolved_skill_ids)}".strip()
     if ctx.mcp_servers:
@@ -794,7 +859,7 @@ def _finalize_node(state: AgentRuntimeState) -> AgentRuntimeState:
             scoped_changes.append({"path": f"{ctx.project_root}/{rel}", "new_content": content})
         normalized_changes = scoped_changes
 
-    if ctx.is_full_agent:
+    if ctx.is_full_agent and ctx.intent.should_write_files:
         normalized_changes = merge_hybrid_seed(
             project_root=ctx.project_root,
             project_name=ctx.project_name,
@@ -810,10 +875,12 @@ def _finalize_node(state: AgentRuntimeState) -> AgentRuntimeState:
         "log": log,
         "changes": normalized_changes,
         "actions": normalized_actions,
+        "intent": intent_payload,
     }
 
 
 _AGENT_GRAPH_BUILDER = StateGraph(AgentRuntimeState)
+_AGENT_GRAPH_BUILDER.add_node("intent", _classify_intent_node)
 _AGENT_GRAPH_BUILDER.add_node("memory", _hydrate_memory_node)
 _AGENT_GRAPH_BUILDER.add_node("skills", _resolve_skills_node)
 _AGENT_GRAPH_BUILDER.add_node("mcp", _inspect_mcp_node)
@@ -821,7 +888,8 @@ _AGENT_GRAPH_BUILDER.add_node("draft", _draft_node)
 _AGENT_GRAPH_BUILDER.add_node("tooling", _execute_mcp_node)
 _AGENT_GRAPH_BUILDER.add_node("refine", _refine_node)
 _AGENT_GRAPH_BUILDER.add_node("finalize", _finalize_node)
-_AGENT_GRAPH_BUILDER.set_entry_point("memory")
+_AGENT_GRAPH_BUILDER.set_entry_point("intent")
+_AGENT_GRAPH_BUILDER.add_edge("intent", "memory")
 _AGENT_GRAPH_BUILDER.add_edge("memory", "skills")
 _AGENT_GRAPH_BUILDER.add_edge("skills", "mcp")
 _AGENT_GRAPH_BUILDER.add_edge("mcp", "draft")
@@ -849,12 +917,21 @@ def run_agent_pipeline(req: Any, *, ws_root: Path, emit: EventEmitter | None = N
         "log": str(result.get("log") or ""),
         "changes": list(result.get("changes") or []),
         "actions": list(result.get("actions") or []),
+        "intent": dict(result.get("intent") or {
+            "kind": ctx.intent.kind,
+            "confidence": ctx.intent.confidence,
+            "rationale": ctx.intent.rationale,
+            "should_write_files": ctx.intent.should_write_files,
+            "should_run_tools": ctx.intent.should_run_tools,
+            "wants_app_builder": ctx.intent.wants_app_builder,
+        }),
     }
     try:
         remember_agent_run(
             ws_root,
             project_root=ctx.project_root,
             build_mode=ctx.mode_profile.build_mode,
+            interaction_kind=ctx.intent.kind,
             user_input=str(getattr(req, "input", "") or ""),
             spoken=final_result["spoken"],
             changes=final_result["changes"],

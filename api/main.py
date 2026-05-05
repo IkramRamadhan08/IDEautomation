@@ -1391,6 +1391,8 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "mcp_registry": True,
             "mcp_tool_execution": True,
             "autonomous_mcp_loop": True,
+            "interaction_intent_detection": True,
+            "command_conversation_boundary": True,
             "tool_actions": ["shell", "mcp"],
             "streaming_transport": True,
             "native_provider_token_streaming": False,
@@ -1582,6 +1584,7 @@ def _run_agent_impl(req: AgentReq, event_cb=None):
             "log": sug_log,
             "changes": out_changes,
             "actions": normalized_actions,
+            "intent": dict(pipeline.get("intent") or {}),
             "no_changes": len(out_changes) == 0 and len(normalized_actions) == 0,
         }
         for chunk in _spoken_stream_chunks(sug_spoken):

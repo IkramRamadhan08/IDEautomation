@@ -612,7 +612,21 @@ export async function uploadImageAsset(project_root: string, file: File): Promis
 }
 
 export type AgentChange = { path: string; new_content: string; diff: string };
-export type AgentResult = { spoken: string; log: string; changes: AgentChange[]; actions: Array<{ type: string; [key: string]: unknown }> };
+export type AgentIntent = {
+  kind: "command" | "conversation" | "mixed";
+  confidence: number;
+  rationale: string;
+  should_write_files: boolean;
+  should_run_tools: boolean;
+  wants_app_builder: boolean;
+};
+export type AgentResult = {
+  spoken: string;
+  log: string;
+  changes: AgentChange[];
+  actions: Array<{ type: string; [key: string]: unknown }>;
+  intent?: AgentIntent;
+};
 export type AgentCapabilities = {
   ok: boolean;
   runtime: string;
@@ -625,6 +639,8 @@ export type AgentCapabilities = {
     mcp_registry: boolean;
     mcp_tool_execution: boolean;
     autonomous_mcp_loop?: boolean;
+    interaction_intent_detection?: boolean;
+    command_conversation_boundary?: boolean;
     tool_actions: string[];
     streaming_transport: boolean;
     native_provider_token_streaming: boolean;

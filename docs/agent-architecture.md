@@ -9,17 +9,23 @@ Voice IDE agent is being reset around explicit boundaries instead of procedural 
    - decides which phase runs next
    - keeps refinement optional and explicit
 
-2. **Memory / RAG**
+2. **Intent boundary**
+   - classifies whether the user is giving a build command, having a conversation, or mixing both
+   - prevents the app-builder agent from editing files during normal chat/status checks
+   - keeps spoken explanation separate from explicit implementation work
+
+3. **Memory / RAG**
    - **short-term memory**: recent agent runs per session/user plus project-scoped short memory for the same user
+   - retrieval is biased toward the same interaction kind so build memories do not swamp conversational context and vice versa
    - **long-term memory**: durable project docs like README, PRD, docs, project memory notes
    - retrieval is injected into agent context, not hidden in random helper code
 
-3. **Skill registry**
+4. **Skill registry**
    - built-in delivery skills
    - optional custom project skills from `.voiceide/skills/*.md`
    - matched by request/context before drafting
 
-4. **MCP registry + execution loop**
+5. **MCP registry + execution loop**
    - discovers declared MCP servers from workspace or project config
    - surfaces capability boundaries to the agent runtime
    - can execute MCP tool calls during the graph loop, then feed real tool results back into the next draft pass
@@ -27,6 +33,7 @@ Voice IDE agent is being reset around explicit boundaries instead of procedural 
 ## Current goal
 
 Make the agent more reliable by separating:
+- intent classification
 - context building
 - memory retrieval
 - skill resolution

@@ -6,6 +6,7 @@ import {
   streamAgent,
   terminalRun,
   validateProject,
+  type AgentIntent,
   type PreviewAuditResult,
   type ProjectValidationRun,
 } from "../api";
@@ -56,6 +57,7 @@ type WorkflowArgs = {
 const PHASE_LABELS: Record<string, string> = {
   queued: "Masuk antrean kerja…",
   starting: "Nyusun konteks kerja…",
+  intent: "Ngebedain intent dulu…",
   memory: "Ngambil memory yang relevan…",
   skills: "Milih skill yang paling kepake…",
   mcp: "Ngecek integrasi MCP yang tersedia…",
@@ -69,6 +71,7 @@ const PHASE_LABELS: Record<string, string> = {
 const PHASE_SPEECH: Record<string, string> = {
   queued: "Oke, gue terima task-nya dulu.",
   starting: "Gue cek konteks project sama file yang lagi relevan.",
+  intent: "Gue bedain dulu ini kamu lagi nyuruh ngebuild, lagi ngobrol, atau dua-duanya sekaligus.",
   memory: "Gue tarik dulu memori session sama memori project yang masih nyambung sama task ini.",
   skills: "Sekarang gue pilih skill kerja yang paling cocok buat ngerjain ini.",
   mcp: "Gue cek juga ada integrasi MCP apa aja yang bisa dipakai kalau butuh context tambahan.",
@@ -165,7 +168,7 @@ export async function runAgentWorkflow({
   if (!agentInput.trim() || agentStatus === "thinking") return;
 
   const runPlan = getAgentRunPlan(buildMode, agentInput, previewUrl);
-  const { requestEditorStatus, shouldDrivePreview, shouldRunValidation, shouldAuditPreview } = runPlan;
+  const { requestEditorStatus, shouldDrivePreview, shouldRunValidation, shouldAuditPreview, intent: inputIntent } = runPlan;
 
   let workingBuffers = buffers;
   let currentPreviewUrl = previewUrl || "";
@@ -174,6 +177,15 @@ export async function runAgentWorkflow({
   let finalToast: WorkflowToast = {
     kind: "success",
     message: "Tugas selesai",
+  };
+
+  const intentSummary = (intent: Pick<AgentIntent, "kind" | "confidence" | "rationale"> | { kind: string; confidence: number; rationale: string }) => {
+    const label = intent.kind === "conversation"
+      ? "percakapan"
+      : intent.kind === "mixed"
+        ? "campuran"
+        : "perintah build";
+    return `${label} (${Math.round(intent.confidence * 100)}%)`;
   };
 
   const syncBuffers = (changes: AgentChange[]) => {
@@ -329,6 +341,12 @@ export async function runAgentWorkflow({
   setAgentLiveItems([{ id: makeAgentLiveId(), role: "user", tone: "default", text: agentInput.trim() }]);
   setEditorStatus(requestEditorStatus);
   setWorkingMsg("Agent sedang berpikir…");
+  pushAgentLiveItem({
+    role: "tool",
+    tone: inputIntent.kind === "conversation" ? "default" : "working",
+    text: `Intent kebaca sebagai ${intentSummary(inputIntent)}.`,
+    meta: inputIntent.rationale,
+  });
 
   void fetchAgentCapabilities(selectedProject, false)
     .then((caps) => {
@@ -344,7 +362,13 @@ export async function runAgentWorkflow({
         role: "tool",
         tone: "default",
         text: `Capability check: ${memoryLabel}, ${mcpLabel}.`,
-        meta: caps.supports.autonomous_mcp_loop ? "autonomous tool loop aktif" : null,
+        meta: caps.supports.autonomous_mcp_loop
+          ? caps.supports.command_conversation_boundary
+            ? "autonomous tool loop aktif • command/conversation boundary aktif"
+            : "autonomous tool loop aktif"
+          : caps.supports.command_conversation_boundary
+            ? "command/conversation boundary aktif"
+            : null,
       });
     })
     .catch(() => {
@@ -358,6 +382,15 @@ export async function runAgentWorkflow({
 
     const changes: AgentChange[] = res.changes || [];
     const actions: AgentAction[] = res.actions || [];
+    const resolvedIntent = res.intent || inputIntent;
+
+    pushAgentLiveItem({
+      role: "tool",
+      tone: resolvedIntent.kind === "conversation" ? "default" : "success",
+      text: `Backend intent final: ${intentSummary(resolvedIntent)}.`,
+      meta: resolvedIntent.rationale,
+    });
+
     combinedActions = [...actions];
     setAgentActions(combinedActions);
 
@@ -374,6 +407,11 @@ export async function runAgentWorkflow({
     let validation: ProjectValidationRun | null = null;
     let previewAudit: PreviewAuditResult | null = null;
 
+    if (resolvedIntent.kind === "conversation" && changes.length === 0 && actions.length === 0) {
+      finalStatus = "Conversation answered without file changes";
+      finalToast = { kind: "success", message: "Jawaban siap, tidak ada perubahan file" };
+    }
+
     if ((changes.length > 0 || actions.length > 0) && shouldRunValidation) {
       validation = await runValidationPass("VALIDATION PASS 1");
     }
@@ -384,7 +422,9 @@ export async function runAgentWorkflow({
     const hasValidationIssues = Boolean(validation && !validation.ok);
     const hasPreviewIssues = Boolean(previewAudit && previewAudit.issues.length > 0);
 
-    if ((hasValidationIssues || hasPreviewIssues) && changes.length > 0) {
+    if (resolvedIntent.kind === "conversation" && changes.length === 0 && actions.length === 0) {
+      // pure conversation, nothing else to do
+    } else if ((hasValidationIssues || hasPreviewIssues) && changes.length > 0) {
       setWorkingMsg("Memperbaiki hasil audit…");
       setEditorStatus("Fixing preview and validation issues...");
       pushAgentLiveItem({ role: "assistant", tone: "working", text: "Aku nemu beberapa issue, jadi aku lanjut pass kedua buat beresin sisanya." });
@@ -438,7 +478,13 @@ export async function runAgentWorkflow({
 
     setEditorStatus(finalStatus);
     if (finalToast.kind === "success") {
-      pushAgentLiveItem({ role: "assistant", tone: "success", text: "Sip, jalur utamanya udah beres. Tinggal kamu review hasil akhirnya." });
+      pushAgentLiveItem({
+        role: "assistant",
+        tone: "success",
+        text: resolvedIntent.kind === "conversation"
+          ? "Sip, gue jawab dulu tanpa ngacak project. Kalau mau, tinggal ubah ini jadi task build yang konkret."
+          : "Sip, jalur utamanya udah beres. Tinggal kamu review hasil akhirnya.",
+      });
       notify(finalToast);
     } else if (finalToast.kind === "warning") {
       pushAgentLiveItem({ role: "assistant", tone: "error", text: "Perubahannya udah kepasang, tapi masih ada beberapa hal yang menurutku perlu review manual." });

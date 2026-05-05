@@ -6,11 +6,20 @@ export type AgentQuickPrompt = {
   action?: "start-preview";
 };
 
+export type AgentInputIntent = {
+  kind: "command" | "conversation" | "mixed";
+  confidence: number;
+  rationale: string;
+  shouldWriteFiles: boolean;
+  shouldRunTools: boolean;
+};
+
 export type AgentRunPlan = {
   requestEditorStatus: string;
   shouldDrivePreview: boolean;
   shouldRunValidation: boolean;
   shouldAuditPreview: boolean;
+  intent: AgentInputIntent;
 };
 
 export type BuildModeProfile = {
@@ -35,6 +44,9 @@ export type BuildModeProfile = {
 const PREVIEW_INTENT_RE = /\b(preview|run|launch|start|ship|deploy)\b/i;
 const VALIDATION_INTENT_RE = /\b(fix|bug|audit|review|polish|refine|build|production|preview|ship|launch|repair)\b/i;
 const AUDIT_INTENT_RE = /\b(audit|ux|ui|design|landing|hero|preview|polish|refine)\b/i;
+const COMMAND_RE = /\b(fix|build|ship|implement|create|add|remove|update|change|edit|refactor|debug|audit|repair|polish|review|wire|connect|integrate|generate|scaffold|run|start|launch|deploy|bikin|buat|tambahin|tambah|hapus|ubah|rapihin|benahin|perbaiki|jalanin|gas|lanjut|lanjutin|pastiin)\b/i;
+const BUILDER_RE = /\b(app|builder|feature|ui|ux|preview|project|repo|component|state|style|css|tsx|react|vite|file|folder|mcp|memory|agentic|agent)\b/i;
+const CONVERSATION_RE = /\b(hi|hello|hey|thanks|thank you|status|update|udah|sudah|gimana|bro|bang|sip|mantap|jelasin|jelaskan|kenapa|why|brainstorm|ngobrol|chat)\b/i;
 
 const PROFILES: Record<BuildMode, BuildModeProfile> = {
   "full-agent": {
@@ -165,23 +177,78 @@ export function getModeQuickPrompts(
   ];
 }
 
+export function classifyAgentInputIntent(input: string, buildMode: BuildMode): AgentInputIntent {
+  const normalizedInput = input.trim();
+  const lowered = normalizedInput.toLowerCase();
+  let commandScore = 0;
+  let conversationScore = 0;
+  const signals: string[] = [];
+
+  if (COMMAND_RE.test(normalizedInput)) {
+    commandScore += 1.4;
+    signals.push("explicit build language");
+  }
+  if (BUILDER_RE.test(normalizedInput)) {
+    commandScore += 0.7;
+    signals.push("app-builder context");
+  }
+  if (CONVERSATION_RE.test(normalizedInput)) {
+    conversationScore += 0.9;
+    signals.push("chat language");
+  }
+  if (normalizedInput.includes("?")) conversationScore += 0.2;
+  if (/\n/.test(normalizedInput)) commandScore += 0.15;
+  if (normalizedInput.split(/\s+/).length <= 4 && conversationScore > 0 && commandScore < 1.5) conversationScore += 0.45;
+  if (/\b(agentic app builder|app builder)\b/i.test(lowered)) {
+    commandScore += 0.4;
+    signals.push("agentic builder framing");
+  }
+
+  let kind: AgentInputIntent["kind"] = "conversation";
+  if (commandScore >= 1.65 && conversationScore >= 0.95) kind = "mixed";
+  else if (commandScore >= 1.65) kind = "command";
+  else if (buildMode === "full-agent" && commandScore >= 1.1) kind = "command";
+
+  const shouldWriteFiles = kind !== "conversation" && commandScore >= 1.4;
+  const shouldRunTools = shouldWriteFiles && commandScore >= 1.8;
+  const total = Math.max(commandScore + conversationScore, 0.001);
+  const confidence = Math.max(commandScore, conversationScore) / total;
+
+  return {
+    kind,
+    confidence: Math.max(0.51, Math.min(0.99, Number(confidence.toFixed(2)))),
+    rationale: signals[0] || "fallback heuristic",
+    shouldWriteFiles,
+    shouldRunTools,
+  };
+}
+
 export function getAgentRunPlan(buildMode: BuildMode, input: string, previewUrl: string): AgentRunPlan {
   const normalizedInput = input.trim();
+  const intent = classifyAgentInputIntent(normalizedInput, buildMode);
+  const wantsPreview = Boolean(previewUrl) || PREVIEW_INTENT_RE.test(normalizedInput);
+  const wantsValidation = Boolean(previewUrl) || PREVIEW_INTENT_RE.test(normalizedInput) || VALIDATION_INTENT_RE.test(normalizedInput);
+  const wantsAudit = Boolean(previewUrl) && AUDIT_INTENT_RE.test(normalizedInput);
+  const requestEditorStatus = intent.kind === "conversation"
+    ? "Agent lagi nangkep maksudmu dulu, belum masuk mode ubah file…"
+    : PROFILES[buildMode].requestEditorStatus;
+
   if (buildMode === "full-agent") {
     return {
-      requestEditorStatus: PROFILES["full-agent"].requestEditorStatus,
-      shouldDrivePreview: true,
-      shouldRunValidation: true,
-      shouldAuditPreview: true,
+      requestEditorStatus,
+      shouldDrivePreview: intent.shouldWriteFiles,
+      shouldRunValidation: intent.shouldWriteFiles && wantsValidation,
+      shouldAuditPreview: intent.shouldWriteFiles && wantsAudit,
+      intent,
     };
   }
 
   return {
-    requestEditorStatus: PROFILES.hybrid.requestEditorStatus,
-    shouldDrivePreview: Boolean(previewUrl) || PREVIEW_INTENT_RE.test(normalizedInput),
-    shouldRunValidation:
-      Boolean(previewUrl) || PREVIEW_INTENT_RE.test(normalizedInput) || VALIDATION_INTENT_RE.test(normalizedInput),
-    shouldAuditPreview: Boolean(previewUrl) && AUDIT_INTENT_RE.test(normalizedInput),
+    requestEditorStatus,
+    shouldDrivePreview: intent.shouldWriteFiles && wantsPreview,
+    shouldRunValidation: intent.shouldWriteFiles && wantsValidation,
+    shouldAuditPreview: intent.shouldWriteFiles && wantsAudit,
+    intent,
   };
 }
 

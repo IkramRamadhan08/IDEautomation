@@ -137,6 +137,7 @@ def remember_agent_run(
     *,
     project_root: str,
     build_mode: str,
+    interaction_kind: str,
     user_input: str,
     spoken: str,
     changes: list[dict[str, Any]],
@@ -161,6 +162,7 @@ def remember_agent_run(
         "ts": int(time.time()),
         "project_root": project_root,
         "build_mode": build_mode,
+        "interaction_kind": str(interaction_kind or "command"),
         "input": user_input.strip()[:2500],
         "spoken": spoken.strip()[:2500],
         "change_paths": change_paths[:12],
@@ -171,7 +173,14 @@ def remember_agent_run(
     _append_memory_entry(project_path, entry)
 
 
-def _build_short_hits(query_tokens: set[str], rows: list[dict[str, Any]], *, source: str, title_prefix: str) -> list[MemoryHit]:
+def _build_short_hits(
+    query_tokens: set[str],
+    rows: list[dict[str, Any]],
+    *,
+    source: str,
+    title_prefix: str,
+    interaction_kind: str,
+) -> list[MemoryHit]:
     hits: list[MemoryHit] = []
     now = time.time()
     for row in rows[-40:]:
@@ -180,10 +189,12 @@ def _build_short_hits(query_tokens: set[str], rows: list[dict[str, Any]], *, sou
             continue
         age_seconds = max(0.0, now - float(row.get("ts") or now))
         freshness = max(0.0, 1.5 - min(1.5, age_seconds / 7200.0))
-        score = _score(query_tokens, text, freshness=freshness)
+        row_kind = str(row.get("interaction_kind") or "command").strip() or "command"
+        kind_bias = 0.75 if row_kind == interaction_kind else (-0.15 if interaction_kind == "conversation" else 0.0)
+        score = _score(query_tokens, text, freshness=freshness) + kind_bias
         if score <= 0:
             continue
-        title = f"{title_prefix} {row.get('build_mode') or 'agent'} run"
+        title = f"{title_prefix} {row.get('build_mode') or 'agent'} {row_kind} run"
         hits.append(MemoryHit(kind="short", source=source, title=title, text=text[:500], score=score))
     return hits
 
@@ -193,6 +204,7 @@ def retrieve_agent_memory(
     *,
     project_dir: Path,
     project_root: str,
+    interaction_kind: str,
     query: str,
     active_rel: str,
     open_files: list[str],
@@ -207,8 +219,22 @@ def retrieve_agent_memory(
     session_rows = _read_memory_rows(_session_memory_path(ws_root, user_id=user_id, session_id=session_id))
     project_rows = _read_memory_rows(_project_memory_path(ws_root, user_id=user_id, project_root=project_root))
 
-    short_hits = _build_short_hits(query_tokens, session_rows, source="session-memory", title_prefix="Recent session")
-    short_hits.extend(_build_short_hits(query_tokens, project_rows, source="project-memory", title_prefix="Recent same-project"))
+    short_hits = _build_short_hits(
+        query_tokens,
+        session_rows,
+        source="session-memory",
+        title_prefix="Recent session",
+        interaction_kind=interaction_kind,
+    )
+    short_hits.extend(
+        _build_short_hits(
+            query_tokens,
+            project_rows,
+            source="project-memory",
+            title_prefix="Recent same-project",
+            interaction_kind=interaction_kind,
+        )
+    )
 
     deduped_short: list[MemoryHit] = []
     seen_short: set[tuple[str, str]] = set()
