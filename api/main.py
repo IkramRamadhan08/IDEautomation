@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path, PurePosixPath
 from typing import Literal
 import os
+import shutil
 import threading
 import time
 import json
@@ -51,6 +52,7 @@ def _read_json(path: Path) -> dict | None:
 
 _RELATIVE_IMPORT_RE = re.compile(r'(?:import\s+(?:[^\"\']+?\s+from\s+)?|export\s+[^\"\']*?\s+from\s+|import\()\s*["\']([^"\']+)["\']')
 _FRONTEND_EXTS = {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".css", ".scss", ".sass", ".less", ".html"}
+_KNOWN_PACKAGE_MANAGERS = ("npm", "pnpm", "yarn", "bun")
 
 
 def _localize_project_rel(rel_path: str | None, project_root: str) -> str:
@@ -58,6 +60,84 @@ def _localize_project_rel(rel_path: str | None, project_root: str) -> str:
     if rel and project_root != "." and rel.startswith(project_root + "/"):
         rel = rel[len(project_root) + 1 :]
     return rel
+
+
+def _package_manager_preference_order(project_dir: Path) -> list[str]:
+    preferred: list[str] = []
+    package_json = _read_json(project_dir / "package.json") or {}
+    package_manager = str(package_json.get("packageManager") or "").strip().lower()
+    if package_manager:
+        name = package_manager.split("@", 1)[0].strip()
+        if name in _KNOWN_PACKAGE_MANAGERS:
+            preferred.append(name)
+
+    if (project_dir / "pnpm-lock.yaml").exists():
+        preferred.append("pnpm")
+    if (project_dir / "yarn.lock").exists():
+        preferred.append("yarn")
+    if (project_dir / "bun.lockb").exists() or (project_dir / "bun.lock").exists():
+        preferred.append("bun")
+    if (project_dir / "package-lock.json").exists():
+        preferred.append("npm")
+
+    preferred.extend(_KNOWN_PACKAGE_MANAGERS)
+
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for name in preferred:
+        if name in seen:
+            continue
+        seen.add(name)
+        ordered.append(name)
+    return ordered
+
+
+def _resolve_package_manager(project_dir: Path) -> tuple[str, list[str]] | None:
+    corepack = shutil.which("corepack")
+    for name in _package_manager_preference_order(project_dir):
+        if shutil.which(name):
+            return name, [name]
+        if name in {"pnpm", "yarn"} and corepack:
+            return name, ["corepack", name]
+    return None
+
+
+def _shell_join(parts: list[str]) -> str:
+    return " ".join(shlex.quote(part) for part in parts)
+
+
+def _translate_package_manager_command(command: str, project_dir: Path) -> tuple[str | None, str | None]:
+    stripped = (command or "").strip()
+    if not stripped.startswith("npm "):
+        return command, None
+
+    resolved = _resolve_package_manager(project_dir)
+    if not resolved:
+        return None, (
+            "JavaScript tooling is not available in this runtime. npm/pnpm/yarn/bun were not found. "
+            "Install Node.js on the API host, or run this project from a local/desktop deployment."
+        )
+
+    manager_name, manager_cmd = resolved
+    note = None if manager_name == "npm" else f"Using {manager_name} for this project because npm is not available."
+
+    install_match = re.match(r"^\s*npm\s+install(?P<rest>.*)$", stripped)
+    if install_match:
+        return f"{_shell_join([*manager_cmd, 'install'])}{install_match.group('rest') or ''}", note
+
+    run_match = re.match(r"^\s*npm\s+run\s+(?P<script>[^\s]+)(?P<rest>.*)$", stripped)
+    if run_match:
+        script = run_match.group("script")
+        rest = run_match.group("rest") or ""
+        return f"{_shell_join([*manager_cmd, 'run', script])}{rest}", note
+
+    if manager_name == "npm":
+        return command, None
+
+    return None, (
+        f"This runtime only knows how to translate basic npm install/run commands automatically. "
+        f"Unsupported command: {command}"
+    )
 
 
 def _resolve_related_files(active_rel: str, content: str, file_candidates: set[str]) -> list[str]:
@@ -445,25 +525,40 @@ def _run_shell_command(command: str, cwd: Path, timeout: int = 120) -> dict:
     if any(fragment in command for fragment in DANGEROUS_COMMAND_FRAGMENTS):
         raise HTTPException(403, "Command blocked for safety")
 
+    translated_command, translated_note = _translate_package_manager_command(command, cwd)
+    if translated_command is None:
+        return {
+            "ok": False,
+            "stdout": "",
+            "stderr": translated_note or "Command could not be translated for this runtime.",
+            "returncode": 127,
+        }
+
     try:
         proc = subprocess.run(
-            command,
+            translated_command,
             shell=True,
             cwd=str(cwd),
             capture_output=True,
             text=True,
             timeout=timeout,
         )
+        stdout = proc.stdout or ""
+        if translated_note:
+            stdout = f"{translated_note}\n{stdout}".strip()
         return {
             "ok": proc.returncode == 0,
-            "stdout": proc.stdout,
+            "stdout": stdout,
             "stderr": proc.stderr,
             "returncode": proc.returncode,
         }
     except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout or ""
+        if translated_note:
+            stdout = f"{translated_note}\n{stdout}".strip()
         return {
             "ok": False,
-            "stdout": exc.stdout or "",
+            "stdout": stdout,
             "stderr": (exc.stderr or "") + "\nCommand timed out",
             "returncode": 124,
         }
@@ -471,16 +566,18 @@ def _run_shell_command(command: str, cwd: Path, timeout: int = 120) -> dict:
 
 def _infer_validation_commands(project_dir: Path) -> list[str]:
     commands: list[str] = []
+    package_manager = _resolve_package_manager(project_dir)
 
     package_json = project_dir / "package.json"
     if package_json.exists():
         try:
             data = json.loads(package_json.read_text(encoding="utf-8"))
             scripts = data.get("scripts") or {}
-            if isinstance(scripts, dict):
+            if isinstance(scripts, dict) and package_manager:
+                _manager_name, manager_cmd = package_manager
                 for name in VALIDATION_SCRIPT_NAMES:
                     if isinstance(scripts.get(name), str) and scripts.get(name, "").strip():
-                        commands.append(f"npm run {name}")
+                        commands.append(_shell_join([*manager_cmd, "run", name]))
         except Exception:
             pass
 
@@ -1040,20 +1137,30 @@ def run_start(req: RunStartReq):
             bufsize=1,
         )
     else:
-        # npm project with dev script
-        logs.append("$ npm install")
-        install = subprocess.run(["npm", "install"], cwd=str(proj), capture_output=True, text=True)
+        package_manager = _resolve_package_manager(proj)
+        if not package_manager:
+            raise HTTPException(
+                400,
+                "This deployment can edit the project, but cannot run the JavaScript preview because npm/pnpm/yarn/bun is not installed on the API host.",
+            )
+
+        manager_name, manager_cmd = package_manager
+        install_cmd = [*manager_cmd, "install"]
+        logs.append(f"$ {_shell_join(install_cmd)}")
+        install = subprocess.run(install_cmd, cwd=str(proj), capture_output=True, text=True)
+        if manager_name != "npm":
+            logs.append(f"[runtime] Using {manager_name} because npm is not available.")
         if install.stdout:
             logs.extend([l for l in install.stdout.splitlines() if l.strip()])
         if install.stderr:
             logs.extend([l for l in install.stderr.splitlines() if l.strip()])
         if install.returncode != 0:
             tail = "\n".join((logs or [])[-120:])
-            raise HTTPException(400, f"npm install failed\n\n--- npm output (tail) ---\n{tail}")
+            raise HTTPException(400, f"Install failed\n\n--- package manager output (tail) ---\n{tail}")
 
         # strictPort so we know the port; if it's taken, user can run again (we'll pick a new port)
-        cmd = ["npm", "run", "dev", "--", "--host", "127.0.0.1", "--strictPort", "--port", str(port)]
-        logs.append(f"$ {' '.join(cmd)}")
+        cmd = [*manager_cmd, "run", "dev", "--", "--host", "127.0.0.1", "--strictPort", "--port", str(port)]
+        logs.append(f"$ {_shell_join(cmd)}")
         proc = subprocess.Popen(cmd, cwd=str(proj), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
 
     t = threading.Thread(target=pump, args=(proc,), daemon=True)

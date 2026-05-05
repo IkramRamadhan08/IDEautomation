@@ -251,19 +251,78 @@ export async function pickWorkspaceNative(): Promise<{ ok: boolean; path: string
   return r.json();
 }
 
+const IMPORT_IGNORED_SEGMENTS = new Set([
+  "node_modules",
+  ".git",
+  "dist",
+  "build",
+  ".next",
+  ".nuxt",
+  ".output",
+  ".turbo",
+  ".cache",
+  "coverage",
+]);
+const IMPORT_MAX_BATCH_BYTES = 3_000_000;
+const IMPORT_MAX_BATCH_FILES = 100;
+
+function shouldSkipImportedPath(rel: string) {
+  return rel.split("/").some((part) => IMPORT_IGNORED_SEGMENTS.has(part));
+}
+
 export async function importBrowserFolder(files: File[]): Promise<WorkspaceProvisionInfo> {
-  const form = new FormData();
-  for (const file of files) {
-    const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
-    form.append("files", file, file.name);
-    form.append("paths", rel);
+  const entries = files
+    .map((file) => ({
+      file,
+      rel: ((file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name).replace(/^\/+/, ""),
+    }))
+    .filter(({ rel }) => rel && !shouldSkipImportedPath(rel));
+
+  if (entries.length === 0) {
+    throw new Error("Folder ini kosong, atau isinya cuma folder generated seperti node_modules/dist.");
   }
-  const r = await apiFetch(`/api/workspace/import-browser-folder`, {
-    method: "POST",
-    body: form,
-  });
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
+
+  const oversized = entries.find(({ file }) => file.size > IMPORT_MAX_BATCH_BYTES);
+  if (oversized) {
+    throw new Error(`File terlalu besar untuk import browser deployment ini: ${oversized.rel}`);
+  }
+
+  let lastResponse: WorkspaceProvisionInfo | null = null;
+  let batch: typeof entries = [];
+  let batchBytes = 0;
+
+  const flushBatch = async () => {
+    if (batch.length === 0) return;
+    const form = new FormData();
+    for (const entry of batch) {
+      form.append("files", entry.file, entry.file.name);
+      form.append("paths", entry.rel);
+    }
+    const r = await apiFetch(`/api/workspace/import-browser-folder`, {
+      method: "POST",
+      body: form,
+    });
+    if (!r.ok) throw new Error(await r.text());
+    lastResponse = await r.json();
+    batch = [];
+    batchBytes = 0;
+  };
+
+  for (const entry of entries) {
+    const nextBytes = batchBytes + entry.file.size;
+    if (batch.length >= IMPORT_MAX_BATCH_FILES || (batch.length > 0 && nextBytes > IMPORT_MAX_BATCH_BYTES)) {
+      await flushBatch();
+    }
+    batch.push(entry);
+    batchBytes += entry.file.size;
+  }
+
+  await flushBatch();
+
+  if (!lastResponse) {
+    throw new Error("Tidak ada file yang berhasil diimport.");
+  }
+  return lastResponse;
 }
 
 export async function clearWorkspace(): Promise<{ ok: boolean }> {
