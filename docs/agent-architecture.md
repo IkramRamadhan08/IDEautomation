@@ -47,6 +47,7 @@ Voice IDE agent should:
 - operate inside bounded runtime/tool limits
 - understand the project's existing stack
 - validate outcomes through the browser when possible
+- expose per-run trace for retrieved memory, chosen skills, and MCP/tool usage
 - report capabilities honestly instead of pretending unfinished runtime features already exist
 
 ### Delivery target

@@ -7,6 +7,7 @@ import {
   terminalRun,
   validateProject,
   type AgentIntent,
+  type AgentRunTrace,
   type PreviewAuditResult,
   type ProjectValidationRun,
 } from "../api";
@@ -138,6 +139,49 @@ function formatPreviewAuditReport(audit: PreviewAuditResult, maxChars = 4000) {
 
   const report = sections.join("\n\n");
   return report.length > maxChars ? `${report.slice(0, maxChars)}\n…[truncated]` : report;
+}
+
+function pushRunTrace(pushAgentLiveItem: WorkflowArgs["pushAgentLiveItem"], trace: AgentRunTrace | undefined) {
+  if (!trace) return;
+
+  const memoryCount = trace.memory_hits.length;
+  const skillCount = trace.skills.length;
+  const mcpUsedCount = trace.mcp_tools_used.length;
+  const mcpSeenCount = trace.mcp_servers.length;
+
+  pushAgentLiveItem({
+    role: "tool",
+    tone: "default",
+    text: `Run trace: memory ${memoryCount}, skill ${skillCount}, MCP used ${mcpUsedCount}.`,
+    meta: [`passes=${trace.passes}`, mcpSeenCount > 0 ? `mcp available=${mcpSeenCount}` : null].filter(Boolean).join(" • ") || null,
+  });
+
+  if (memoryCount > 0) {
+    pushAgentLiveItem({
+      role: "tool",
+      tone: "default",
+      text: "Memory yang kepake di run ini.",
+      meta: trace.memory_hits.slice(0, 4).map((hit) => `${hit.title} (${hit.kind})`).join(" • "),
+    });
+  }
+
+  if (skillCount > 0) {
+    pushAgentLiveItem({
+      role: "tool",
+      tone: "default",
+      text: "Skill yang dipilih agent buat ngerjain task ini.",
+      meta: trace.skills.map((skill) => skill.skill_id).join(" • "),
+    });
+  }
+
+  if (mcpUsedCount > 0) {
+    pushAgentLiveItem({
+      role: "tool",
+      tone: trace.mcp_tools_used.every((tool) => tool.ok) ? "success" : "error",
+      text: "Tool MCP yang beneran kepake di run ini.",
+      meta: trace.mcp_tools_used.map((tool) => `${tool.server}.${tool.tool} (${tool.ok ? "ok" : "error"})`).join(" • "),
+    });
+  }
 }
 
 export async function runAgentWorkflow({
@@ -399,6 +443,7 @@ export async function runAgentWorkflow({
       text: `Backend intent final: ${intentSummary(resolvedIntent)}.`,
       meta: resolvedIntent.rationale,
     });
+    pushRunTrace(pushAgentLiveItem, res.trace);
 
     combinedActions = [...actions];
     setAgentActions(combinedActions);
@@ -448,6 +493,7 @@ export async function runAgentWorkflow({
 
       appendLogSection("REPAIR PASS", repairRes.log);
       if (repairRes.spoken) setAgentReply(repairRes.spoken);
+      pushRunTrace(pushAgentLiveItem, repairRes.trace);
 
       const repairChanges: AgentChange[] = repairRes.changes || [];
       const repairActions: AgentAction[] = repairRes.actions || [];

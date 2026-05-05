@@ -1757,6 +1757,7 @@ def _run_agent_impl(req: AgentReq, event_cb=None):
             "changes": out_changes,
             "actions": normalized_actions,
             "intent": dict(pipeline.get("intent") or {}),
+            "trace": dict(pipeline.get("trace") or {}),
             "no_changes": len(out_changes) == 0 and len(normalized_actions) == 0,
         }
         for chunk in _spoken_stream_chunks(sug_spoken):

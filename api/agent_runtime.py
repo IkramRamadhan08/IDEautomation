@@ -191,6 +191,10 @@ class PreparedAgentContext:
     intent: AgentIntent
     resolved_skill_ids: list[str]
     mcp_servers: list[str]
+    trace_memory_hits: list[dict[str, Any]]
+    trace_skill_hits: list[dict[str, Any]]
+    trace_mcp_servers: list[dict[str, Any]]
+    trace_mcp_tools_used: list[dict[str, Any]]
 
     @property
     def is_full_agent(self) -> bool:
@@ -219,6 +223,7 @@ class AgentRuntimeResult(TypedDict):
     changes: list[dict[str, str]]
     actions: list[dict[str, Any]]
     intent: dict[str, Any]
+    trace: dict[str, Any]
 
 
 def get_agent_mode_profile(build_mode: str | None) -> AgentModeProfile:
@@ -559,6 +564,10 @@ def prepare_agent_context(req: Any, ws_root: Path) -> PreparedAgentContext:
         intent=intent,
         resolved_skill_ids=[],
         mcp_servers=[],
+        trace_memory_hits=[],
+        trace_skill_hits=[],
+        trace_mcp_servers=[],
+        trace_mcp_tools_used=[],
     )
     extra_context = "\n\n".join([*_build_context_parts(ctx_stub, req), intent.prompt_block])
     asset_prompt = _build_asset_prompt(ctx_stub)
@@ -605,6 +614,16 @@ def _hydrate_memory_node(state: AgentRuntimeState) -> AgentRuntimeState:
         open_files=ctx.open_files,
     )
     ctx.memory_prompt = memory_bundle.prompt
+    ctx.trace_memory_hits = [
+        {
+            "kind": hit.kind,
+            "source": hit.source,
+            "title": hit.title,
+            "score": round(float(hit.score), 3),
+            "text": hit.text[:240],
+        }
+        for hit in [*memory_bundle.short_term, *memory_bundle.long_term]
+    ]
     if ctx.memory_prompt:
         ctx.extra_context = f"{ctx.extra_context}\n\n{ctx.memory_prompt}".strip()
     return {"context": ctx}
@@ -622,6 +641,14 @@ def _resolve_skills_node(state: AgentRuntimeState) -> AgentRuntimeState:
         preview_url=state.get("request_preview_url"),
     )
     ctx.resolved_skill_ids = [skill.skill_id for skill in skills]
+    ctx.trace_skill_hits = [
+        {
+            "skill_id": skill.skill_id,
+            "title": skill.title,
+            "source": skill.source,
+        }
+        for skill in skills
+    ]
     ctx.skill_prompt = format_skill_prompt(skills)
     if ctx.skill_prompt:
         ctx.extra_context = f"{ctx.extra_context}\n\n{ctx.skill_prompt}".strip()
@@ -633,6 +660,16 @@ def _inspect_mcp_node(state: AgentRuntimeState) -> AgentRuntimeState:
     _emit(state, "status", {"phase": "mcp", "message": "Cek capability boundary dari MCP registry..."})
     servers = discover_mcp_servers(ctx.ws_root, ctx.project_dir)
     ctx.mcp_servers = [server.name for server in servers]
+    ctx.trace_mcp_servers = [
+        {
+            "name": server.name,
+            "transport": server.transport,
+            "target": server.target,
+            "tools": list(server.tools or []),
+            "source": server.source,
+        }
+        for server in servers
+    ]
     tool_catalog = list_mcp_tools(ctx.ws_root, ctx.project_dir) if servers else {}
     ctx.mcp_prompt = format_mcp_prompt(servers, tool_catalog=tool_catalog)
     if ctx.mcp_prompt:
@@ -743,6 +780,17 @@ def _execute_mcp_node(state: AgentRuntimeState) -> AgentRuntimeState:
             arguments=arguments,
         )
         executed_results.append(result)
+        ctx.trace_mcp_tools_used.append(
+            {
+                "server": result.server,
+                "tool": result.tool,
+                "ok": result.ok,
+                "duration_ms": result.duration_ms,
+                "error": result.error,
+                "arguments": result.arguments,
+                "text": result.text[:240],
+            }
+        )
         _emit(
             state,
             "delta",
@@ -870,12 +918,21 @@ def _finalize_node(state: AgentRuntimeState) -> AgentRuntimeState:
         if ctx.hybrid_seed_needed and "full-agent-mode" not in log:
             log = f"{log} full-agent-mode=seeded".strip()
 
+    trace = {
+        "passes": passes,
+        "memory_hits": list(ctx.trace_memory_hits),
+        "skills": list(ctx.trace_skill_hits),
+        "mcp_servers": list(ctx.trace_mcp_servers),
+        "mcp_tools_used": list(ctx.trace_mcp_tools_used),
+    }
+
     return {
         "spoken": spoken,
         "log": log,
         "changes": normalized_changes,
         "actions": normalized_actions,
         "intent": intent_payload,
+        "trace": trace,
     }
 
 
@@ -924,6 +981,13 @@ def run_agent_pipeline(req: Any, *, ws_root: Path, emit: EventEmitter | None = N
             "should_write_files": ctx.intent.should_write_files,
             "should_run_tools": ctx.intent.should_run_tools,
             "wants_app_builder": ctx.intent.wants_app_builder,
+        }),
+        "trace": dict(result.get("trace") or {
+            "passes": int(result.get("passes") or 1),
+            "memory_hits": list(ctx.trace_memory_hits),
+            "skills": list(ctx.trace_skill_hits),
+            "mcp_servers": list(ctx.trace_mcp_servers),
+            "mcp_tools_used": list(ctx.trace_mcp_tools_used),
         }),
     }
     try:

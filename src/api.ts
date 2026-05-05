@@ -624,12 +624,44 @@ export type AgentIntent = {
   should_run_tools: boolean;
   wants_app_builder: boolean;
 };
+export type AgentRunTrace = {
+  passes: number;
+  memory_hits: Array<{
+    kind: string;
+    source: string;
+    title: string;
+    score: number;
+    text: string;
+  }>;
+  skills: Array<{
+    skill_id: string;
+    title: string;
+    source: string;
+  }>;
+  mcp_servers: Array<{
+    name: string;
+    transport: string;
+    target: string;
+    tools: string[];
+    source: string;
+  }>;
+  mcp_tools_used: Array<{
+    server: string;
+    tool: string;
+    ok: boolean;
+    duration_ms: number;
+    error?: string | null;
+    arguments?: Record<string, unknown>;
+    text?: string;
+  }>;
+};
 export type AgentResult = {
   spoken: string;
   log: string;
   changes: AgentChange[];
   actions: Array<{ type: string; [key: string]: unknown }>;
   intent?: AgentIntent;
+  trace?: AgentRunTrace;
 };
 export type AgentCapabilities = {
   ok: boolean;
