@@ -74,8 +74,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <div className="brainTitle">Mode</div>
               <div className="providerStatusLine compactStatusLine">
                 <span className="providerStatusChip">{identity?.managed_workspace_mode === "user" ? "User" : "Session"}</span>
-                <span className={`providerStatusChip ${settings?.supabase_enabled ? "connected" : "disconnected"}`}>
-                  {settings?.supabase_enabled ? "Sync on" : "Sync off"}
+                <span className={`providerStatusChip ${settings?.supabase_rag_status === "ready" ? "connected" : "disconnected"}`}>
+                  {settings?.supabase_rag_status === "ready" ? "RAG ready" : settings?.supabase_enabled ? "RAG setup" : "Sync off"}
                 </span>
               </div>
             </div>
@@ -129,6 +129,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             )}
             {!llmProviderDraft ? <div className="settingsSubtle">Pick a provider first.</div> : null}
             {settings?.supabase_enabled ? <div className="settingsSubtle compactHint">Saved per account for this hosted deployment.</div> : null}
+            {settings?.supabase_warning ? <div className="settingsSubtle compactHint">{settings.supabase_warning}</div> : null}
           </div>
 
           <div className="settingsSection">

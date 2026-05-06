@@ -9,7 +9,8 @@ from unittest.mock import patch
 from api.agent_intent import classify_agent_intent
 from api.agent_mcp import MCPToolInfo, suggest_mcp_actions
 from api.agent_memory import retrieve_agent_memory
-from api.main import _build_quality_checks, _extract_preview_snapshot_from_html, agent_capabilities
+from api.hybrid import build_hybrid_seed
+from api.main import _build_quality_checks, _extract_preview_snapshot_from_html, agent_capabilities, supabase_rag_status
 
 
 class AgentIntentRegressionTests(unittest.TestCase):
@@ -136,6 +137,33 @@ class MCPHintRegressionTests(unittest.TestCase):
         self.assertNotIn(("browser", "take_screenshot"), action_pairs)
 
 
+class HybridSeedRegressionTests(unittest.TestCase):
+    def test_saas_brief_defaults_to_app_workspace_not_dashboard(self) -> None:
+        files = build_hybrid_seed(
+            project_root="demo",
+            project_name="Acme Flow",
+            instruction="Build a modern SaaS product with onboarding, workspace, and integrations.",
+        )
+
+        app_tsx = files["demo/src/App.tsx"]
+        self.assertIn('path="/workspace"', app_tsx)
+        self.assertIn('path="/integrations"', app_tsx)
+        self.assertNotIn('path="/dashboard"', app_tsx)
+        self.assertIn("demo/src/pages/Workspace.tsx", files)
+
+    def test_explicit_marketing_brief_keeps_landing_sections(self) -> None:
+        files = build_hybrid_seed(
+            project_root="demo",
+            project_name="Launch Kit",
+            instruction="Create a landing page with testimonials, FAQ, pricing, and contact form.",
+        )
+
+        self.assertIn('path="/contact"', files["demo/src/App.tsx"])
+        self.assertIn("Requested section", files["demo/src/pages/Home.tsx"])
+        self.assertIn("Testimonials", files["demo/src/pages/Home.tsx"])
+        self.assertIn("FAQ", files["demo/src/pages/Home.tsx"])
+
+
 class CapabilityHonestyRegressionTests(unittest.TestCase):
     def test_capabilities_surface_supabase_readiness_warning(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -159,6 +187,24 @@ class CapabilityHonestyRegressionTests(unittest.TestCase):
         self.assertIn("agent_memory_chunks", caps["memory"]["supabase_warning"])
         self.assertTrue(caps["supports"]["vector_memory_retrieval"])
         self.assertTrue(caps["supports"]["preview_quality_checks"])
+
+
+class SupabaseReadinessRegressionTests(unittest.TestCase):
+    def test_status_reports_missing_table_as_not_live_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            project_dir.mkdir(parents=True)
+
+            with patch("api.main._ws", return_value=ws_root), \
+                patch("api.main.has_supabase", return_value=True), \
+                patch("api.main.get_agent_memory_chunks_table_status", return_value="missing"), \
+                patch("api.main.get_agent_memory_chunks_summary", return_value=None):
+                status = supabase_rag_status(project_root="demo")
+
+        self.assertFalse(status["live_ready"])
+        self.assertEqual(status["table_status"], "missing")
+        self.assertIn("agent_memory_chunks", status["warning"])
 
 
 class TranscriptPurityRegressionTests(unittest.TestCase):

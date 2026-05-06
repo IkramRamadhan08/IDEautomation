@@ -105,22 +105,100 @@ def build_hybrid_seed(project_root: str, project_name: str, instruction: str) ->
     package_name = _slug(project_name or title)
 
     hint = (instruction or "").lower()
-    wants_dashboard = any(k in hint for k in ["dashboard", "admin", "panel", "crm", "analytics", "inventory", "billing", "saas"])
-    wants_docs = any(k in hint for k in ["docs", "documentation", "wiki", "knowledge", "blog", "changelog"])
+    wants_dashboard = any(k in hint for k in ["dashboard", "admin", "panel", "backoffice", "back-office", "crm", "analytics", "inventory", "billing", "operations"])
+    wants_docs = any(k in hint for k in ["docs", "documentation", "wiki", "knowledge base", "knowledge", "blog", "changelog"])
+    wants_landing = any(k in hint for k in ["landing page", "landing", "marketing", "homepage", "hero section", "promo", "campaign"])
+    wants_app = any(k in hint for k in ["app", "platform", "workspace", "portal", "workflow", "automation", "tool", "product", "saas"])
 
-    template = "dashboard" if wants_dashboard else "docs" if wants_docs else "landing"
+    template = "dashboard" if wants_dashboard and not wants_landing else "docs" if wants_docs else "landing" if wants_landing else "app"
 
-    nav_items = [
-        ("/", "Home"),
-        ("/features", "Features"),
-        ("/pricing", "Pricing"),
-    ]
-    if template == "docs":
-        nav_items.append(("/docs", "Docs"))
-    if template == "dashboard":
-        nav_items.append(("/dashboard", "Dashboard"))
+    if template == "app":
+        nav_items = [
+            ("/", "Overview"),
+            ("/workspace", "Workspace"),
+            ("/integrations", "Integrations"),
+            ("/settings", "Settings"),
+        ]
+        home_highlights = [
+            "Multi-view workspace shell",
+            "Integrations surface + system status",
+            "Settings and operational states",
+            "Responsive app foundation with reusable UI",
+        ]
+        primary_cta = "Open workspace"
+        secondary_cta = "Review integrations"
+        features_title = "Workspace"
+        features_items = [
+            {"title": "Queues and states", "body": "Scaffold recent activity, pending work, and clear operational states instead of a static promo wall."},
+            {"title": "Task surfaces", "body": "Give the app useful panels, cards, tables, or flows that feel like a real product workspace."},
+            {"title": "Guided actions", "body": "Prefer intentional next actions over generic marketing filler when the brief sounds product-like."},
+            {"title": "Extension points", "body": "Leave room for auth, billing, analytics, or role-based views without boxing the project in."},
+        ]
+        pricing_title = "Integrations"
+        pricing_items = [
+            {"name": "Content", "price": "Ready", "desc": "CMS, uploads, and rich content flows", "perks": ["Media handling", "Draft/publish flow", "Validation hooks"]},
+            {"name": "Data", "price": "Ready", "desc": "Backends, RAG, and persistence layers", "perks": ["Structured data", "Supabase-ready", "Traceable retrieval"]},
+            {"name": "Automation", "price": "Ready", "desc": "Agent and tool assisted workflows", "perks": ["Tool hooks", "Auditability", "Bounded autonomy"]},
+        ]
+    else:
+        home_highlights = [
+            "Multi-page routing scaffold",
+            "Reusable UI components",
+            "Light/dark theme with design tokens",
+            "Responsive layout + accessible defaults",
+        ]
+        primary_cta = "Get started"
+        secondary_cta = "See demo"
+        features_title = "Features"
+        features_items = [
+            {"title": "Design system", "body": "CSS variables + consistent spacing, radii, shadows."},
+            {"title": "Navigation", "body": "Router + active links + layout shell."},
+            {"title": "States", "body": "Empty/loading/error patterns you can extend."},
+            {"title": "Polish", "body": "Focus states, contrast, responsive grid."},
+        ]
+        pricing_title = "Pricing"
+        pricing_items = [
+            {"name": "Starter", "price": "$0", "desc": "For prototyping and demos", "perks": ["Basic pages", "Theme toggle", "Router"]},
+            {"name": "Pro", "price": "$19", "desc": "For real products", "perks": ["Better UX", "More components", "Polish"]},
+            {"name": "Team", "price": "$49", "desc": "For teams", "perks": ["Shared workflows", "Design tokens", "Scalable layout"]},
+        ]
+        nav_items = [
+            ("/", "Home"),
+            ("/features", "Features"),
+            ("/pricing", "Pricing"),
+        ]
+        if template == "landing":
+            nav_items.append(("/contact", "Contact"))
+        elif template == "docs":
+            nav_items.append(("/docs", "Docs"))
+            features_title = "Guides"
+            pricing_title = "Reference"
+        elif template == "dashboard":
+            nav_items.append(("/dashboard", "Dashboard"))
+            features_title = "Metrics"
+            pricing_title = "Operations"
+
+    landing_sections: list[str] = []
+    if template == "landing":
+        section_keywords = [
+            ("Testimonials", ["testimonial", "testimoni", "review pelanggan"]),
+            ("FAQ", ["faq", "frequently asked", "pertanyaan"]),
+            ("Contact", ["contact", "kontak", "contact form"]),
+            ("Pricing", ["pricing", "harga", "plans"]),
+            ("Feature grid", ["feature", "fitur", "benefit"]),
+            ("CTA", ["cta", "call to action"]),
+        ]
+        for label, keywords in section_keywords:
+            if any(keyword in hint for keyword in keywords) and label not in landing_sections:
+                landing_sections.append(label)
+        if not landing_sections:
+            landing_sections = ["Feature grid", "Testimonials", "CTA"]
 
     nav_json = json.dumps(nav_items, ensure_ascii=False)
+    home_highlights_json = json.dumps(home_highlights, ensure_ascii=False)
+    landing_sections_json = json.dumps(landing_sections, ensure_ascii=False)
+    features_items_json = json.dumps(features_items, ensure_ascii=False)
+    pricing_items_json = json.dumps(pricing_items, ensure_ascii=False)
 
     files = {
         "package.json": f'''{{
@@ -233,10 +311,14 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
 import AppShell from "./components/AppShell";
 
 import HomePage from "./pages/Home";
-import FeaturesPage from "./pages/Features";
-import PricingPage from "./pages/Pricing";
+{'import FeaturesPage from "./pages/Features";' if template != 'app' else ''}
+{'import PricingPage from "./pages/Pricing";' if template != 'app' else ''}
+{'import ContactPage from "./pages/Contact";' if template == 'landing' else ''}
 {'import DocsPage from "./pages/Docs";' if template == 'docs' else ''}
 {'import DashboardPage from "./pages/Dashboard";' if template == 'dashboard' else ''}
+{'import WorkspacePage from "./pages/Workspace";' if template == 'app' else ''}
+{'import IntegrationsPage from "./pages/Integrations";' if template == 'app' else ''}
+{'import SettingsPage from "./pages/AppSettings";' if template == 'app' else ''}
 import NotFoundPage from "./pages/NotFound";
 
 const NAV_ITEMS: Array<[string, string]> = {nav_json} as any;
@@ -246,8 +328,10 @@ export default function App() {{
     <AppShell title={json.dumps(title)} description={json.dumps(description)} navItems={{NAV_ITEMS}}>
       <Routes>
         <Route path="/" element={{<HomePage />}} />
-        <Route path="/features" element={{<FeaturesPage />}} />
-        <Route path="/pricing" element={{<PricingPage />}} />
+        {('<Route path="/workspace" element={<WorkspacePage />} />' if template == 'app' else '<Route path="/features" element={<FeaturesPage />} />')}
+        {('<Route path="/integrations" element={<IntegrationsPage />} />' if template == 'app' else '<Route path="/pricing" element={<PricingPage />} />')}
+        {('<Route path="/settings" element={<SettingsPage />} />' if template == 'app' else '')}
+        {('<Route path="/contact" element={<ContactPage />} />' if template == 'landing' else '')}
         {('<Route path="/docs" element={<DocsPage />} />' if template == 'docs' else '')}
         {('<Route path="/dashboard" element={<DashboardPage />} />' if template == 'dashboard' else '')}
         <Route path="*" element={{<NotFoundPage />}} />
@@ -377,12 +461,8 @@ export default function ThemeToggle() {
         "src/pages/Home.tsx": f'''import Button from "../components/ui/Button";
 import Card from "../components/ui/Card";
 
-const highlights = [
-  "Multi-page routing scaffold",
-  "Reusable UI components",
-  "Light/dark theme with design tokens",
-  "Responsive layout + accessible defaults",
-];
+const highlights = {home_highlights_json} as string[];
+const landingSections = {landing_sections_json} as string[];
 
 export default function HomePage() {{
   return (
@@ -393,8 +473,8 @@ export default function HomePage() {{
           <h1 className="heroTitle">{title}</h1>
           <p className="heroLead">{description}</p>
           <div className="row">
-            <Button>Get started</Button>
-            <Button variant="ghost">See demo</Button>
+            <Button>{primary_cta}</Button>
+            <Button variant="ghost">{secondary_cta}</Button>
           </div>
         </div>
       </section>
@@ -406,65 +486,66 @@ export default function HomePage() {{
           </Card>
         ))}}
       </div>
+
+      {{landingSections.length > 0 ? (
+        <div className="grid">
+          {{landingSections.map((section) => (
+            <Card key={{section}} title={{section}} eyebrow="Requested section">
+              <p className="muted">This scaffold keeps room for the sections the brief explicitly asked for, instead of collapsing everything into a generic hero only.</p>
+            </Card>
+          ))}}
+        </div>
+      ) : null}}
     </div>
   );
 }}
 ''',
-        "src/pages/Features.tsx": '''import Card from "../components/ui/Card";
+        "src/pages/Features.tsx": f'''import Card from "../components/ui/Card";
 
-const items = [
-  { title: "Design system", body: "CSS variables + consistent spacing, radii, shadows." },
-  { title: "Navigation", body: "Router + active links + layout shell." },
-  { title: "States", body: "Empty/loading/error patterns you can extend." },
-  { title: "Polish", body: "Focus states, contrast, responsive grid." },
-];
+const items = {features_items_json} as Array<{{ title: string; body: string }}>;
 
-export default function FeaturesPage() {
+export default function FeaturesPage() {{
   return (
     <div className="stack">
-      <h1 className="pageTitle">Features</h1>
+      <h1 className="pageTitle">{features_title}</h1>
       <div className="grid">
-        {items.map((it) => (
-          <Card key={it.title} title={it.title}>
-            <p className="muted">{it.body}</p>
+        {{items.map((it) => (
+          <Card key={{it.title}} title={{it.title}}>
+            <p className="muted">{{it.body}}</p>
           </Card>
-        ))}
+        ))}}
       </div>
     </div>
   );
-}
+}}
 ''',
-        "src/pages/Pricing.tsx": '''import Card from "../components/ui/Card";
+        "src/pages/Pricing.tsx": f'''import Card from "../components/ui/Card";
 import Button from "../components/ui/Button";
 
-const tiers = [
-  { name: "Starter", price: "$0", desc: "For prototyping and demos", perks: ["Basic pages", "Theme toggle", "Router"] },
-  { name: "Pro", price: "$19", desc: "For real products", perks: ["Better UX", "More components", "Polish"] },
-  { name: "Team", price: "$49", desc: "For teams", perks: ["Shared workflows", "Design tokens", "Scalable layout"] },
-];
+const tiers = {pricing_items_json} as Array<{{ name: string; price: string; desc: string; perks: string[] }}>;
 
-export default function PricingPage() {
+export default function PricingPage() {{
   return (
     <div className="stack">
-      <h1 className="pageTitle">Pricing</h1>
+      <h1 className="pageTitle">{pricing_title}</h1>
       <div className="grid">
-        {tiers.map((t) => (
-          <Card key={t.name} title={t.name} eyebrow={t.price}>
-            <p className="muted">{t.desc}</p>
+        {{tiers.map((t) => (
+          <Card key={{t.name}} title={{t.name}} eyebrow={{t.price}}>
+            <p className="muted">{{t.desc}}</p>
             <ul className="list">
-              {t.perks.map((p) => (
-                <li key={p}>{p}</li>
-              ))}
+              {{t.perks.map((p) => (
+                <li key={{p}}>{{p}}</li>
+              ))}}
             </ul>
-            <div style={{ paddingTop: 12 }}>
-              <Button>Choose {t.name}</Button>
+            <div style={{{{ paddingTop: 12 }}}}>
+              <Button>{{t.name}}</Button>
             </div>
           </Card>
-        ))}
+        ))}}
       </div>
     </div>
   );
-}
+}}
 ''',
         "src/pages/Docs.tsx": '''import Card from "../components/ui/Card";
 
@@ -521,6 +602,91 @@ export default function DashboardPage() {
           ))
         )}
       </div>
+    </div>
+  );
+}
+''',
+        "src/pages/Workspace.tsx": '''import Card from "../components/ui/Card";
+
+const lanes = [
+  { title: "Active work", body: "Surface the main workflows, queues, or entities the product revolves around." },
+  { title: "Needs review", body: "Keep room for alerts, approvals, or blocked states so the scaffold feels operational." },
+  { title: "Recent changes", body: "Show updates, activity, or collaboration context instead of a static brochure." },
+  { title: "Next actions", body: "Guide the user toward the real jobs the product needs to support." },
+];
+
+export default function WorkspacePage() {
+  return (
+    <div className="stack">
+      <h1 className="pageTitle">Workspace</h1>
+      <div className="grid">
+        {lanes.map((lane) => (
+          <Card key={lane.title} title={lane.title}>
+            <p className="muted">{lane.body}</p>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
+''',
+        "src/pages/Integrations.tsx": '''import Card from "../components/ui/Card";
+
+const integrations = [
+  { title: "Auth + accounts", body: "Keep the scaffold ready for identity, members, roles, and session-aware flows." },
+  { title: "Data + storage", body: "Prepare for Supabase, APIs, uploads, and retrieval without pretending the backend is already done." },
+  { title: "Automation + tools", body: "Reserve space for agent actions, MCP, or background operations when the product brief needs them." },
+  { title: "Notifications", body: "Model delivery points like inbox, alerts, digests, or operational feedback loops." },
+];
+
+export default function IntegrationsPage() {
+  return (
+    <div className="stack">
+      <h1 className="pageTitle">Integrations</h1>
+      <div className="grid">
+        {integrations.map((item) => (
+          <Card key={item.title} title={item.title}>
+            <p className="muted">{item.body}</p>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
+''',
+        "src/pages/AppSettings.tsx": '''import Card from "../components/ui/Card";
+
+const settingGroups = [
+  { title: "Workspace preferences", body: "Theme, density, default views, and operator-level defaults." },
+  { title: "Access control", body: "Roles, collaborators, and guarded actions that real apps usually need." },
+  { title: "Automation rules", body: "Hooks for reminders, sync jobs, or review loops instead of purely static content." },
+  { title: "Quality controls", body: "Validation, audit trails, and system health surfaces for trustworthy product behavior." },
+];
+
+export default function SettingsPage() {
+  return (
+    <div className="stack">
+      <h1 className="pageTitle">Settings</h1>
+      <div className="grid">
+        {settingGroups.map((group) => (
+          <Card key={group.title} title={group.title}>
+            <p className="muted">{group.body}</p>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
+''',
+        "src/pages/Contact.tsx": '''import Card from "../components/ui/Card";
+
+export default function ContactPage() {
+  return (
+    <div className="stack">
+      <h1 className="pageTitle">Contact</h1>
+      <Card title="Let people reach out">
+        <p className="muted">Use this page for a contact form, booking flow, support CTA, or partnership inquiry instead of leaving marketing briefs half-finished.</p>
+      </Card>
     </div>
   );
 }

@@ -39,6 +39,7 @@ class Settings(BaseModel):
     supabase_url: str | None = None
     supabase_anon_key_set: bool = False
     supabase_service_role_key: str | None = None
+    supabase_service_role_key_set: bool = False
     supabase_enabled: bool = False
 
 
@@ -107,6 +108,7 @@ def load_settings() -> Settings:
         supabase_url=(g("SUPABASE_URL", "") or "").strip() or None,
         supabase_anon_key_set=bool((g("SUPABASE_ANON_KEY", "") or "").strip()),
         supabase_service_role_key=(g("SUPABASE_SERVICE_ROLE_KEY", "") or "").strip() or None,
+        supabase_service_role_key_set=bool((g("SUPABASE_SERVICE_ROLE_KEY", "") or "").strip()),
         supabase_enabled=bool((g("SUPABASE_URL", "") or "").strip() and (g("SUPABASE_SERVICE_ROLE_KEY", "") or "").strip()),
     )
 

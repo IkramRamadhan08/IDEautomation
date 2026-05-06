@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from api import settings as settings_mod
 from api.settings import ENV_PATH, ROOT
 from api.auth_identity import resolve_request_user
-from api.supabase_store import has_supabase
+from api.supabase_store import get_agent_memory_chunks_table_status, has_supabase
 from api.preferences import UserPreferencesUpdateReq, upsert_user_preferences
 from api.secrets_store import delete_provider_secret, upsert_provider_secret
 
@@ -41,7 +41,10 @@ class SettingsInfo(BaseModel):
     openrouter_api_key_set: bool = False
     supabase_url: str | None = None
     supabase_anon_key_set: bool = False
+    supabase_service_role_key_set: bool = False
     supabase_enabled: bool = False
+    supabase_rag_status: str = "unconfigured"
+    supabase_warning: str | None = None
     providers: dict[str, ProviderStatus]
 
 
@@ -73,6 +76,12 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
 
         s = settings_mod.settings
         statuses = auth_snapshot(session_state().get("workspace"))
+        supabase_rag_status = get_agent_memory_chunks_table_status() if getattr(s, "supabase_enabled", False) else "unconfigured"
+        supabase_warning = None
+        if supabase_rag_status == "missing":
+            supabase_warning = "Supabase udah nyambung, tapi tabel public.agent_memory_chunks belum dibuat. Jalankan docs/supabase-agent-rag.sql dulu."
+        elif supabase_rag_status == "error":
+            supabase_warning = "Supabase kebaca, tapi backend belum bisa verifikasi tabel agent_memory_chunks sekarang."
         return SettingsInfo(
             default_workspace=s.default_workspace,
             llm_provider=s.llm_provider,
@@ -92,7 +101,10 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
             openrouter_api_key_set=getattr(s, "openrouter_api_key_set", False),
             supabase_url=getattr(s, "supabase_url", None),
             supabase_anon_key_set=getattr(s, "supabase_anon_key_set", False),
+            supabase_service_role_key_set=getattr(s, "supabase_service_role_key_set", False),
             supabase_enabled=getattr(s, "supabase_enabled", False),
+            supabase_rag_status=supabase_rag_status,
+            supabase_warning=supabase_warning,
             providers={
                 "openai": ProviderStatus(**statuses.get("openai", statuses.get("openai_codex", {}))),
                 "anthropic": ProviderStatus(**statuses.get("anthropic", {})),

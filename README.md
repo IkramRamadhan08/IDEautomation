@@ -83,6 +83,7 @@ Ini jalur deploy utama project ini.
 Buat project di Supabase, lalu jalankan schema dari file:
 
 - `SUPABASE_SCHEMA.sql`
+- `docs/supabase-agent-rag.sql` untuk tabel `public.agent_memory_chunks` yang dipakai agent RAG
 
 Setelah itu siapkan Auth provider kalau kamu mau pakai login Google.
 
@@ -128,7 +129,17 @@ Optional provider lain:
 ```env
 ANTHROPIC_API_KEY=...
 OPENROUTER_API_KEY=...
+SUPABASE_ANON_KEY=...
 ```
+
+### 3.5 Cek readiness Supabase agent
+
+Backend sekarang punya jalur readiness biar nggak nebak-nebak:
+
+- `GET /api/supabase/rag/status?project_root=.`
+- `POST /api/supabase/rag/sync` dengan body `{ "project_root": "." }`
+
+Kalau status bilang `missing`, artinya koneksi Supabase ada tapi tabel `public.agent_memory_chunks` belum dibikin.
 
 ### 4. Deploy
 

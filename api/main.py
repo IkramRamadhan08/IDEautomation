@@ -20,7 +20,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from api.settings import ROOT, ENV_PATH, load_settings
-from api.supabase_store import get_agent_memory_chunks_table_status, has_supabase, upsert_profile
+from api.supabase_store import get_agent_memory_chunks_summary, get_agent_memory_chunks_table_status, has_supabase, upsert_profile
 from api import settings as settings_mod
 from api.app_state import CURRENT_SESSION_ID, CURRENT_USER_ID, STATE
 from api.auth_router import build_auth_router
@@ -31,7 +31,7 @@ from api.preferences_router import build_preferences_router
 from api.settings_router import build_settings_router
 from api.fs import list_tree, read_text, write_text, diff_text, safe_join
 from api.agent_mcp import discover_mcp_servers, list_mcp_tools
-from api.agent_memory import get_agent_memory_overview
+from api.agent_memory import get_agent_memory_overview, sync_project_docs_to_supabase
 from api.agent_runtime import run_agent_pipeline
 from api.agent_skills import detect_project_stack
 
@@ -1624,6 +1624,59 @@ def preview_audit(req: PreviewAuditReq):
 class ProjectValidateReq(BaseModel):
     project_root: str = "."
     max_commands: int = 4
+
+
+class SupabaseRagSyncReq(BaseModel):
+    project_root: str = "."
+
+
+@app.get("/api/supabase/rag/status")
+def supabase_rag_status(project_root: str = "."):
+    ws_root = _ws()
+    proj_root = (project_root or ".").strip() or "."
+    project_dir = safe_join(ws_root, proj_root)
+    supabase_enabled = has_supabase()
+    table_status = get_agent_memory_chunks_table_status(refresh=True) if supabase_enabled else "unconfigured"
+    summary = get_agent_memory_chunks_summary(project_root=proj_root, limit=1000) if supabase_enabled and table_status == "ready" else None
+
+    warning = None
+    if not supabase_enabled:
+        warning = "SUPABASE_URL atau SUPABASE_SERVICE_ROLE_KEY belum lengkap di backend ini."
+    elif table_status == "missing":
+        warning = "Tabel public.agent_memory_chunks belum ada. Jalankan docs/supabase-agent-rag.sql di Supabase SQL editor dulu."
+    elif table_status == "error":
+        warning = "Backend belum bisa verifikasi agent_memory_chunks sekarang, jadi RAG masih fallback lokal."
+
+    return {
+        "ok": True,
+        "project_root": proj_root,
+        "project_exists": project_dir.exists() and project_dir.is_dir(),
+        "supabase_enabled": supabase_enabled,
+        "table_status": table_status,
+        "live_ready": bool(supabase_enabled and table_status == "ready"),
+        "warning": warning,
+        "bootstrap_sql_path": "docs/supabase-agent-rag.sql",
+        "summary": summary,
+    }
+
+
+@app.post("/api/supabase/rag/sync")
+def supabase_rag_sync(req: SupabaseRagSyncReq):
+    ws_root = _ws()
+    proj_root = (req.project_root or ".").strip() or "."
+    project_dir = safe_join(ws_root, proj_root)
+    if not project_dir.exists() or not project_dir.is_dir():
+        raise HTTPException(400, "project_root must exist inside workspace")
+
+    sync_result = sync_project_docs_to_supabase(project_dir, project_root=proj_root)
+    summary = get_agent_memory_chunks_summary(project_root=proj_root, limit=1000) if sync_result.get("table_status") == "ready" else None
+    return {
+        "ok": True,
+        **sync_result,
+        "live_ready": bool(sync_result.get("supabase_configured") and sync_result.get("table_status") == "ready" and (summary or sync_result.get("synced"))),
+        "summary": summary,
+        "bootstrap_sql_path": "docs/supabase-agent-rag.sql",
+    }
 
 
 @app.post("/api/project/validate")

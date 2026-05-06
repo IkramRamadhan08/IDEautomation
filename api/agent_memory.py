@@ -588,6 +588,34 @@ def retrieve_agent_memory(
     )
 
 
+def sync_project_docs_to_supabase(project_dir: Path, *, project_root: str) -> dict[str, Any]:
+    chunks = _build_local_long_term_chunks(project_dir, project_root=project_root)
+    table_status = get_agent_memory_chunks_table_status(refresh=True) if has_supabase() else "unconfigured"
+    synced = False
+    warning = None
+
+    if not has_supabase():
+        warning = "Supabase belum dikonfigurasi di backend ini."
+    elif table_status == "missing":
+        warning = "Tabel public.agent_memory_chunks belum ada, jadi sync belum bisa jalan."
+    elif table_status == "error":
+        warning = "Backend belum bisa verifikasi agent_memory_chunks di Supabase sekarang."
+    else:
+        synced = _sync_supabase_doc_chunks(project_root, chunks)
+        if not synced and chunks:
+            warning = "Upsert chunk ke Supabase gagal, jadi belum live-ready sepenuhnya."
+
+    return {
+        "project_root": project_root,
+        "local_chunk_count": len(chunks),
+        "source_count": len({chunk.source for chunk in chunks}),
+        "supabase_configured": has_supabase(),
+        "table_status": table_status,
+        "synced": synced,
+        "warning": warning,
+    }
+
+
 def get_agent_memory_overview(ws_root: Path, *, project_root: str) -> AgentMemoryOverview:
     user_id = CURRENT_USER_ID.get()
     session_id = CURRENT_SESSION_ID.get()

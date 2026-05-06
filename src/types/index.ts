@@ -104,7 +104,10 @@ export type SettingsInfo = {
   openrouter_api_key_set: boolean;
   supabase_url: string | null;
   supabase_anon_key_set: boolean;
+  supabase_service_role_key_set: boolean;
   supabase_enabled: boolean;
+  supabase_rag_status: "unconfigured" | "ready" | "missing" | "error";
+  supabase_warning: string | null;
   providers: {
     openai: ProviderStatus;
     anthropic: ProviderStatus;

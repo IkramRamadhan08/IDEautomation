@@ -227,3 +227,32 @@ def list_agent_memory_chunks(*, project_root: str, limit: int = 240) -> list[dic
         return None
     data = getattr(res, "data", None)
     return data if isinstance(data, list) else []
+
+
+def get_agent_memory_chunks_summary(*, project_root: str, limit: int = 1000) -> dict[str, Any] | None:
+    rows = list_agent_memory_chunks(project_root=project_root, limit=limit)
+    if rows is None:
+        return None
+
+    sources: set[str] = set()
+    latest_updated_at: str | None = None
+    sample_sources: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        source = str(row.get("source_path") or "").strip()
+        updated_at = str(row.get("updated_at") or "").strip() or None
+        if source:
+            sources.add(source)
+            if len(sample_sources) < 6 and source not in sample_sources:
+                sample_sources.append(source)
+        if updated_at and (latest_updated_at is None or updated_at > latest_updated_at):
+            latest_updated_at = updated_at
+
+    return {
+        "project_root": str(project_root or ".").strip() or ".",
+        "chunk_count": len(rows),
+        "source_count": len(sources),
+        "latest_updated_at": latest_updated_at,
+        "sample_sources": sample_sources,
+    }
