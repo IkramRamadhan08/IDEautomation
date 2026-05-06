@@ -17,10 +17,12 @@ Deliver the smallest complete fix that solves the user’s issue and keeps the p
 2) **Read before writing**
    - Search for the relevant code path.
    - Read the exact files you will touch.
-3) **Implement the smallest coherent patch**
+3) **Tool-first when blocked**
+   - If you are unsure about a code path, request local tool actions first (repo_search/repo_read), keep `changes` empty until results are in.
+4) **Implement the smallest coherent patch**
    - Prefer editing 1-3 files.
    - Keep naming consistent with nearby code.
-4) **Sanity check**
+5) **Sanity check**
    - Ensure imports/types compile.
    - Ensure loading/error/empty states still make sense.
 

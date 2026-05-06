@@ -14,12 +14,13 @@ Produce a trustworthy read-only audit or explanation with concrete references (f
 ## Steps
 1) **Classify as inspection**
    - Treat this as read-only unless the user explicitly requests edits.
+   - Output must keep `changes` and `actions` empty.
 2) **Collect evidence (minimum set)**
    - Identify relevant files and read them before concluding.
 3) **Explain with citations**
    - Summarize what the code actually does, list risks/bugs, and point to exact spots.
 4) **Recommend next actions**
-   - Offer 2-3 concrete options, but do not edit anything in inspection mode.
+   - Offer 2-3 concrete options and the smallest implementation plan, but do not edit anything in inspection mode.
 
 ## Tool usage
 - Prefer local tools for repo evidence:

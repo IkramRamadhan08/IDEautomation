@@ -5,39 +5,44 @@
 - Tone: <short style notes>
 
 ## Goal
-<What “done” looks like, in one paragraph.>
+<What “done” looks like. Include quality bar and what must be true when finished.>
 
 ## When to use
 - Use this skill when:
-  - <trigger 1>
-  - <trigger 2>
+  - <trigger phrases, intents, or contexts>
 - Do not use when:
-  - <non-trigger 1>
+  - <when it would cause scope creep or wrong intent>
 
 ## Steps
-1) **Clarify the target**
-   - Restate the concrete outcome and constraints.
+1) **Confirm intent + success criteria**
+   - Restate the target outcome, constraints, and what we will not do.
 2) **Gather evidence (read-only first)**
-   - Identify the minimum files/info needed.
-3) **Decide the smallest viable change / action plan**
-   - Prefer scoped, reversible moves.
+   - Identify the minimum files and facts needed.
+   - Prefer tools before assumptions.
+3) **Decide a plan (bounded)**
+   - Choose the smallest coherent set of changes/actions.
+   - If tools are needed first, return tool actions first and keep `changes` empty.
 4) **Execute**
-   - If tools are needed, request tool actions first and keep `changes` empty until results are in.
+   - Implement with consistent patterns and names.
 5) **Verify**
-   - Check for broken imports, missing references, and user-visible UX states.
+   - Ensure build/preview sanity.
+   - Check UX states (loading/empty/error), a11y basics, and broken imports.
 
 ## Tool usage
 ### Local tools (preferred for repo inspection)
-- `repo_list` → quickly see what exists.
-- `repo_search` → find relevant code paths before editing.
-- `repo_read` → confirm exact file contents.
+- `repo_search` → find entrypoints and call chains.
+- `repo_read` → verify exact file contents.
+- `repo_list` → quick structure view (bounded).
 
 ### MCP (optional)
-- Use MCP only when an MCP server is configured and it materially improves the result.
-- MCP is a protocol layer, not a tool itself. MCP servers expose tools.
+- MCP is a protocol layer to connect to external tools/data sources.
+- Use MCP only when a server is configured and it materially improves the result.
+
+### Shell (suggestions only)
+- Use `shell` actions only when truly needed (install/build/lint). Keep them minimal.
 
 ## Guardrails
-- Default to **read-only** until you have enough evidence.
-- Do not invent files/paths/APIs without verifying via repo tools.
-- If the user asked for an audit/review/explain/check, keep `changes` and `actions` empty.
-- Keep actions bounded (avoid tool loops, avoid broad scans).
+- Default to evidence-based work, no guessing.
+- Keep scope aligned to the user’s request and the current intent (inspection vs command).
+- Capability honesty: do not claim runtimes/tools exist unless verified.
+- Keep tool loops bounded and avoid broad scans.

@@ -13,7 +13,7 @@ Keep the agent honest about what exists: tools, MCP connections, skills, and wha
 
 ## Steps
 1) **Name the layer**
-   - Tools: callable interfaces the agent is allowed to invoke.
+   - Tools: callable interfaces the agent is allowed to invoke (local `tool` actions, MCP-exposed tools, etc.).
    - MCP: a protocol layer to connect to external tools/data sources (servers expose tools).
    - Skills: higher-level workflows (instructions + prompting + decision logic + optional tools).
 2) **Verify availability**
