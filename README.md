@@ -102,7 +102,7 @@ Jadi frontend dan API sudah diarahkan untuk deploy serverless di Vercel.
 
 ### 3. Isi environment variables di Vercel
 
-Minimal isi ini:
+Minimal isi ini (baik di Vercel env maupun root `.env` lokal):
 
 ```env
 VITE_SUPABASE_URL=...
@@ -140,6 +140,7 @@ Backend sekarang punya jalur readiness biar nggak nebak-nebak:
 - `POST /api/supabase/rag/sync` dengan body `{ "project_root": "." }`
 
 Kalau status bilang `missing`, artinya koneksi Supabase ada tapi tabel `public.agent_memory_chunks` belum dibikin.
+Kalau status masih `unconfigured` tapi auth frontend sudah hidup, biasanya yang kurang adalah `SUPABASE_SERVICE_ROLE_KEY`, jadi login bisa siap tapi sync RAG/backend persistence belum live.
 
 ### 4. Deploy
 

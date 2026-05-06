@@ -37,10 +37,12 @@ class Settings(BaseModel):
     anthropic_api_key_set: bool = False
     openrouter_api_key_set: bool = False
     supabase_url: str | None = None
+    supabase_frontend_ready: bool = False
     supabase_anon_key_set: bool = False
     supabase_service_role_key: str | None = None
     supabase_service_role_key_set: bool = False
     supabase_enabled: bool = False
+    supabase_missing_env: list[str] = []
 
 
 def load_settings() -> Settings:
@@ -55,6 +57,13 @@ def load_settings() -> Settings:
         if v is None:
             return default
         return v
+
+    def first_non_empty(*keys: str) -> str | None:
+        for key in keys:
+            value = str(g(key, "") or "").strip()
+            if value:
+                return value
+        return None
 
     raw_provider = str(g("LLM_PROVIDER", "") or "").strip().lower()
     if raw_provider == "openai-codex":
@@ -88,6 +97,19 @@ def load_settings() -> Settings:
             return default
         return max(0, value)
 
+    supabase_url = first_non_empty("SUPABASE_URL", "VITE_SUPABASE_URL")
+    supabase_anon_key = first_non_empty("SUPABASE_ANON_KEY", "VITE_SUPABASE_ANON_KEY")
+    supabase_service_role_key = first_non_empty("SUPABASE_SERVICE_ROLE_KEY")
+    supabase_frontend_ready = bool(supabase_url and supabase_anon_key)
+    supabase_enabled = bool(supabase_url and supabase_service_role_key)
+    supabase_missing_env: list[str] = []
+    if not supabase_url:
+        supabase_missing_env.append("SUPABASE_URL or VITE_SUPABASE_URL")
+    if not supabase_anon_key:
+        supabase_missing_env.append("VITE_SUPABASE_ANON_KEY")
+    if not supabase_service_role_key:
+        supabase_missing_env.append("SUPABASE_SERVICE_ROLE_KEY")
+
     return Settings(
         default_workspace=(g("DEFAULT_WORKSPACE", "") or "").strip() or None,
         llm_provider=llm_provider,  # type: ignore[arg-type]
@@ -105,11 +127,13 @@ def load_settings() -> Settings:
         openai_api_key_set=bool((g("OPENAI_API_KEY", "") or "").strip()),
         anthropic_api_key_set=bool((g("ANTHROPIC_API_KEY", "") or "").strip()),
         openrouter_api_key_set=bool((g("OPENROUTER_API_KEY", "") or "").strip()),
-        supabase_url=(g("SUPABASE_URL", "") or "").strip() or None,
-        supabase_anon_key_set=bool((g("SUPABASE_ANON_KEY", "") or "").strip()),
-        supabase_service_role_key=(g("SUPABASE_SERVICE_ROLE_KEY", "") or "").strip() or None,
-        supabase_service_role_key_set=bool((g("SUPABASE_SERVICE_ROLE_KEY", "") or "").strip()),
-        supabase_enabled=bool((g("SUPABASE_URL", "") or "").strip() and (g("SUPABASE_SERVICE_ROLE_KEY", "") or "").strip()),
+        supabase_url=supabase_url,
+        supabase_frontend_ready=supabase_frontend_ready,
+        supabase_anon_key_set=bool(supabase_anon_key),
+        supabase_service_role_key=supabase_service_role_key,
+        supabase_service_role_key_set=bool(supabase_service_role_key),
+        supabase_enabled=supabase_enabled,
+        supabase_missing_env=supabase_missing_env,
     )
 
 

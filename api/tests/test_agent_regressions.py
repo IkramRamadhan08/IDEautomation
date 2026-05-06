@@ -11,6 +11,7 @@ from api.agent_mcp import MCPToolInfo, suggest_mcp_actions
 from api.agent_memory import retrieve_agent_memory
 from api.hybrid import build_hybrid_seed
 from api.main import _build_quality_checks, _extract_preview_snapshot_from_html, agent_capabilities, supabase_rag_status
+from api.settings import load_settings
 
 
 class AgentIntentRegressionTests(unittest.TestCase):
@@ -205,6 +206,24 @@ class SupabaseReadinessRegressionTests(unittest.TestCase):
         self.assertFalse(status["live_ready"])
         self.assertEqual(status["table_status"], "missing")
         self.assertIn("agent_memory_chunks", status["warning"])
+
+    def test_settings_detect_frontend_supabase_even_without_service_role(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "VITE_SUPABASE_URL": "https://demo.supabase.co",
+                "VITE_SUPABASE_ANON_KEY": "anon-demo-key",
+            },
+            clear=True,
+        ), patch("api.settings.load_env", return_value=None), patch("api.settings.dotenv_values", return_value={}):
+            settings = load_settings()
+
+        self.assertEqual(settings.supabase_url, "https://demo.supabase.co")
+        self.assertTrue(settings.supabase_frontend_ready)
+        self.assertFalse(settings.supabase_enabled)
+        self.assertTrue(settings.supabase_anon_key_set)
+        self.assertTrue(settings.supabase_missing_env)
+        self.assertIn("SUPABASE_SERVICE_ROLE_KEY", settings.supabase_missing_env)
 
 
 class TranscriptPurityRegressionTests(unittest.TestCase):

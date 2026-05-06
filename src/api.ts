@@ -65,11 +65,13 @@ export type SettingsInfo = {
   anthropic_api_key_set: boolean;
   openrouter_api_key_set: boolean;
   supabase_url: string | null;
+  supabase_frontend_ready: boolean;
   supabase_anon_key_set: boolean;
   supabase_service_role_key_set: boolean;
   supabase_enabled: boolean;
   supabase_rag_status: "unconfigured" | "ready" | "missing" | "error";
   supabase_warning: string | null;
+  supabase_missing_env: string[];
   providers: {
     openai: ProviderStatus;
     anthropic: ProviderStatus;

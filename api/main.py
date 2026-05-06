@@ -1636,12 +1636,16 @@ def supabase_rag_status(project_root: str = "."):
     proj_root = (project_root or ".").strip() or "."
     project_dir = safe_join(ws_root, proj_root)
     supabase_enabled = has_supabase()
+    frontend_auth_ready = bool(getattr(settings_mod.settings, "supabase_frontend_ready", False))
+    missing_env = list(getattr(settings_mod.settings, "supabase_missing_env", []) or [])
     table_status = get_agent_memory_chunks_table_status(refresh=True) if supabase_enabled else "unconfigured"
     summary = get_agent_memory_chunks_summary(project_root=proj_root, limit=1000) if supabase_enabled and table_status == "ready" else None
 
     warning = None
-    if not supabase_enabled:
-        warning = "SUPABASE_URL atau SUPABASE_SERVICE_ROLE_KEY belum lengkap di backend ini."
+    if frontend_auth_ready and not supabase_enabled:
+        warning = "Frontend Supabase udah siap, tapi backend belum punya SUPABASE_SERVICE_ROLE_KEY. Login bisa jalan, tapi RAG sync dan persistence backend belum live."
+    elif not supabase_enabled:
+        warning = "Setup Supabase belum lengkap di backend ini."
     elif table_status == "missing":
         warning = "Tabel public.agent_memory_chunks belum ada. Jalankan docs/supabase-agent-rag.sql di Supabase SQL editor dulu."
     elif table_status == "error":
@@ -1652,6 +1656,8 @@ def supabase_rag_status(project_root: str = "."):
         "project_root": proj_root,
         "project_exists": project_dir.exists() and project_dir.is_dir(),
         "supabase_enabled": supabase_enabled,
+        "frontend_auth_ready": frontend_auth_ready,
+        "missing_env": missing_env,
         "table_status": table_status,
         "live_ready": bool(supabase_enabled and table_status == "ready"),
         "warning": warning,
