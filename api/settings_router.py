@@ -9,6 +9,7 @@ from api.auth_identity import resolve_request_user
 from api.supabase_store import get_agent_memory_chunks_table_status, has_supabase
 from api.preferences import UserPreferencesUpdateReq, upsert_user_preferences
 from api.secrets_store import delete_provider_secret, upsert_provider_secret
+import os
 
 
 class ProviderStatus(BaseModel):
@@ -88,6 +89,10 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
             supabase_warning = "Supabase udah nyambung, tapi tabel public.agent_memory_chunks belum dibuat. Jalankan docs/supabase-agent-rag.sql dulu."
         elif supabase_rag_status == "error":
             supabase_warning = "Supabase kebaca, tapi backend belum bisa verifikasi tabel agent_memory_chunks sekarang."
+
+        if has_supabase() and not (os.getenv("VOICEIDE_SECRET_KEY") or "").strip():
+            extra = "Hosted provider secret storage belum aktif (VOICEIDE_SECRET_KEY belum di-set). BYOK key akan disimpan ke .env di mode lokal."
+            supabase_warning = f"{supabase_warning} {extra}".strip() if supabase_warning else extra
         return SettingsInfo(
             default_workspace=s.default_workspace,
             llm_provider=s.llm_provider,
@@ -137,10 +142,17 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
         user = resolve_request_user(authorization=authorization, x_voiceide_user=x_voiceide_user)
         changed: list[str] = []
 
-        hosted_mode = has_supabase() and user.auth_source == "supabase"
+        secrets_ready = has_supabase() and bool((os.getenv("VOICEIDE_SECRET_KEY") or "").strip())
+        hosted_mode = secrets_ready and user.auth_source == "supabase"
         has_secret_updates = any(
             value is not None for value in [req.openai_api_key, req.anthropic_api_key, req.openrouter_api_key]
         )
+        storage_note = None
+        if user.auth_source == "supabase" and has_secret_updates and not secrets_ready:
+            storage_note = (
+                "Supabase login terdeteksi, tapi hosted secret storage belum siap (VOICEIDE_SECRET_KEY belum di-set). "
+                "Jadi API key disimpan ke .env (local/dev) bukan per-akun."
+            )
 
         if hosted_mode:
             try:
@@ -235,6 +247,6 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
             changed.append(env_key)
 
         reload_settings()
-        return {"ok": True, "changed": changed, "storage": "env"}
+        return {"ok": True, "changed": changed, "storage": "env", "note": storage_note}
 
     return router
