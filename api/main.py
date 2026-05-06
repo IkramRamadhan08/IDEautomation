@@ -2030,6 +2030,10 @@ def _run_agent_impl(req: AgentReq, event_cb=None):
 def agent(req: AgentReq):
     """Suggest a multi-file patch. Adds per-file unified diffs."""
     if req.stream:
+        bound_session_id = CURRENT_SESSION_ID.get()
+        bound_user_id = CURRENT_USER_ID.get()
+        bound_profile_id = CURRENT_PROFILE_ID.get()
+
         def event_stream():
             import queue as queue_mod
 
@@ -2039,6 +2043,9 @@ def agent(req: AgentReq):
                 stream_queue.put(f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n")
 
             def worker():
+                session_token = CURRENT_SESSION_ID.set(bound_session_id)
+                user_token = CURRENT_USER_ID.set(bound_user_id)
+                profile_token = CURRENT_PROFILE_ID.set(bound_profile_id)
                 push("status", {"phase": "queued", "message": "Agent diterima, mulai jalan..."})
                 try:
                     _run_agent_impl(req, event_cb=push)
@@ -2047,6 +2054,9 @@ def agent(req: AgentReq):
                 except Exception as exc:
                     push("error", {"message": str(exc)})
                 finally:
+                    CURRENT_PROFILE_ID.reset(profile_token)
+                    CURRENT_USER_ID.reset(user_token)
+                    CURRENT_SESSION_ID.reset(session_token)
                     stream_queue.put(None)
 
             threading.Thread(target=worker, daemon=True).start()

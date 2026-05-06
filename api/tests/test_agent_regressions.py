@@ -17,13 +17,14 @@ from api.agent_tools import execute_local_tool
 from api.auth_identity import AuthenticatedUser
 from api.auth_policy import require_hosted_user
 from api.hybrid import build_hybrid_seed
-from api.main import _build_quality_checks, _extract_preview_snapshot_from_html, agent_capabilities, supabase_rag_status
+from api.main import _build_quality_checks, _extract_preview_snapshot_from_html, agent_capabilities, app as main_app, supabase_rag_status
 from api.preferences import UserPreferencesRecord
 from api.preferences_router import build_preferences_router
 from api.secrets_store import get_provider_secret, has_provider_secret
 from api.settings import load_settings
 from api.settings_router import build_settings_router
 from api.supabase_store import upsert_profile
+from api.oauth_runtime import CURRENT_PROFILE_ID
 
 
 class AgentIntentRegressionTests(unittest.TestCase):
@@ -431,6 +432,24 @@ class HybridSeedRegressionTests(unittest.TestCase):
 
 
 class HostedProfileIdRegressionTests(unittest.TestCase):
+    def test_streaming_agent_keeps_profile_context_in_worker_thread(self) -> None:
+        seen_profile_ids: list[str | None] = []
+
+        def fake_run_agent_impl(req, event_cb=None):
+            seen_profile_ids.append(CURRENT_PROFILE_ID.get())
+            if event_cb:
+                event_cb("done", {"result": {"ok": True, "reply": "hi", "actions": [], "changes": [], "trace": {"passes": 1, "memory_hits": [], "skills": [], "mcp_servers": [], "mcp_tools_used": [], "warnings": []}}})
+            return {"ok": True}
+
+        with patch("api.main.resolve_request_user", return_value=AuthenticatedUser(user_id="sb-user-123", auth_source="supabase", supabase_user_id="00000000-0000-0000-0000-000000000123")), \
+            patch("api.main._run_agent_impl", side_effect=fake_run_agent_impl):
+            client = TestClient(main_app)
+            with client.stream("POST", "/api/agent", json={"input": "hello", "stream": True}, headers={"Authorization": "Bearer test-token", "X-VoiceIDE-Session": "sess-1"}) as resp:
+                self.assertEqual(resp.status_code, 200)
+                list(resp.iter_text())
+
+        self.assertEqual(seen_profile_ids, ["sb-user-123"])
+
     def test_upsert_profile_migrates_legacy_uuid_profile_to_internal_id(self) -> None:
         class FakeResponse:
             def __init__(self, data):
