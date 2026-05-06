@@ -4,11 +4,12 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from api.agent_intent import classify_agent_intent
-from api.agent_mcp import MCPToolInfo, suggest_mcp_actions
+from api.agent_mcp import MCPServerInfo, MCPToolCallResult, MCPToolInfo, discover_mcp_servers, execute_mcp_tool, suggest_mcp_actions
 from api.agent_memory import retrieve_agent_memory
+from api.agent_skills import detect_project_stack, resolve_agent_skills
 from api.hybrid import build_hybrid_seed
 from api.main import _build_quality_checks, _extract_preview_snapshot_from_html, agent_capabilities, supabase_rag_status
 from api.settings import load_settings
@@ -64,6 +65,47 @@ class MemoryRetrievalRegressionTests(unittest.TestCase):
             self.assertGreaterEqual(len(hits.long_term), 1)
             self.assertIn("rag.md", hits.long_term[0].source)
             self.assertIn("LONG-TERM MEMORY (local-hash-vector-chunks)", hits.prompt)
+
+    def test_supabase_vector_memory_retrieval_uses_remote_chunks_when_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            docs_dir = project_dir / "docs"
+            docs_dir.mkdir(parents=True)
+            (docs_dir / "local.md").write_text("Local doc about supabase RAG.", encoding="utf-8")
+
+            remote_rows = [
+                {
+                    "project_root": "demo",
+                    "source_path": "docs/remote.md",
+                    "title": "Remote",
+                    "content": "Supabase RAG remote chunk about vector retrieval and tool calling.",
+                    "chunk_index": 0,
+                    "chunk_count": 1,
+                    "content_hash": "hash1",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                }
+            ]
+
+            with patch("api.agent_memory.has_supabase", return_value=True), \
+                patch("api.agent_memory.get_agent_memory_chunks_table_status", return_value="ready"), \
+                patch("api.agent_memory._sync_supabase_doc_chunks", return_value=True), \
+                patch("api.agent_memory.list_agent_memory_chunks", return_value=remote_rows):
+                hits = retrieve_agent_memory(
+                    ws_root,
+                    project_dir=project_dir,
+                    project_root="demo",
+                    interaction_kind="inspection",
+                    query="vector retrieval supabase rag",
+                    active_rel="src/App.tsx",
+                    open_files=["src/App.tsx"],
+                    limit_long=2,
+                )
+
+        self.assertEqual(hits.backend, "supabase-hash-vector-chunks")
+        self.assertTrue(hits.long_term)
+        self.assertEqual(hits.long_term[0].source, "docs/remote.md")
+        self.assertIn("LONG-TERM MEMORY (supabase-hash-vector-chunks)", hits.prompt)
 
 
 class PreviewAuditRegressionTests(unittest.TestCase):
@@ -136,6 +178,150 @@ class MCPHintRegressionTests(unittest.TestCase):
         self.assertIn(("browser", "browser_audit"), action_pairs)
         self.assertIn(("repo", "search_code"), action_pairs)
         self.assertNotIn(("browser", "take_screenshot"), action_pairs)
+
+    def test_execute_mcp_tool_forwards_function_call_arguments(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            project_dir.mkdir(parents=True)
+            server = MCPServerInfo(
+                name="repo",
+                transport="stdio",
+                target="repo-server",
+                tools=["search_code"],
+                source="test",
+                command="repo-server",
+            )
+            expected = MCPToolCallResult(
+                server="repo",
+                tool="search_code",
+                arguments={"query": "supabase rag"},
+                ok=True,
+                text="found matches",
+                raw={"content": [{"type": "text", "text": "found matches"}]},
+                duration_ms=12,
+                error=None,
+            )
+
+            with patch("api.agent_mcp._resolve_server", return_value=server), \
+                patch("api.agent_mcp._call_tool_async", new=AsyncMock(return_value=expected)) as call_tool:
+                result = execute_mcp_tool(
+                    ws_root,
+                    project_dir,
+                    server_name="repo",
+                    tool_name="search_code",
+                    arguments={"query": "supabase rag"},
+                )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.text, "found matches")
+        call_tool.assert_awaited_once()
+        await_args = call_tool.await_args.args
+        self.assertEqual(await_args[0].name, "repo")
+        self.assertEqual(await_args[1], "search_code")
+        self.assertEqual(await_args[2], {"query": "supabase rag"})
+
+
+class AgentToolsRegressionTests(unittest.TestCase):
+    def test_discover_mcp_servers_parses_configs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            project_dir.mkdir(parents=True)
+            cfg_dir = ws_root / ".voiceide"
+            cfg_dir.mkdir(parents=True)
+            (cfg_dir / "mcp.json").write_text(
+                json.dumps(
+                    {
+                        "servers": {
+                            "repo": {
+                                "command": "repo-server",
+                                "args": ["--fast"],
+                                "tools": ["search_code"],
+                            },
+                            "browser": {
+                                "url": "http://localhost:1234/mcp",
+                                "tools": ["browser_audit"],
+                            },
+                            "off": {
+                                "command": "nope",
+                                "enabled": False,
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            warnings: list[str] = []
+            servers = discover_mcp_servers(ws_root, project_dir, warnings=warnings)
+
+        names = {s.name for s in servers}
+        self.assertIn("repo", names)
+        self.assertIn("browser", names)
+        self.assertNotIn("off", names)
+        repo = next(s for s in servers if s.name == "repo")
+        self.assertEqual(repo.transport, "stdio")
+        browser = next(s for s in servers if s.name == "browser")
+        self.assertEqual(browser.transport, "http")
+
+    def test_detect_project_stack_component_and_browser_signals(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            project_dir.mkdir(parents=True)
+            (project_dir / "package.json").write_text(
+                json.dumps(
+                    {
+                        "name": "demo",
+                        "dependencies": {
+                            "@radix-ui/react-dialog": "^1.0.0",
+                            "react": "^19.0.0",
+                        },
+                        "devDependencies": {
+                            "@playwright/test": "^1.59.0",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            stack = detect_project_stack(project_dir)
+
+        self.assertIn("radix-ui", stack.component_libraries)
+        self.assertTrue(stack.has_playwright)
+        self.assertTrue(stack.has_headless_browser)
+
+    def test_resolve_agent_skills_prefers_component_library_skills_when_detected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            project_dir.mkdir(parents=True)
+            (project_dir / "package.json").write_text(
+                json.dumps(
+                    {
+                        "name": "demo",
+                        "dependencies": {
+                            "@radix-ui/react-dialog": "^1.0.0",
+                            "react": "^19.0.0",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            skills = resolve_agent_skills(
+                ws_root,
+                project_dir=project_dir,
+                query="use existing components and improve dialog accessibility",
+                build_mode="full-agent",
+                active_rel="src/App.tsx",
+                preview_url=None,
+                limit=6,
+            )
+            skill_ids = {s.skill_id for s in skills}
+
+        self.assertIn("component-library-awareness", skill_ids)
+        self.assertIn("project-component-libraries", skill_ids)
 
 
 class HybridSeedRegressionTests(unittest.TestCase):
@@ -228,6 +414,8 @@ class CapabilityHonestyRegressionTests(unittest.TestCase):
         self.assertIn("agent_memory_chunks", caps["memory"]["supabase_warning"])
         self.assertTrue(caps["supports"]["vector_memory_retrieval"])
         self.assertTrue(caps["supports"]["preview_quality_checks"])
+        self.assertIn("mcp", caps["supports"]["tool_actions"])
+        self.assertIn("shell", caps["supports"]["tool_actions"])
 
 
 class SupabaseReadinessRegressionTests(unittest.TestCase):
