@@ -164,9 +164,9 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
 
         if hosted_mode:
             try:
-                secret_profile_id = (user.supabase_user_id or "").strip()
+                secret_profile_id = (user.user_id or "").strip()
                 if not secret_profile_id:
-                    raise HTTPException(400, "Hosted secret storage membutuhkan login Supabase yang valid.")
+                    raise HTTPException(400, "Hosted secret storage membutuhkan profile internal yang valid.")
 
                 if req.openai_api_key is not None:
                     key = req.openai_api_key.strip()
@@ -190,7 +190,7 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
                         delete_provider_secret(profile_id=secret_profile_id, provider="openrouter")
                     changed.append("openrouter_api_key")
 
-                pref_profile_id = user.supabase_user_id or user.user_id
+                pref_profile_id = user.user_id
                 pref_req = UserPreferencesUpdateReq(
                     llm_provider=req.llm_provider,
                     build_mode=req.build_mode,

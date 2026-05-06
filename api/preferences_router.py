@@ -20,12 +20,12 @@ def build_preferences_router():
 
     @router.get("/user", response_model=UserPreferencesResp)
     def get_user_preferences_route(user=Depends(require_hosted_user)):
-        profile_id = user.supabase_user_id or user.user_id
+        profile_id = user.user_id
         return UserPreferencesResp(preferences=get_user_preferences(profile_id=profile_id))
 
     @router.put("/user", response_model=UserPreferencesResp)
     def update_user_preferences_route(req: UserPreferencesUpdateReq, user=Depends(require_hosted_user)):
-        profile_id = user.supabase_user_id or user.user_id
+        profile_id = user.user_id
         return UserPreferencesResp(preferences=upsert_user_preferences(profile_id=profile_id, req=req))
 
     @router.get("/projects/{project_id}", response_model=ProjectPreferencesResp)

@@ -6,14 +6,22 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 from api.agent_intent import classify_agent_intent
 from api.agent_mcp import MCPServerInfo, MCPToolCallResult, MCPToolInfo, discover_mcp_servers, execute_mcp_tool, suggest_mcp_actions
 from api.agent_memory import retrieve_agent_memory
 from api.agent_skills import detect_project_stack, resolve_agent_skills
 from api.agent_tools import execute_local_tool
+from api.auth_identity import AuthenticatedUser
+from api.auth_policy import require_hosted_user
 from api.hybrid import build_hybrid_seed
 from api.main import _build_quality_checks, _extract_preview_snapshot_from_html, agent_capabilities, supabase_rag_status
+from api.preferences import UserPreferencesRecord
+from api.preferences_router import build_preferences_router
 from api.settings import load_settings
+from api.settings_router import build_settings_router
 
 
 class AgentIntentRegressionTests(unittest.TestCase):
@@ -418,6 +426,41 @@ class HybridSeedRegressionTests(unittest.TestCase):
         self.assertNotIn("demo/src/pages/Workspace.tsx", files)
         self.assertNotIn("demo/src/pages/Integrations.tsx", files)
         self.assertNotIn("demo/src/pages/AppSettings.tsx", files)
+
+
+class HostedProfileIdRegressionTests(unittest.TestCase):
+    def test_hosted_settings_save_uses_internal_profile_id_for_secrets_and_preferences(self) -> None:
+        app = FastAPI()
+        app.include_router(build_settings_router(session_state=lambda: {"workspace": None}, env_set=lambda *_args, **_kwargs: None, env_unset=lambda *_args, **_kwargs: None, reload_settings=lambda: None))
+
+        saved_secret_profile_ids: list[str] = []
+        saved_pref_profile_ids: list[str] = []
+
+        with patch("api.settings_router.resolve_request_user", return_value=AuthenticatedUser(user_id="sb-user-123", auth_source="supabase", supabase_user_id="00000000-0000-0000-0000-000000000123")), \
+            patch("api.settings_router.has_supabase", return_value=True), \
+            patch("api.settings_router.os.getenv", side_effect=lambda key, default=None: "secret-ready" if key == "VOICEIDE_SECRET_KEY" else default), \
+            patch("api.settings_router.upsert_provider_secret", side_effect=lambda profile_id, provider, api_key: saved_secret_profile_ids.append(profile_id)), \
+            patch("api.settings_router.upsert_user_preferences", side_effect=lambda profile_id, req: saved_pref_profile_ids.append(profile_id)):
+            client = TestClient(app)
+            resp = client.put("/api/settings", json={"llm_provider": "openai", "openai_api_key": "sk-demo"})
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(saved_secret_profile_ids, ["sb-user-123"])
+        self.assertEqual(saved_pref_profile_ids, ["sb-user-123"])
+
+    def test_hosted_preferences_router_uses_internal_profile_id(self) -> None:
+        app = FastAPI()
+        app.include_router(build_preferences_router())
+        app.dependency_overrides[require_hosted_user] = lambda: AuthenticatedUser(user_id="sb-user-123", auth_source="supabase", supabase_user_id="00000000-0000-0000-0000-000000000123")
+
+        seen_profile_ids: list[str] = []
+
+        with patch("api.preferences_router.get_user_preferences", side_effect=lambda profile_id: seen_profile_ids.append(profile_id) or UserPreferencesRecord(profile_id=profile_id)):
+            client = TestClient(app)
+            resp = client.get("/api/preferences/user")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(seen_profile_ids, ["sb-user-123"])
 
 
 class CapabilityHonestyRegressionTests(unittest.TestCase):
