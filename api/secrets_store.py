@@ -14,6 +14,13 @@ from api.supabase_store import get_supabase_admin, has_supabase
 SECRET_TABLE = "user_provider_secrets"
 
 
+def _legacy_profile_id(profile_id: str) -> str | None:
+    value = str(profile_id or "").strip()
+    if value.startswith("sb-") and len(value) > 3:
+        return value[3:]
+    return None
+
+
 def _require_supabase() -> Any:
     if not has_supabase():
         raise HTTPException(503, "Supabase must be configured for hosted secrets")
@@ -52,6 +59,9 @@ def upsert_provider_secret(*, profile_id: str, provider: str, api_key: str) -> N
     }
     try:
         client.table(SECRET_TABLE).upsert(payload).execute()
+        legacy_profile_id = _legacy_profile_id(profile_id)
+        if legacy_profile_id and legacy_profile_id != profile_id:
+            client.table(SECRET_TABLE).delete().eq("profile_id", legacy_profile_id).eq("provider", provider).execute()
     except Exception as exc:
         raise HTTPException(400, f"Could not store provider secret: {exc}")
 
@@ -60,6 +70,9 @@ def delete_provider_secret(*, profile_id: str, provider: str) -> None:
     client = _require_supabase()
     try:
         client.table(SECRET_TABLE).delete().eq("profile_id", profile_id).eq("provider", provider).execute()
+        legacy_profile_id = _legacy_profile_id(profile_id)
+        if legacy_profile_id and legacy_profile_id != profile_id:
+            client.table(SECRET_TABLE).delete().eq("profile_id", legacy_profile_id).eq("provider", provider).execute()
     except Exception as exc:
         raise HTTPException(400, f"Could not delete provider secret: {exc}")
 
@@ -68,9 +81,29 @@ def get_provider_secret(*, profile_id: str, provider: str) -> str | None:
     client = _require_supabase()
     res = client.table(SECRET_TABLE).select("secret_ciphertext").eq("profile_id", profile_id).eq("provider", provider).limit(1).execute()
     data = getattr(res, "data", None) or []
-    if not data:
+    row = data[0] if data and isinstance(data[0], dict) else None
+
+    if not row:
+        legacy_profile_id = _legacy_profile_id(profile_id)
+        if legacy_profile_id and legacy_profile_id != profile_id:
+            legacy_res = client.table(SECRET_TABLE).select("secret_ciphertext").eq("profile_id", legacy_profile_id).eq("provider", provider).limit(1).execute()
+            legacy_data = getattr(legacy_res, "data", None) or []
+            legacy_row = legacy_data[0] if legacy_data and isinstance(legacy_data[0], dict) else None
+            if legacy_row:
+                row = legacy_row
+                ciphertext = str(legacy_row.get("secret_ciphertext") or "").strip()
+                if ciphertext:
+                    try:
+                        client.table(SECRET_TABLE).upsert({
+                            "profile_id": profile_id,
+                            "provider": provider,
+                            "secret_ciphertext": ciphertext,
+                        }).execute()
+                    except Exception:
+                        pass
+
+    if not row:
         return None
-    row = data[0] if isinstance(data[0], dict) else {}
     ciphertext = str(row.get("secret_ciphertext") or "").strip()
     if not ciphertext:
         return None
@@ -81,4 +114,11 @@ def has_provider_secret(*, profile_id: str, provider: str) -> bool:
     client = _require_supabase()
     res = client.table(SECRET_TABLE).select("profile_id").eq("profile_id", profile_id).eq("provider", provider).limit(1).execute()
     data = getattr(res, "data", None) or []
-    return bool(data)
+    if data:
+        return True
+    legacy_profile_id = _legacy_profile_id(profile_id)
+    if legacy_profile_id and legacy_profile_id != profile_id:
+        legacy_res = client.table(SECRET_TABLE).select("profile_id").eq("profile_id", legacy_profile_id).eq("provider", provider).limit(1).execute()
+        legacy_data = getattr(legacy_res, "data", None) or []
+        return bool(legacy_data)
+    return False

@@ -20,6 +20,7 @@ from api.hybrid import build_hybrid_seed
 from api.main import _build_quality_checks, _extract_preview_snapshot_from_html, agent_capabilities, supabase_rag_status
 from api.preferences import UserPreferencesRecord
 from api.preferences_router import build_preferences_router
+from api.secrets_store import get_provider_secret, has_provider_secret
 from api.settings import load_settings
 from api.settings_router import build_settings_router
 from api.supabase_store import upsert_profile
@@ -513,6 +514,91 @@ class HostedProfileIdRegressionTests(unittest.TestCase):
         self.assertEqual(fake_client.rows["sb-user-123"]["supabase_user_id"], "00000000-0000-0000-0000-000000000123")
         self.assertIsNone(fake_client.rows["00000000-0000-0000-0000-000000000123"]["supabase_user_id"])
         self.assertEqual(fake_client.rows["sb-user-123"]["display_name"], "Legacy User")
+
+    def test_get_provider_secret_reads_and_migrates_legacy_uuid_secret(self) -> None:
+        class FakeResponse:
+            def __init__(self, data):
+                self.data = data
+
+        class FakeSecretQuery:
+            def __init__(self, client, op="select"):
+                self.client = client
+                self.op = op
+                self.payload = None
+                self.filters: dict[str, str] = {}
+                self._limit = None
+
+            def select(self, _fields: str):
+                self.op = "select"
+                return self
+
+            def eq(self, key: str, value: str):
+                self.filters[key] = value
+                return self
+
+            def limit(self, value: int):
+                self._limit = value
+                return self
+
+            def upsert(self, payload):
+                self.op = "upsert"
+                self.payload = payload
+                return self
+
+            def delete(self):
+                self.op = "delete"
+                return self
+
+            def execute(self):
+                if self.op == "select":
+                    rows = [
+                        row for row in self.client.rows
+                        if all(str(row.get(k)) == str(v) for k, v in self.filters.items())
+                    ]
+                    if self._limit is not None:
+                        rows = rows[: self._limit]
+                    return FakeResponse(rows)
+                if self.op == "upsert":
+                    payload = dict(self.payload or {})
+                    self.client.rows = [
+                        row for row in self.client.rows
+                        if not (
+                            str(row.get("profile_id")) == str(payload.get("profile_id"))
+                            and str(row.get("provider")) == str(payload.get("provider"))
+                        )
+                    ]
+                    self.client.rows.append(payload)
+                    return FakeResponse([payload])
+                if self.op == "delete":
+                    self.client.rows = [
+                        row for row in self.client.rows
+                        if not all(str(row.get(k)) == str(v) for k, v in self.filters.items())
+                    ]
+                    return FakeResponse([])
+                raise AssertionError(f"Unexpected op: {self.op}")
+
+        class FakeSecretClient:
+            def __init__(self):
+                self.rows = [
+                    {
+                        "profile_id": "93fba5d6-7247-472b-a028-2ff2af197815",
+                        "provider": "openai",
+                        "secret_ciphertext": "cipher-demo",
+                    }
+                ]
+
+            def table(self, _name: str):
+                return FakeSecretQuery(self)
+
+        fake_client = FakeSecretClient()
+        with patch("api.secrets_store._require_supabase", return_value=fake_client), \
+            patch("api.secrets_store._decrypt", side_effect=lambda value: "sk-demo" if value == "cipher-demo" else None):
+            secret = get_provider_secret(profile_id="sb-93fba5d6-7247-472b-a028-2ff2af197815", provider="openai")
+            has_secret = has_provider_secret(profile_id="sb-93fba5d6-7247-472b-a028-2ff2af197815", provider="openai")
+
+        self.assertEqual(secret, "sk-demo")
+        self.assertTrue(has_secret)
+        self.assertTrue(any(row.get("profile_id") == "sb-93fba5d6-7247-472b-a028-2ff2af197815" for row in fake_client.rows))
 
     def test_hosted_settings_save_uses_internal_profile_id_for_secrets_and_preferences(self) -> None:
         app = FastAPI()
