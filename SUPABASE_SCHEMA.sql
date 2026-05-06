@@ -41,11 +41,11 @@ create table if not exists public.project_members (
   unique (project_id, profile_id)
 );
 
-create table if not exists public.user_preferences (
-  profile_id text primary key references public.profiles(id) on delete cascade,
+create table if not exists public.user_settings (
+  user_id text primary key references public.profiles(id) on delete cascade,
   llm_provider text,
   build_mode text,
-  openai_model text,
+  openai_codex_model text,
   anthropic_model text,
   openrouter_model text,
   created_at timestamptz not null default now(),
@@ -94,9 +94,9 @@ create trigger trg_projects_updated_at
 before update on public.projects
 for each row execute function public.set_updated_at();
 
-drop trigger if exists trg_user_preferences_updated_at on public.user_preferences;
-create trigger trg_user_preferences_updated_at
-before update on public.user_preferences
+drop trigger if exists trg_user_settings_updated_at on public.user_settings;
+create trigger trg_user_settings_updated_at
+before update on public.user_settings
 for each row execute function public.set_updated_at();
 
 drop trigger if exists trg_project_preferences_updated_at on public.project_preferences;
@@ -107,7 +107,7 @@ for each row execute function public.set_updated_at();
 alter table public.profiles enable row level security;
 alter table public.projects enable row level security;
 alter table public.project_members enable row level security;
-alter table public.user_preferences enable row level security;
+alter table public.user_settings enable row level security;
 alter table public.project_preferences enable row level security;
 alter table public.user_provider_secrets enable row level security;
 
@@ -168,21 +168,31 @@ do $$ begin
 exception when duplicate_object then null; end $$;
 
 do $$ begin
-  create policy "user_preferences_select_self" on public.user_preferences
+  create policy "user_settings_select_self" on public.user_settings
     for select using (
       exists (
         select 1 from public.profiles p
-        where p.id = profile_id and p.supabase_user_id::text = auth.uid()::text
+        where p.id = user_id and p.supabase_user_id::text = auth.uid()::text
       )
     );
 exception when duplicate_object then null; end $$;
 
 do $$ begin
-  create policy "user_preferences_update_self" on public.user_preferences
+  create policy "user_settings_insert_self" on public.user_settings
+    for insert with check (
+      exists (
+        select 1 from public.profiles p
+        where p.id = user_id and p.supabase_user_id::text = auth.uid()::text
+      )
+    );
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  create policy "user_settings_update_self" on public.user_settings
     for update using (
       exists (
         select 1 from public.profiles p
-        where p.id = profile_id and p.supabase_user_id::text = auth.uid()::text
+        where p.id = user_id and p.supabase_user_id::text = auth.uid()::text
       )
     );
 exception when duplicate_object then null; end $$;
