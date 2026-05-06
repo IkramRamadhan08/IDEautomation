@@ -1763,6 +1763,20 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "mcp": "MCP (Model Context Protocol) is an interoperability layer to standardize how the agent connects to external data sources and tools. MCP servers expose tools, but MCP itself is not a tool.",
             "skills": "Skills are higher-level workflow abstractions: curated instructions + prompting + decision logic + (optionally) one or more tools/MCP calls, to keep complex agentic work consistent, auditable, and scoped.",
         },
+        "personas": {
+            "clara": {
+                "build_mode": "full-agent",
+                "name": "Clara",
+                "vibe": "autonomous product builder",
+                "default_scope": "broad, end-to-end delivery (preview-ready)",
+            },
+            "raka": {
+                "build_mode": "hybrid",
+                "name": "Raka",
+                "vibe": "live coding copilot",
+                "default_scope": "surgical edits near the active file, preserve user architecture",
+            },
+        },
         "supports": {
             "graph_runtime": True,
             "short_term_memory_rag": True,
