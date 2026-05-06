@@ -22,7 +22,7 @@ export type IdentityInfo = {
 };
 
 export type ProviderStatus = {
-  provider: "openai" | "anthropic" | "openrouter";
+  provider: ProviderChoice;
   connected: boolean;
   hint?: string | null;
   profile_id?: string | null;
@@ -30,25 +30,37 @@ export type ProviderStatus = {
   auth_type?: string | null;
   project_id?: string | null;
   source?: string | null;
+  recommended_model?: string | null;
+  free_tier_models?: string[];
 };
 
 export type BuildMode = "full-agent" | "hybrid";
 
-export type ProviderChoice = "openai" | "anthropic" | "openrouter" | "";
+export type ProviderChoice = "openai" | "anthropic" | "openrouter" | "groq" | "gemini" | "together" | "cerebras" | "xai" | "";
 
 export type SettingsInfo = {
   default_workspace: string | null;
-  llm_provider: "openai" | "anthropic" | "openrouter" | null;
+  llm_provider: Exclude<ProviderChoice, ""> | null;
   build_mode: BuildMode;
   openai_model: string;
   anthropic_model: string;
   openrouter_model: string;
+  groq_model: string;
+  gemini_model: string;
+  together_model: string;
+  cerebras_model: string;
+  xai_model: string;
   friendly_free_tier_mode: boolean;
   agent_refinement_mode: "auto" | "off" | "always";
   agent_min_gap_seconds: number;
   openai_api_key_set: boolean;
   anthropic_api_key_set: boolean;
   openrouter_api_key_set: boolean;
+  groq_api_key_set: boolean;
+  gemini_api_key_set: boolean;
+  together_api_key_set: boolean;
+  cerebras_api_key_set: boolean;
+  xai_api_key_set: boolean;
   supabase_url: string | null;
   supabase_frontend_ready: boolean;
   supabase_anon_key_set: boolean;
@@ -61,6 +73,11 @@ export type SettingsInfo = {
     openai: ProviderStatus;
     anthropic: ProviderStatus;
     openrouter: ProviderStatus;
+    groq: ProviderStatus;
+    gemini: ProviderStatus;
+    together: ProviderStatus;
+    cerebras: ProviderStatus;
+    xai: ProviderStatus;
   };
 };
 
@@ -71,12 +88,22 @@ export type SettingsUpdate = Partial<{
   openai_model: string;
   anthropic_model: string;
   openrouter_model: string;
+  groq_model: string;
+  gemini_model: string;
+  together_model: string;
+  cerebras_model: string;
+  xai_model: string;
   friendly_free_tier_mode: boolean;
   agent_refinement_mode: "auto" | "off" | "always";
   agent_min_gap_seconds: number;
   openai_api_key: string | null;
   anthropic_api_key: string | null;
   openrouter_api_key: string | null;
+  groq_api_key: string | null;
+  gemini_api_key: string | null;
+  together_api_key: string | null;
+  cerebras_api_key: string | null;
+  xai_api_key: string | null;
 }>;
 
 export type UploadedImageAsset = {
@@ -94,6 +121,11 @@ export type UserPreferences = {
   openai_model: string | null;
   anthropic_model: string | null;
   openrouter_model: string | null;
+  groq_model: string | null;
+  gemini_model: string | null;
+  together_model: string | null;
+  cerebras_model: string | null;
+  xai_model: string | null;
 };
 
 export type ProjectPreferences = {

@@ -26,6 +26,7 @@ from api.settings import load_settings
 from api.settings_router import build_settings_router
 from api.supabase_store import upsert_profile
 from api.oauth_runtime import CURRENT_PROFILE_ID
+from api.oauth_runtime import list_models as list_provider_models, provider_catalog
 
 
 class AgentIntentRegressionTests(unittest.TestCase):
@@ -723,6 +724,41 @@ class SupabaseReadinessRegressionTests(unittest.TestCase):
         self.assertTrue(settings.supabase_anon_key_set)
         self.assertTrue(settings.supabase_missing_env)
         self.assertIn("SUPABASE_SERVICE_ROLE_KEY", settings.supabase_missing_env)
+
+
+class ProviderCatalogRegressionTests(unittest.TestCase):
+    def test_openrouter_latest_models_are_first_and_free_models_remain_available(self) -> None:
+        models = list_provider_models("openrouter")
+        catalog = provider_catalog()
+
+        self.assertEqual(models[0], "x-ai/grok-4.3")
+        self.assertEqual(catalog["openrouter"]["recommended_model"], models[0])
+        self.assertTrue(any(model.endswith(":free") for model in catalog["openrouter"]["free_tier_models"]))
+
+    def test_openai_is_familiar_credit_path_not_fake_free_tier(self) -> None:
+        catalog = provider_catalog()
+
+        self.assertEqual(catalog["openai"]["recommended_model"], "gpt-5.5")
+        self.assertEqual(catalog["openai"]["free_tier_models"], [])
+        self.assertIn("trial/account credits", catalog["openai"]["positioning"])
+
+    def test_groq_is_available_as_free_plan_path(self) -> None:
+        models = list_provider_models("groq")
+        catalog = provider_catalog()
+
+        self.assertEqual(catalog["groq"]["recommended_model"], models[0])
+        self.assertTrue(catalog["groq"]["free_tier_models"])
+        self.assertIn("free-plan", catalog["groq"]["positioning"])
+
+    def test_multi_provider_catalog_has_web_builder_choices(self) -> None:
+        catalog = provider_catalog()
+        for provider in ["gemini", "together", "cerebras", "xai"]:
+            models = list_provider_models(provider)
+            self.assertTrue(models, provider)
+            self.assertEqual(catalog[provider]["recommended_model"], models[0])
+
+        self.assertTrue(catalog["gemini"]["free_tier_models"])
+        self.assertTrue(catalog["cerebras"]["free_tier_models"])
 
 
 class WorkspaceBoundaryRegressionTests(unittest.TestCase):

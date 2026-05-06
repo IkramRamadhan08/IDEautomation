@@ -16,6 +16,11 @@ interface SettingsModalProps {
   openaiApiKeyDraft: string;
   anthropicApiKeyDraft: string;
   openrouterApiKeyDraft: string;
+  groqApiKeyDraft: string;
+  geminiApiKeyDraft: string;
+  togetherApiKeyDraft: string;
+  cerebrasApiKeyDraft: string;
+  xaiApiKeyDraft: string;
   models: string[];
   modelsLoading: boolean;
   modelsError: string;
@@ -38,6 +43,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   openaiApiKeyDraft,
   anthropicApiKeyDraft,
   openrouterApiKeyDraft,
+  groqApiKeyDraft,
+  geminiApiKeyDraft,
+  togetherApiKeyDraft,
+  cerebrasApiKeyDraft,
+  xaiApiKeyDraft,
   models,
   modelsLoading,
   modelsError,
@@ -54,6 +64,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const providerKey = llmProviderDraft;
   const providerStatus = providerKey ? settings?.providers?.[providerKey] ?? null : null;
   const modelOptionsId = `model-options-${providerKey || "none"}`;
+  const freeModels = providerStatus?.free_tier_models || [];
 
   return (
     <div className="modalBackdrop" onClick={onClose}>
@@ -106,17 +117,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               onChange={(e) => onLlmProviderChange(e.target.value as ProviderChoice)}
             >
               <option value="">Choose provider…</option>
-              <option value="openai">OpenAI</option>
-              <option value="anthropic">Anthropic</option>
-              <option value="openrouter">OpenRouter</option>
+              <option value="openai">OpenAI - familiar / trial credits</option>
+              <option value="openrouter">OpenRouter - free/cheap models</option>
+              <option value="groq">Groq - fast free plan</option>
+              <option value="gemini">Gemini - Google free quota</option>
+              <option value="together">Together AI - many open models</option>
+              <option value="cerebras">Cerebras - very fast open models</option>
+              <option value="xai">xAI - Grok models</option>
+              <option value="anthropic">Anthropic - careful edits if you have credits</option>
             </select>
             {providerStatus ? (
               <div className="providerStatusLine compactStatusLine">
                 <span className={`providerStatusChip ${providerStatus.connected ? "connected" : "disconnected"}`}>
                   {providerStatus.connected ? "Ready" : "Need key"}
                 </span>
+                {freeModels.length > 0 ? <span className="providerStatusChip connected">Free models</span> : null}
               </div>
             ) : null}
+            {providerStatus?.hint ? <div className="settingsSubtle compactHint">{providerStatus.hint}</div> : null}
           </div>
 
           <div className="settingsSection">
@@ -129,6 +147,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             )}
             {llmProviderDraft === "openrouter" && (
               <input type="password" value={openrouterApiKeyDraft} onChange={(e) => onApiKeyChange("openrouter", e.target.value)} className="settingsInput" placeholder="sk-or-..." />
+            )}
+            {llmProviderDraft === "groq" && (
+              <input type="password" value={groqApiKeyDraft} onChange={(e) => onApiKeyChange("groq", e.target.value)} className="settingsInput" placeholder="gsk_..." />
+            )}
+            {llmProviderDraft === "gemini" && (
+              <input type="password" value={geminiApiKeyDraft} onChange={(e) => onApiKeyChange("gemini", e.target.value)} className="settingsInput" placeholder="AIza..." />
+            )}
+            {llmProviderDraft === "together" && (
+              <input type="password" value={togetherApiKeyDraft} onChange={(e) => onApiKeyChange("together", e.target.value)} className="settingsInput" placeholder="tgp_..." />
+            )}
+            {llmProviderDraft === "cerebras" && (
+              <input type="password" value={cerebrasApiKeyDraft} onChange={(e) => onApiKeyChange("cerebras", e.target.value)} className="settingsInput" placeholder="csk-..." />
+            )}
+            {llmProviderDraft === "xai" && (
+              <input type="password" value={xaiApiKeyDraft} onChange={(e) => onApiKeyChange("xai", e.target.value)} className="settingsInput" placeholder="xai-..." />
             )}
             {!llmProviderDraft ? <div className="settingsSubtle">Pick a provider first.</div> : null}
             {settings?.supabase_enabled ? <div className="settingsSubtle compactHint">Saved per account for this hosted deployment.</div> : null}
@@ -152,7 +185,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               {models.map((model) => <option key={model} value={model}>{model}</option>)}
             </datalist>
             <div className="settingsSubtle compactHint">
-              {modelsLoading ? "Loading…" : modelsError || (models.length > 0 ? `${models.length} model siap dipilih, atau ketik manual.` : "Belum ada model yang dimuat.")}
+              {modelsLoading
+                ? "Loading…"
+                : modelsError
+                  || (freeModels.length > 0
+                    ? `Free-friendly: ${freeModels.slice(0, 2).join(", ")}. Bisa pilih dari list atau ketik manual.`
+                    : providerStatus?.recommended_model
+                      ? `Recommended: ${providerStatus.recommended_model}. Bisa pilih dari list atau ketik manual.`
+                      : models.length > 0 ? `${models.length} model siap dipilih, atau ketik manual.` : "Belum ada model yang dimuat.")}
             </div>
           </div>
 

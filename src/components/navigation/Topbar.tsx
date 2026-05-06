@@ -1,6 +1,6 @@
 import React from "react";
 import { type BuildMode, type IdentityInfo, type ProjectInfo } from "../../types";
-import { FolderOpen, Settings, Play, Command, PanelLeft, PanelRight, CircleDot } from "lucide-react";
+import { FolderOpen, Settings, Play, Command, PanelLeft, PanelRight, CircleDot, Search } from "lucide-react";
 
 interface TopbarProps {
   ws: string | null;
@@ -61,6 +61,12 @@ export const Topbar: React.FC<TopbarProps> = ({
         </span>
         <span className="topbarPath" title={selectedProject}>{selectedProjectInfo?.name || "No project"}</span>
       </div>
+
+      <button className="commandBarButton" type="button" onClick={onOpenSettings} title="Command menu">
+        <Search size={14} />
+        <span>Search settings, models, projects</span>
+        <kbd>⌘K</kbd>
+      </button>
 
       <div className="spacer" />
 

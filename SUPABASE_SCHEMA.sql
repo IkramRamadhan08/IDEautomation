@@ -48,6 +48,11 @@ create table if not exists public.user_settings (
   openai_codex_model text,
   anthropic_model text,
   openrouter_model text,
+  groq_model text,
+  gemini_model text,
+  together_model text,
+  cerebras_model text,
+  xai_model text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

@@ -20,6 +20,11 @@ class UserPreferencesRecord(BaseModel):
     openai_model: str | None = None
     anthropic_model: str | None = None
     openrouter_model: str | None = None
+    groq_model: str | None = None
+    gemini_model: str | None = None
+    together_model: str | None = None
+    cerebras_model: str | None = None
+    xai_model: str | None = None
 
 
 class ProjectPreferencesRecord(BaseModel):
@@ -35,6 +40,11 @@ class UserPreferencesUpdateReq(BaseModel):
     openai_model: str | None = None
     anthropic_model: str | None = None
     openrouter_model: str | None = None
+    groq_model: str | None = None
+    gemini_model: str | None = None
+    together_model: str | None = None
+    cerebras_model: str | None = None
+    xai_model: str | None = None
 
 
 class ProjectPreferencesUpdateReq(BaseModel):
@@ -75,6 +85,11 @@ def get_user_preferences(*, profile_id: str) -> UserPreferencesRecord:
             openai_model=row.get("openai_codex_model"),
             anthropic_model=row.get("anthropic_model"),
             openrouter_model=row.get("openrouter_model"),
+            groq_model=row.get("groq_model"),
+            gemini_model=row.get("gemini_model"),
+            together_model=row.get("together_model"),
+            cerebras_model=row.get("cerebras_model"),
+            xai_model=row.get("xai_model"),
         )
     return UserPreferencesRecord(profile_id=profile_id)
 
@@ -88,6 +103,11 @@ def upsert_user_preferences(*, profile_id: str, req: UserPreferencesUpdateReq) -
         "openai_codex_model": req.openai_model,
         "anthropic_model": req.anthropic_model,
         "openrouter_model": req.openrouter_model,
+        "groq_model": req.groq_model,
+        "gemini_model": req.gemini_model,
+        "together_model": req.together_model,
+        "cerebras_model": req.cerebras_model,
+        "xai_model": req.xai_model,
     }
     res = client.table(USER_SETTINGS_TABLE).upsert(payload, on_conflict="user_id").execute()
     data = getattr(res, "data", None) or []
@@ -99,6 +119,11 @@ def upsert_user_preferences(*, profile_id: str, req: UserPreferencesUpdateReq) -
         openai_model=row.get("openai_codex_model"),
         anthropic_model=row.get("anthropic_model"),
         openrouter_model=row.get("openrouter_model"),
+        groq_model=row.get("groq_model"),
+        gemini_model=row.get("gemini_model"),
+        together_model=row.get("together_model"),
+        cerebras_model=row.get("cerebras_model"),
+        xai_model=row.get("xai_model"),
     )
 
 

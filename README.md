@@ -119,20 +119,33 @@ Catatan BYOK (hosted):
 Kalau mau set model/config dasar juga, tambahkan:
 
 ```env
-LLM_PROVIDER=openai
+LLM_PROVIDER=openrouter
 BUILD_MODE=hybrid
-OPENAI_MODEL=gpt-5.4
-ANTHROPIC_MODEL=claude-sonnet-4-0
-OPENROUTER_MODEL=openai/gpt-5.4
+OPENAI_MODEL=gpt-5.5
+ANTHROPIC_MODEL=claude-opus-4-7
+OPENROUTER_MODEL=x-ai/grok-4.3
+GROQ_MODEL=groq/compound
+GEMINI_MODEL=gemini-3-pro-preview
+TOGETHER_MODEL=deepseek-ai/DeepSeek-V4-Pro
+CEREBRAS_MODEL=zai-glm-4.7
+XAI_MODEL=grok-4.3
 GOOGLE_OAUTH_CLIENT_ID=...
 GOOGLE_OAUTH_CLIENT_SECRET=...
 ```
+
+Default hosted disarankan pakai OpenRouter supaya user BYOK bisa mulai dari router `openrouter/free` atau model `:free`/murah dulu, lalu upgrade model kalau butuh kualitas lebih.
+OpenAI tetap ditampilkan sebagai opsi familiar; kalau akun user punya free trial/account credits, pemakaian API akan memotong credit itu dulu, tapi model OpenAI bukan free-tier unlimited.
 
 Optional provider lain:
 
 ```env
 ANTHROPIC_API_KEY=...
 OPENROUTER_API_KEY=...
+GROQ_API_KEY=...
+GEMINI_API_KEY=...
+TOGETHER_API_KEY=...
+CEREBRAS_API_KEY=...
+XAI_API_KEY=...
 SUPABASE_ANON_KEY=...
 ```
 

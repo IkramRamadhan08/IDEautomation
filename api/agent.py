@@ -14,12 +14,22 @@ from typing import Any
 from . import settings as settings_mod
 from .oauth_runtime import (
     ANTHROPIC_PROVIDER,
+    CEREBRAS_PROVIDER,
     CURRENT_PROFILE_ID,
+    GEMINI_PROVIDER,
+    GROQ_PROVIDER,
     OPENAI_PROVIDER,
     OPENROUTER_PROVIDER,
+    TOGETHER_PROVIDER,
+    XAI_PROVIDER,
     anthropic_generate_json,
+    cerebras_generate_json,
+    gemini_generate_json,
+    groq_generate_json,
     openai_generate_json,
     openrouter_generate_json,
+    together_generate_json,
+    xai_generate_json,
     require_provider_connected,
     get_provider_cooldown_remaining,
 )
@@ -41,6 +51,11 @@ def _effective_requests_per_minute(provider: str) -> int:
         OPENAI_PROVIDER: getattr(settings, "openai_requests_per_minute", None),
         ANTHROPIC_PROVIDER: getattr(settings, "anthropic_requests_per_minute", None),
         OPENROUTER_PROVIDER: getattr(settings, "openrouter_requests_per_minute", None),
+        GROQ_PROVIDER: getattr(settings, "groq_requests_per_minute", None),
+        GEMINI_PROVIDER: getattr(settings, "gemini_requests_per_minute", None),
+        TOGETHER_PROVIDER: getattr(settings, "together_requests_per_minute", None),
+        CEREBRAS_PROVIDER: getattr(settings, "cerebras_requests_per_minute", None),
+        XAI_PROVIDER: getattr(settings, "xai_requests_per_minute", None),
     }.get(provider)
     default_rpm = _DEFAULT_FRIENDLY_RPM if bool(getattr(settings, "friendly_free_tier_mode", True)) else _DEFAULT_STANDARD_RPM
     candidates = [per_provider, getattr(settings, "agent_requests_per_minute", default_rpm), default_rpm]
@@ -110,13 +125,13 @@ class ScaffoldResult:
     actions: list[dict[str, Any]]
 
 
-DEFAULT_SYSTEM_PATCH = """You are a senior product engineer working inside a local IDE.
+DEFAULT_SYSTEM_PATCH = """You are a senior product engineer working inside a hosted browser app builder for non-coders.
 You are strong at both implementation and product taste.
 
 Your job:
 - understand the user's real intent,
 - make the project better in a way that feels intentional and production-ready,
-- stay tightly scoped in hybrid/IDE mode,
+- stay tightly scoped in hybrid/copilot mode,
 - go broader only when the supplied mode/context explicitly allows it.
 
 Return ONLY valid JSON with this exact shape:
@@ -132,7 +147,8 @@ Return ONLY valid JSON with this exact shape:
 
 Rules:
 - changes must contain FULL file contents, not patches or snippets.
-- Use actions only for terminal steps that are truly needed, such as installs, generators, build/lint commands, or other project commands.
+- The runtime target is Vercel serverless + Supabase. Prefer direct file changes over terminal actions.
+- Use shell actions only when explicitly necessary; hosted users may not have a terminal.
 - Respect the provided mode/context block. If it says hybrid/IDE mode, keep the scope surgical and preserve the existing architecture.
 - If current content is marked as coming from the editor buffer, trust it over on-disk file contents.
 - When the request is UI/UX/product polish, improve hierarchy, spacing, consistency, copy clarity, visual rhythm, responsiveness, and accessible states.
@@ -144,7 +160,8 @@ Rules:
 """
 
 SYSTEM_SCAFFOLD = """You are an expert product engineer and front-end architect.
-Create a brand new React + Vite + TypeScript website that feels production-ready and pleasantly “overbuilt”.
+Create a brand new React + Vite + TypeScript website/app for a non-coder using a hosted web builder.
+The result should feel production-ready, understandable, and pleasantly “overbuilt” without requiring terminal commands.
 
 Return ONLY valid JSON with this shape:
 {
@@ -162,6 +179,7 @@ Rules:
 - Add responsive styling using CSS variables design tokens and include a light/dark theme toggle.
 - Include loading/error/empty states and basic accessibility (semantic HTML, aria labels where needed, focus states).
 - Keep dependencies reasonable; adding react-router-dom is OK.
+- Prefer code that can run from persisted text files in a serverless-hosted builder.
 - Keep the output bounded: aim for <= 30 files and avoid huge files.
 - Output only JSON.
 """
@@ -259,6 +277,16 @@ def _provider_and_model() -> tuple[str, str]:
         return provider, s.anthropic_model
     if provider == OPENROUTER_PROVIDER:
         return provider, s.openrouter_model
+    if provider == GROQ_PROVIDER:
+        return provider, s.groq_model
+    if provider == GEMINI_PROVIDER:
+        return provider, s.gemini_model
+    if provider == TOGETHER_PROVIDER:
+        return provider, s.together_model
+    if provider == CEREBRAS_PROVIDER:
+        return provider, s.cerebras_model
+    if provider == XAI_PROVIDER:
+        return provider, s.xai_model
     raise RuntimeError(f"Unsupported provider: {provider}")
 
 
@@ -294,6 +322,33 @@ def _generate_json(*, system: str, user: str) -> tuple[str, str, dict[str, Any]]
             if err:
                 raise RuntimeError(err)
             raise RuntimeError("OpenRouter returned an empty response")
+        return provider, model, _extract_json_object(text)
+
+    if provider == GROQ_PROVIDER:
+        raw = groq_generate_json(model=model, system=system, user=user)
+        text = str(raw.get("text") or "")
+        if not text.strip():
+            err = str(raw.get("error_message") or "").strip()
+            if err:
+                raise RuntimeError(err)
+            raise RuntimeError("Groq returned an empty response")
+        return provider, model, _extract_json_object(text)
+
+    provider_generators = {
+        GEMINI_PROVIDER: (gemini_generate_json, "Gemini"),
+        TOGETHER_PROVIDER: (together_generate_json, "Together AI"),
+        CEREBRAS_PROVIDER: (cerebras_generate_json, "Cerebras"),
+        XAI_PROVIDER: (xai_generate_json, "xAI"),
+    }
+    if provider in provider_generators:
+        generate, label = provider_generators[provider]
+        raw = generate(model=model, system=system, user=user)
+        text = str(raw.get("text") or "")
+        if not text.strip():
+            err = str(raw.get("error_message") or "").strip()
+            if err:
+                raise RuntimeError(err)
+            raise RuntimeError(f"{label} returned an empty response")
         return provider, model, _extract_json_object(text)
 
     raise RuntimeError(f"Unsupported provider: {provider}")

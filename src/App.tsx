@@ -27,6 +27,7 @@ import {
   listHostedProjects,
   createHostedProject,
   type HostedProject,
+  type UserPreferences,
 } from "./api";
 
 import {
@@ -97,6 +98,11 @@ export default function App() {
   const [openaiApiKeyDraft, setOpenaiApiKeyDraft] = useState<string>("");
   const [anthropicApiKeyDraft, setAnthropicApiKeyDraft] = useState<string>("");
   const [openrouterApiKeyDraft, setOpenrouterApiKeyDraft] = useState<string>("");
+  const [groqApiKeyDraft, setGroqApiKeyDraft] = useState<string>("");
+  const [geminiApiKeyDraft, setGeminiApiKeyDraft] = useState<string>("");
+  const [togetherApiKeyDraft, setTogetherApiKeyDraft] = useState<string>("");
+  const [cerebrasApiKeyDraft, setCerebrasApiKeyDraft] = useState<string>("");
+  const [xaiApiKeyDraft, setXaiApiKeyDraft] = useState<string>("");
   const [models, setModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState<string>("");
@@ -113,6 +119,32 @@ export default function App() {
   const [showExplorerPane, setShowExplorerPane] = useState(true);
   const [showAssistPane, setShowAssistPane] = useState(true);
   const [assistPaneWidth, setAssistPaneWidth] = useState(getDefaultAssistPaneWidth);
+
+  const modelFromSettings = (provider: ProviderChoice, source: SettingsInfo | null): string => {
+    if (!source) return "";
+    if (provider === "openai") return source.openai_model || "";
+    if (provider === "anthropic") return source.anthropic_model || "";
+    if (provider === "openrouter") return source.openrouter_model || "";
+    if (provider === "groq") return source.groq_model || "";
+    if (provider === "gemini") return source.gemini_model || "";
+    if (provider === "together") return source.together_model || "";
+    if (provider === "cerebras") return source.cerebras_model || "";
+    if (provider === "xai") return source.xai_model || "";
+    return "";
+  };
+
+  const modelFromPreferences = (provider: ProviderChoice, prefs: UserPreferences | null): string => {
+    if (!prefs) return "";
+    if (provider === "openai") return prefs.openai_model || "";
+    if (provider === "anthropic") return prefs.anthropic_model || "";
+    if (provider === "openrouter") return prefs.openrouter_model || "";
+    if (provider === "groq") return prefs.groq_model || "";
+    if (provider === "gemini") return prefs.gemini_model || "";
+    if (provider === "together") return prefs.together_model || "";
+    if (provider === "cerebras") return prefs.cerebras_model || "";
+    if (provider === "xai") return prefs.xai_model || "";
+    return "";
+  };
   const [isResizingAssistPane, setIsResizingAssistPane] = useState(false);
 
   const folderInputRef = useRef<HTMLInputElement | null>(null);
@@ -268,9 +300,7 @@ export default function App() {
           const prefs = prefRes.preferences;
           nextBuildMode = prefs.build_mode || nextBuildMode;
           nextProvider = (prefs.llm_provider || nextProvider) as ProviderChoice;
-          if (nextProvider === "openai") nextModel = prefs.openai_model || s.openai_model || "";
-          else if (nextProvider === "anthropic") nextModel = prefs.anthropic_model || s.anthropic_model || "";
-          else if (nextProvider === "openrouter") nextModel = prefs.openrouter_model || s.openrouter_model || "";
+          nextModel = modelFromPreferences(nextProvider, prefs) || modelFromSettings(nextProvider, s);
         } catch {
           // ignore hosted preference load failures and keep global settings fallback
         }
@@ -279,7 +309,7 @@ export default function App() {
       setBuildMode(nextBuildMode);
       setBuildModeDraft(nextBuildMode);
       setLlmProviderDraft(nextProvider);
-      setModelDraft(nextModel || (nextProvider === "openai" ? s.openai_model : nextProvider === "anthropic" ? s.anthropic_model : nextProvider === "openrouter" ? s.openrouter_model : ""));
+      setModelDraft(nextModel || modelFromSettings(nextProvider, s));
     } catch { /* ignore */ }
   };
 
@@ -578,13 +608,7 @@ export default function App() {
       setModels(nextModels);
       setModelDraft((current) => {
         if (current && nextModels.includes(current)) return current;
-        const fallback = p === "openai"
-          ? settings?.openai_model
-          : p === "anthropic"
-            ? settings?.anthropic_model
-            : p === "openrouter"
-              ? settings?.openrouter_model
-              : "";
+        const fallback = modelFromSettings(p, settings);
         if (fallback && nextModels.includes(fallback)) return fallback;
         return current || fallback || nextModels[0] || "";
       });
@@ -605,10 +629,20 @@ export default function App() {
         if (llmProviderDraft === "openai") patch.openai_model = modelDraft;
         else if (llmProviderDraft === "anthropic") patch.anthropic_model = modelDraft;
         else if (llmProviderDraft === "openrouter") patch.openrouter_model = modelDraft;
+        else if (llmProviderDraft === "groq") patch.groq_model = modelDraft;
+        else if (llmProviderDraft === "gemini") patch.gemini_model = modelDraft;
+        else if (llmProviderDraft === "together") patch.together_model = modelDraft;
+        else if (llmProviderDraft === "cerebras") patch.cerebras_model = modelDraft;
+        else if (llmProviderDraft === "xai") patch.xai_model = modelDraft;
       }
       if (openaiApiKeyDraft) patch.openai_api_key = openaiApiKeyDraft;
       if (anthropicApiKeyDraft) patch.anthropic_api_key = anthropicApiKeyDraft;
       if (openrouterApiKeyDraft) patch.openrouter_api_key = openrouterApiKeyDraft;
+      if (groqApiKeyDraft) patch.groq_api_key = groqApiKeyDraft;
+      if (geminiApiKeyDraft) patch.gemini_api_key = geminiApiKeyDraft;
+      if (togetherApiKeyDraft) patch.together_api_key = togetherApiKeyDraft;
+      if (cerebrasApiKeyDraft) patch.cerebras_api_key = cerebrasApiKeyDraft;
+      if (xaiApiKeyDraft) patch.xai_api_key = xaiApiKeyDraft;
 
       await updateSettings(patch);
 
@@ -619,6 +653,11 @@ export default function App() {
           openai_model: llmProviderDraft === "openai" ? modelDraft : null,
           anthropic_model: llmProviderDraft === "anthropic" ? modelDraft : null,
           openrouter_model: llmProviderDraft === "openrouter" ? modelDraft : null,
+          groq_model: llmProviderDraft === "groq" ? modelDraft : null,
+          gemini_model: llmProviderDraft === "gemini" ? modelDraft : null,
+          together_model: llmProviderDraft === "together" ? modelDraft : null,
+          cerebras_model: llmProviderDraft === "cerebras" ? modelDraft : null,
+          xai_model: llmProviderDraft === "xai" ? modelDraft : null,
         });
       }
 
@@ -686,37 +725,82 @@ export default function App() {
 
   // --- Renders ---
   const renderGoogleLoginGate = () => (
-    <div className="workspaceGateWrap authGateWrap">
-      <div className="workspaceGateCard pane authGateCard">
-        <div className="workspaceGateKicker">Voice IDE</div>
-        <div className="workspaceGateTitle">A calmer way to build production UI</div>
-        <div className="workspaceGateSubtitle">
-          Edit code directly, run live preview instantly, and pull in agent help only when you want precise changes.
+    <div className="authLanding">
+      <header className="authLandingNav">
+        <div className="authBrand">
+          <span className="authBrandMark">V</span>
+          <span>Voice IDE</span>
         </div>
-        <div className="workspaceGateFeatureGrid">
-          <div className="gateFeatureCard">
-            <div className="gateFeatureTitle">Manual control first</div>
-            <div className="gateFeatureText">Keep the file tree, editor, and preview visible while you iterate.</div>
+        <button className="btn subtleBtn" onClick={startGoogleLogin}>Sign in</button>
+      </header>
+
+      <main className="authLandingMain">
+        <section className="authHeroCopy">
+          <div className="workspaceGateKicker">Agentic web builder</div>
+          <h1 className="authHeroTitle">Build apps by talking, refine them like an IDE.</h1>
+          <p className="authHeroSubtitle">
+            A hosted coding workspace for non-coders and builders: paste an API key, describe the product, then let Clara or Raka turn it into a working web app.
+          </p>
+          <div className="authHeroActions">
+            <button className="btn primary authPrimaryCta" onClick={startGoogleLogin}>Continue with Google</button>
+            <span className="authHeroNote">Vercel serverless. Supabase-backed projects. BYOK models.</span>
           </div>
-          <div className="gateFeatureCard">
-            <div className="gateFeatureTitle">Agent when useful</div>
-            <div className="gateFeatureText">Ask Clara for scoped UI polish, refactors, and implementation help.</div>
+          <div className="authMetricRow">
+            <div>
+              <strong>8</strong>
+              <span>providers</span>
+            </div>
+            <div>
+              <strong>2</strong>
+              <span>agent modes</span>
+            </div>
+            <div>
+              <strong>0</strong>
+              <span>local setup</span>
+            </div>
           </div>
-          <div className="gateFeatureCard">
-            <div className="gateFeatureTitle">Ready for deploy</div>
-            <div className="gateFeatureText">Shape the app with a workflow that maps cleanly to Vercel and Railway.</div>
+        </section>
+
+        <section className="authProductPreview" aria-label="Voice IDE workspace preview">
+          <div className="authPreviewChrome">
+            <span />
+            <span />
+            <span />
+            <div>voice-ide.app/workspace</div>
           </div>
-        </div>
-        <div className="workspaceGateActions">
-          <button className="btn primary" onClick={startGoogleLogin}>Continue with Google</button>
-        </div>
-      </div>
+          <div className="authPreviewGrid">
+            <div className="authPreviewRail">
+              <div className="authPreviewRailTitle">Files</div>
+              <div className="authPreviewFile active">src/App.tsx</div>
+              <div className="authPreviewFile">src/app.css</div>
+              <div className="authPreviewFile">api/agent.py</div>
+              <div className="authPreviewFile">README.md</div>
+            </div>
+            <div className="authPreviewEditor">
+              <div className="authPreviewTab">App.tsx</div>
+              <div className="authCodeLine w80" />
+              <div className="authCodeLine w60" />
+              <div className="authCodeLine w90" />
+              <div className="authCodeLine w45" />
+              <div className="authCodeBlock" />
+              <div className="authCodeLine w70" />
+              <div className="authCodeLine w52" />
+            </div>
+            <div className="authPreviewAssist">
+              <div className="authAssistLabel">Raka</div>
+              <div className="authAssistBubble">Refining layout, states, and component copy...</div>
+              <div className="authAssistTrace">validate: responsive pass</div>
+              <div className="authAssistTrace">write: src/app.css</div>
+            </div>
+          </div>
+        </section>
+      </main>
     </div>
   );
 
   const renderWorkspaceOnboarding = () => (
-    <div className="workspaceGateWrap">
-      <div className="workspaceGateCard pane">
+    <div className="workspaceGateWrap workspaceSetupWrap">
+      <div className="workspaceGateCard pane workspaceSetupCard">
         <div className="workspaceGateKicker">Workspace setup</div>
         <div className="workspaceGateTitle">Choose where this session should build</div>
         <div className="workspaceGateSubtitle">
@@ -837,21 +921,18 @@ export default function App() {
           openaiApiKeyDraft={openaiApiKeyDraft}
           anthropicApiKeyDraft={anthropicApiKeyDraft}
           openrouterApiKeyDraft={openrouterApiKeyDraft}
+          groqApiKeyDraft={groqApiKeyDraft}
+          geminiApiKeyDraft={geminiApiKeyDraft}
+          togetherApiKeyDraft={togetherApiKeyDraft}
+          cerebrasApiKeyDraft={cerebrasApiKeyDraft}
+          xaiApiKeyDraft={xaiApiKeyDraft}
           models={models}
           modelsLoading={modelsLoading}
           modelsError={modelsError}
           onClose={() => setSettingsOpen(false)}
           onLlmProviderChange={p => {
             setLlmProviderDraft(p);
-            setModelDraft(
-              p === "openai"
-                ? (settings?.openai_model || "")
-                : p === "anthropic"
-                  ? (settings?.anthropic_model || "")
-                  : p === "openrouter"
-                    ? (settings?.openrouter_model || "")
-                    : "",
-            );
+            setModelDraft(modelFromSettings(p, settings));
             void loadProviderModels(p);
           }}
           onBuildModeDraftChange={setBuildModeDraft}
@@ -860,6 +941,11 @@ export default function App() {
             if (p === "openai") setOpenaiApiKeyDraft(k);
             else if (p === "anthropic") setAnthropicApiKeyDraft(k);
             else if (p === "openrouter") setOpenrouterApiKeyDraft(k);
+            else if (p === "groq") setGroqApiKeyDraft(k);
+            else if (p === "gemini") setGeminiApiKeyDraft(k);
+            else if (p === "together") setTogetherApiKeyDraft(k);
+            else if (p === "cerebras") setCerebrasApiKeyDraft(k);
+            else if (p === "xai") setXaiApiKeyDraft(k);
           }}
           onLogout={logoutToStart}
           onSave={saveSettings}

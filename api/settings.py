@@ -11,7 +11,7 @@ from pydantic import BaseModel
 ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = ROOT / ".env"
 
-Provider = Literal["openai", "anthropic", "openrouter", "groq", "xai"]
+Provider = Literal["openai", "anthropic", "openrouter", "groq", "gemini", "together", "cerebras", "xai"]
 BuildMode = Literal["full-agent", "hybrid"]
 
 
@@ -23,9 +23,14 @@ class Settings(BaseModel):
     default_workspace: str | None = None
     llm_provider: Provider | None = None
     build_mode: BuildMode = "hybrid"
-    openai_model: str = "gpt-5.4"
-    anthropic_model: str = "claude-sonnet-4-0"
-    openrouter_model: str = "openai/gpt-5.4"
+    openai_model: str = "gpt-5.5"
+    anthropic_model: str = "claude-opus-4-7"
+    openrouter_model: str = "x-ai/grok-4.3"
+    groq_model: str = "groq/compound"
+    gemini_model: str = "gemini-3-pro-preview"
+    together_model: str = "deepseek-ai/DeepSeek-V4-Pro"
+    cerebras_model: str = "zai-glm-4.7"
+    xai_model: str = "grok-4.3"
     friendly_free_tier_mode: bool = True
     agent_refinement_mode: Literal["auto", "off", "always"] = "auto"
     agent_min_gap_seconds: float = 4.0
@@ -33,9 +38,19 @@ class Settings(BaseModel):
     openai_requests_per_minute: int | None = None
     anthropic_requests_per_minute: int | None = None
     openrouter_requests_per_minute: int | None = None
+    groq_requests_per_minute: int | None = None
+    gemini_requests_per_minute: int | None = None
+    together_requests_per_minute: int | None = None
+    cerebras_requests_per_minute: int | None = None
+    xai_requests_per_minute: int | None = None
     openai_api_key_set: bool = False
     anthropic_api_key_set: bool = False
     openrouter_api_key_set: bool = False
+    groq_api_key_set: bool = False
+    gemini_api_key_set: bool = False
+    together_api_key_set: bool = False
+    cerebras_api_key_set: bool = False
+    xai_api_key_set: bool = False
     supabase_url: str | None = None
     supabase_frontend_ready: bool = False
     supabase_anon_key_set: bool = False
@@ -68,7 +83,7 @@ def load_settings() -> Settings:
     raw_provider = str(g("LLM_PROVIDER", "") or "").strip().lower()
     if raw_provider == "openai-codex":
         raw_provider = "openai"
-    llm_provider = raw_provider if raw_provider in {"openai", "anthropic", "openrouter"} else None
+    llm_provider = raw_provider if raw_provider in {"openai", "anthropic", "openrouter", "groq", "gemini", "together", "cerebras", "xai"} else None
 
     build_mode = str(g("BUILD_MODE", "hybrid") or "hybrid").strip().lower()
     if build_mode not in {"full-agent", "hybrid"}:
@@ -114,9 +129,14 @@ def load_settings() -> Settings:
         default_workspace=(g("DEFAULT_WORKSPACE", "") or "").strip() or None,
         llm_provider=llm_provider,  # type: ignore[arg-type]
         build_mode=build_mode,  # type: ignore[arg-type]
-        openai_model=str(g("OPENAI_MODEL", g("OPENAI_CODEX_MODEL", "gpt-5.4")) or "gpt-5.4").strip(),
-        anthropic_model=str(g("ANTHROPIC_MODEL", "claude-sonnet-4-0") or "claude-sonnet-4-0").strip(),
-        openrouter_model=str(g("OPENROUTER_MODEL", "openai/gpt-5.4") or "openai/gpt-5.4").strip(),
+        openai_model=str(g("OPENAI_MODEL", g("OPENAI_CODEX_MODEL", "gpt-5.5")) or "gpt-5.5").strip(),
+        anthropic_model=str(g("ANTHROPIC_MODEL", "claude-opus-4-7") or "claude-opus-4-7").strip(),
+        openrouter_model=str(g("OPENROUTER_MODEL", "x-ai/grok-4.3") or "x-ai/grok-4.3").strip(),
+        groq_model=str(g("GROQ_MODEL", "groq/compound") or "groq/compound").strip(),
+        gemini_model=str(g("GEMINI_MODEL", "gemini-3-pro-preview") or "gemini-3-pro-preview").strip(),
+        together_model=str(g("TOGETHER_MODEL", "deepseek-ai/DeepSeek-V4-Pro") or "deepseek-ai/DeepSeek-V4-Pro").strip(),
+        cerebras_model=str(g("CEREBRAS_MODEL", "zai-glm-4.7") or "zai-glm-4.7").strip(),
+        xai_model=str(g("XAI_MODEL", "grok-4.3") or "grok-4.3").strip(),
         friendly_free_tier_mode=raw_friendly_mode not in {"0", "false", "no", "off"},
         agent_refinement_mode=raw_refinement_mode,  # type: ignore[arg-type]
         agent_min_gap_seconds=agent_min_gap_seconds,
@@ -124,9 +144,19 @@ def load_settings() -> Settings:
         openai_requests_per_minute=parse_optional_int("OPENAI_REQUESTS_PER_MINUTE"),
         anthropic_requests_per_minute=parse_optional_int("ANTHROPIC_REQUESTS_PER_MINUTE"),
         openrouter_requests_per_minute=parse_optional_int("OPENROUTER_REQUESTS_PER_MINUTE"),
+        groq_requests_per_minute=parse_optional_int("GROQ_REQUESTS_PER_MINUTE"),
+        gemini_requests_per_minute=parse_optional_int("GEMINI_REQUESTS_PER_MINUTE"),
+        together_requests_per_minute=parse_optional_int("TOGETHER_REQUESTS_PER_MINUTE"),
+        cerebras_requests_per_minute=parse_optional_int("CEREBRAS_REQUESTS_PER_MINUTE"),
+        xai_requests_per_minute=parse_optional_int("XAI_REQUESTS_PER_MINUTE"),
         openai_api_key_set=bool((g("OPENAI_API_KEY", "") or "").strip()),
         anthropic_api_key_set=bool((g("ANTHROPIC_API_KEY", "") or "").strip()),
         openrouter_api_key_set=bool((g("OPENROUTER_API_KEY", "") or "").strip()),
+        groq_api_key_set=bool((g("GROQ_API_KEY", "") or "").strip()),
+        gemini_api_key_set=bool((g("GEMINI_API_KEY", "") or "").strip()),
+        together_api_key_set=bool((g("TOGETHER_API_KEY", "") or "").strip()),
+        cerebras_api_key_set=bool((g("CEREBRAS_API_KEY", "") or "").strip()),
+        xai_api_key_set=bool((g("XAI_API_KEY", "") or "").strip()),
         supabase_url=supabase_url,
         supabase_frontend_ready=supabase_frontend_ready,
         supabase_anon_key_set=bool(supabase_anon_key),

@@ -1,31 +1,31 @@
 :root {
   color-scheme: dark;
-  --bg: #07111f;
-  --bg-2: #0b1526;
-  --panel: rgba(10, 18, 32, 0.88);
-  --panel-strong: rgba(8, 15, 27, 0.96);
-  --panel-soft: rgba(148, 163, 184, 0.08);
-  --surface: rgba(255, 255, 255, 0.04);
-  --surface-strong: rgba(255, 255, 255, 0.07);
-  --border: rgba(148, 163, 184, 0.16);
-  --border-strong: rgba(148, 163, 184, 0.28);
-  --text: #eef4ff;
-  --text-soft: #cfd8e8;
-  --muted: #8c99ae;
-  --brand: #7c8cff;
-  --brand-strong: #97a4ff;
-  --brand-soft: rgba(124, 140, 255, 0.16);
-  --success: #38d39f;
-  --danger: #fb7185;
-  --warning: #f5c56b;
-  --shadow-xl: 0 28px 70px rgba(2, 8, 23, 0.38);
-  --shadow-lg: 0 18px 44px rgba(2, 8, 23, 0.26);
-  --shadow-md: 0 12px 26px rgba(2, 8, 23, 0.18);
-  --radius-2xl: 28px;
-  --radius-xl: 22px;
-  --radius-lg: 18px;
-  --radius-md: 14px;
-  --radius-sm: 10px;
+  --bg: #090a0d;
+  --bg-2: #101115;
+  --panel: rgba(18, 19, 23, 0.88);
+  --panel-strong: rgba(14, 15, 18, 0.96);
+  --panel-soft: rgba(229, 231, 235, 0.06);
+  --surface: rgba(255, 255, 255, 0.035);
+  --surface-strong: rgba(255, 255, 255, 0.075);
+  --border: rgba(229, 231, 235, 0.12);
+  --border-strong: rgba(229, 231, 235, 0.22);
+  --text: #f4f1ea;
+  --text-soft: #d8d3c8;
+  --muted: #8f938f;
+  --brand: #8fa3ff;
+  --brand-strong: #c7d2fe;
+  --brand-soft: rgba(143, 163, 255, 0.14);
+  --success: #65d6ad;
+  --danger: #f87171;
+  --warning: #e7bf6a;
+  --shadow-xl: 0 28px 70px rgba(0, 0, 0, 0.44);
+  --shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.34);
+  --shadow-md: 0 10px 22px rgba(0, 0, 0, 0.24);
+  --radius-2xl: 18px;
+  --radius-xl: 12px;
+  --radius-lg: 10px;
+  --radius-md: 8px;
+  --radius-sm: 6px;
 }
 
 * {
@@ -45,9 +45,7 @@ body {
   color: var(--text);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   background:
-    radial-gradient(circle at top left, rgba(124, 140, 255, 0.24), transparent 24%),
-    radial-gradient(circle at top right, rgba(56, 211, 159, 0.09), transparent 20%),
-    linear-gradient(180deg, #08111e 0%, #050b14 100%);
+    linear-gradient(180deg, #101115 0%, #08090b 100%);
 }
 
 a,
@@ -95,12 +93,12 @@ a {
 .topbar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-height: 58px;
-  padding: 10px 14px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
-  background: rgba(6, 12, 22, 0.78);
-  backdrop-filter: blur(20px);
+  gap: 8px;
+  min-height: 48px;
+  padding: 7px 10px;
+  border-bottom: 1px solid rgba(229, 231, 235, 0.08);
+  background: rgba(10, 11, 13, 0.92);
+  backdrop-filter: blur(16px);
   position: relative;
   z-index: 10;
   flex-wrap: wrap;
@@ -114,15 +112,15 @@ a {
 }
 
 .brandMark {
-  width: 38px;
-  height: 38px;
-  border-radius: 14px;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   color: white;
-  background: linear-gradient(135deg, rgba(124, 140, 255, 0.28), rgba(124, 140, 255, 0.12));
-  border: 1px solid rgba(124, 140, 255, 0.26);
+  background: linear-gradient(135deg, rgba(244, 241, 234, 0.11), rgba(143, 163, 255, 0.13));
+  border: 1px solid rgba(229, 231, 235, 0.12);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
@@ -131,7 +129,7 @@ a {
 }
 
 .brand {
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 700;
   letter-spacing: -0.03em;
 }
@@ -181,7 +179,7 @@ a {
 }
 
 .topbarPill {
-  padding: 5px 8px;
+  padding: 4px 7px;
   font-size: 10px;
   font-weight: 600;
 }
@@ -198,7 +196,7 @@ a {
   max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding: 5px 8px;
+  padding: 4px 7px;
   font-size: 10px;
 }
 
@@ -220,8 +218,49 @@ a {
 .topbarActions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
+}
+
+.commandBarButton {
+  width: min(360px, 28vw);
+  min-width: 240px;
+  height: 32px;
+  border: 1px solid rgba(229, 231, 235, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+.commandBarButton span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  font-size: 12px;
+}
+
+.commandBarButton kbd {
+  border: 1px solid rgba(229, 231, 235, 0.12);
+  border-radius: 5px;
+  padding: 1px 5px;
+  color: var(--text-soft);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 10px;
+}
+
+.commandBarButton:hover {
+  color: var(--text-soft);
+  border-color: rgba(229, 231, 235, 0.18);
+  background: rgba(255, 255, 255, 0.055);
 }
 
 .topbarPanelToggles {
@@ -238,8 +277,8 @@ a {
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.045);
   color: var(--text);
-  padding: 7px 10px;
-  border-radius: 10px;
+  padding: 6px 9px;
+  border-radius: 8px;
   cursor: pointer;
   font-size: 11px;
   font-weight: 600;
@@ -266,8 +305,8 @@ a {
 }
 
 .btn.primary {
-  border-color: rgba(124, 140, 255, 0.32);
-  background: linear-gradient(135deg, rgba(124, 140, 255, 0.32), rgba(124, 140, 255, 0.18));
+  border-color: rgba(143, 163, 255, 0.35);
+  background: linear-gradient(135deg, rgba(143, 163, 255, 0.24), rgba(244, 241, 234, 0.08));
   color: #f7f9ff;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
@@ -310,7 +349,7 @@ a {
 .textarea.promptBox {
   width: 100%;
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: 8px;
   background: rgba(255, 255, 255, 0.045);
   color: var(--text);
   padding: 12px 14px;
@@ -360,10 +399,10 @@ a {
 }
 
 .pane {
-  background: linear-gradient(180deg, rgba(10, 17, 30, 0.95), rgba(7, 13, 23, 0.98));
-  border: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(18, 19, 23, 0.98), rgba(12, 13, 16, 0.99));
+  border: 1px solid rgba(229, 231, 235, 0.095);
   border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-lg);
+  box-shadow: none;
   min-height: 0;
   backdrop-filter: blur(14px);
 }
@@ -377,7 +416,7 @@ a {
 }
 
 .hybridExplorerPane {
-  width: 208px;
+  width: 232px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -403,7 +442,7 @@ a {
 }
 
 .hybridSidePane {
-  width: min(280px, 24vw);
+  width: min(320px, 25vw);
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -427,8 +466,8 @@ a {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 18px 18px 16px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+  padding: 12px 12px 10px;
+  border-bottom: 1px solid rgba(229, 231, 235, 0.075);
 }
 
 .paneEyebrow {
@@ -436,14 +475,14 @@ a {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.14em;
-  margin-bottom: 7px;
+  margin-bottom: 5px;
 }
 
 .paneHeading {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 19px;
+  font-size: 14px;
   font-weight: 700;
   letter-spacing: -0.03em;
 }
@@ -475,8 +514,8 @@ a {
 
 .sidebarBody,
 .previewBody {
-  padding: 14px;
-  gap: 12px;
+  padding: 10px;
+  gap: 10px;
   overflow: auto;
 }
 
@@ -501,7 +540,7 @@ a {
 .previewEmbedSmall {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.025));
   border: 1px solid rgba(148, 163, 184, 0.14);
-  border-radius: 18px;
+  border-radius: 8px;
 }
 
 .explorerSummaryCard {
@@ -534,7 +573,7 @@ a {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  border-radius: 16px;
+  border-radius: 8px;
   background: rgba(255, 255, 255, 0.025);
   border: 1px solid rgba(148, 163, 184, 0.1);
   padding: 8px;
@@ -545,11 +584,11 @@ a {
   display: flex;
   align-items: center;
   gap: 7px;
-  height: 34px;
+  height: 30px;
   border: 0;
   background: transparent;
   color: var(--text-soft);
-  border-radius: 10px;
+  border-radius: 7px;
   text-align: left;
   cursor: pointer;
 }
@@ -607,8 +646,8 @@ a {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 60px;
-  padding: 14px 16px 0;
+  min-height: 38px;
+  padding: 6px 8px 0;
   overflow-x: auto;
 }
 
@@ -616,9 +655,9 @@ a {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  height: 42px;
-  padding: 0 14px;
-  border-radius: 14px 14px 0 0;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 8px 8px 0 0;
   color: var(--muted);
   cursor: pointer;
   background: rgba(255, 255, 255, 0.03);
@@ -671,7 +710,7 @@ a {
   flex: 1;
   min-height: 0;
   min-width: 0;
-  padding: 0 16px 16px;
+  padding: 0 8px 8px;
 }
 
 .editorToolbar {
@@ -679,9 +718,9 @@ a {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 14px 16px;
-  border: 1px solid rgba(148, 163, 184, 0.12);
-  border-radius: 18px 18px 0 0;
+  padding: 9px 10px;
+  border: 1px solid rgba(229, 231, 235, 0.095);
+  border-radius: 8px 8px 0 0;
   background: rgba(255, 255, 255, 0.035);
 }
 
@@ -690,13 +729,13 @@ a {
 }
 
 .editorTitle {
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 700;
 }
 
 .editorHint {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   margin-top: 4px;
 }
 
@@ -724,9 +763,9 @@ a {
 }
 
 .codeEditorShell {
-  border: 1px solid rgba(148, 163, 184, 0.12);
+  border: 1px solid rgba(229, 231, 235, 0.095);
   border-top: 0;
-  border-radius: 0 0 18px 18px;
+  border-radius: 0 0 8px 8px;
   overflow: hidden;
   background: #0b1220;
   display: flex;
@@ -795,9 +834,9 @@ a {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 12px 14px;
-  margin-top: 12px;
-  border-radius: 14px;
+  padding: 8px 10px;
+  margin-top: 8px;
+  border-radius: 8px;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(148, 163, 184, 0.1);
   color: var(--text-soft);
@@ -1131,22 +1170,19 @@ a {
 }
 
 .hybridWorkspaceShell {
-  background:
-    linear-gradient(180deg, rgba(6, 11, 20, 0.96), rgba(5, 10, 18, 0.98)),
-    radial-gradient(circle at top right, rgba(94, 234, 212, 0.08), transparent 30%);
+  background: #090a0d;
 }
 
 .hybridAssistRail {
   display: flex;
   flex-direction: column;
   gap: 0;
-  background:
-    linear-gradient(180deg, rgba(7, 18, 27, 0.98), rgba(6, 12, 21, 0.98)),
-    radial-gradient(circle at top center, rgba(94, 234, 212, 0.08), transparent 34%);
+  background: #0f1013;
+  border-left: 1px solid rgba(229, 231, 235, 0.08);
 }
 
 .hybridAssistSummary {
-  margin: 12px;
+  margin: 10px;
   margin-bottom: 0;
   flex-shrink: 0;
 }
@@ -1154,7 +1190,50 @@ a {
 .hybridAssistRail .previewMiniShell {
   flex: 1;
   min-height: 0;
-  margin: 12px;
+  margin: 10px;
+}
+
+.hybridLiveCard {
+  margin: 10px 10px 0;
+}
+
+.missionCard {
+  border-radius: 8px;
+}
+
+.previewMiniShell,
+.previewViewport,
+.previewEmbedSmall,
+.previewFrameWrap,
+.previewFrame {
+  border-radius: 8px;
+}
+
+.previewChrome {
+  border-radius: 7px;
+}
+
+.assistResizeHandle {
+  width: 4px;
+  background: rgba(229, 231, 235, 0.035);
+}
+
+.hybridEditorPane {
+  background: #0b0c0f;
+}
+
+.hybridExplorerPane {
+  background: #0f1013;
+  border-right: 1px solid rgba(229, 231, 235, 0.08);
+}
+
+.codeEditorShell {
+  background: #0a0b0e;
+}
+
+.topbarModeSwitch,
+.segmentedControl {
+  border-radius: 8px;
 }
 
 .fullAgentLayout {
@@ -1551,9 +1630,267 @@ a {
     linear-gradient(180deg, rgba(6, 12, 22, 0.96), rgba(5, 11, 20, 1));
 }
 
+.authLanding {
+  min-height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 32%),
+    linear-gradient(135deg, #0b0c0f 0%, #121316 50%, #090a0c 100%);
+}
+
+.authLandingNav {
+  height: 68px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 clamp(20px, 5vw, 72px);
+}
+
+.authBrand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.authBrandMark {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(229, 231, 235, 0.12);
+  color: var(--brand-strong);
+}
+
+.authLandingMain {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 0.86fr) minmax(420px, 1fr);
+  gap: clamp(32px, 5vw, 82px);
+  align-items: center;
+  padding: clamp(18px, 5vw, 76px);
+  padding-top: 22px;
+}
+
+.authHeroCopy {
+  max-width: 640px;
+}
+
+.authHeroTitle {
+  margin: 18px 0 0;
+  max-width: 620px;
+  font-size: clamp(46px, 7vw, 86px);
+  line-height: 0.94;
+  letter-spacing: 0;
+  font-weight: 780;
+  color: #f7f3ea;
+}
+
+.authHeroSubtitle {
+  margin: 22px 0 0;
+  max-width: 560px;
+  color: #aaa79e;
+  font-size: clamp(16px, 1.6vw, 19px);
+  line-height: 1.65;
+}
+
+.authHeroActions {
+  margin-top: 30px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.authPrimaryCta {
+  min-height: 42px;
+  padding-inline: 18px;
+}
+
+.authHeroNote {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.authMetricRow {
+  margin-top: 44px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 120px));
+  gap: 18px;
+}
+
+.authMetricRow div {
+  padding-top: 14px;
+  border-top: 1px solid rgba(229, 231, 235, 0.12);
+}
+
+.authMetricRow strong {
+  display: block;
+  color: var(--text);
+  font-size: 22px;
+}
+
+.authMetricRow span {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.authProductPreview {
+  min-height: min(620px, 70vh);
+  border: 1px solid rgba(229, 231, 235, 0.12);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(22, 23, 27, 0.96), rgba(11, 12, 15, 0.98));
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.38);
+  overflow: hidden;
+}
+
+.authPreviewChrome {
+  height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 14px;
+  border-bottom: 1px solid rgba(229, 231, 235, 0.08);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.authPreviewChrome span {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.authPreviewChrome div {
+  margin-left: 8px;
+}
+
+.authPreviewGrid {
+  height: calc(100% - 42px);
+  min-height: 560px;
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr) 230px;
+}
+
+.authPreviewRail,
+.authPreviewEditor,
+.authPreviewAssist {
+  min-width: 0;
+  padding: 14px;
+}
+
+.authPreviewRail,
+.authPreviewAssist {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.authPreviewRail {
+  border-right: 1px solid rgba(229, 231, 235, 0.07);
+}
+
+.authPreviewAssist {
+  border-left: 1px solid rgba(229, 231, 235, 0.07);
+}
+
+.authPreviewRailTitle,
+.authAssistLabel {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 12px;
+}
+
+.authPreviewFile {
+  height: 30px;
+  display: flex;
+  align-items: center;
+  padding: 0 9px;
+  border-radius: 7px;
+  color: #b7b3aa;
+  font-size: 12px;
+}
+
+.authPreviewFile.active {
+  background: rgba(143, 163, 255, 0.14);
+  color: #f7f3ea;
+}
+
+.authPreviewTab {
+  width: fit-content;
+  padding: 8px 12px;
+  border-radius: 8px 8px 0 0;
+  color: var(--text-soft);
+  background: rgba(255, 255, 255, 0.055);
+  font-size: 12px;
+  margin-bottom: 26px;
+}
+
+.authCodeLine,
+.authCodeBlock {
+  height: 12px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(244, 241, 234, 0.3), rgba(143, 163, 255, 0.14));
+  margin-bottom: 14px;
+}
+
+.authCodeBlock {
+  width: 72%;
+  height: 96px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(229, 231, 235, 0.08);
+}
+
+.authCodeLine.w45 { width: 45%; }
+.authCodeLine.w52 { width: 52%; }
+.authCodeLine.w60 { width: 60%; }
+.authCodeLine.w70 { width: 70%; }
+.authCodeLine.w80 { width: 80%; }
+.authCodeLine.w90 { width: 90%; }
+
+.authAssistBubble {
+  border-radius: 10px;
+  padding: 12px;
+  background: rgba(143, 163, 255, 0.12);
+  border: 1px solid rgba(143, 163, 255, 0.16);
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.authAssistTrace {
+  margin-top: 10px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 11px;
+}
+
 .workspaceGateCard {
   width: min(820px, 100%);
   padding: 34px;
+}
+
+.workspaceSetupWrap {
+  background: linear-gradient(180deg, #101115, #090a0d);
+}
+
+.workspaceSetupCard {
+  width: min(760px, 100%);
 }
 
 .authGateCard {
@@ -2298,6 +2635,19 @@ a {
     grid-template-columns: 1fr;
     overflow: auto;
   }
+
+  .commandBarButton {
+    display: none;
+  }
+
+  .authLandingMain {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .authProductPreview {
+    min-height: 480px;
+  }
 }
 
 @media (max-width: 860px) {
@@ -2375,5 +2725,40 @@ a {
 
   .workspaceGateTitle {
     font-size: 32px;
+  }
+
+  .authLanding {
+    overflow: auto;
+  }
+
+  .authLandingNav {
+    height: 60px;
+    padding: 0 18px;
+  }
+
+  .authLandingMain {
+    padding: 18px;
+  }
+
+  .authHeroTitle {
+    font-size: 44px;
+  }
+
+  .authMetricRow {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .authPreviewGrid {
+    grid-template-columns: 1fr;
+    min-height: auto;
+  }
+
+  .authPreviewRail,
+  .authPreviewAssist {
+    display: none;
+  }
+
+  .authProductPreview {
+    min-height: 360px;
   }
 }
