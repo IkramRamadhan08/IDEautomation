@@ -19,6 +19,7 @@ Voice IDE agent is being reset around explicit boundaries instead of procedural 
    - retrieval is biased toward the same interaction kind so build memories do not swamp conversational context and vice versa
    - **long-term memory**: durable project docs like README, PRD, docs, project memory notes
    - long-term docs are chunked for retrieval, and when Supabase is configured the chunk store can sync to `agent_memory_chunks` for a shared retrieval backend
+   - if Supabase is configured but `public.agent_memory_chunks` is missing or unreachable, the runtime now surfaces an explicit warning and falls back to local chunks honestly
    - retrieval is injected into agent context, not hidden in random helper code
 
 4. **Skill registry**

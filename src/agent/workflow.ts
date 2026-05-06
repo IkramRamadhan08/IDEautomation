@@ -436,6 +436,7 @@ export async function runAgentWorkflow({
       if (caps.memory.project_entries > 0) memoryParts.push(`${caps.memory.project_entries} memori project`);
       const memoryLabel = memoryParts.length > 0 ? memoryParts.join(" + ") : "memory masih fresh";
       const memoryBackendLabel = caps.memory.retrieval_backend ? `rag: ${caps.memory.retrieval_backend}` : null;
+      const memoryWarningLabel = caps.memory.supabase_warning || null;
       const mcpLabel = mcpCount > 0
         ? `${mcpCount} MCP server siap dipakai`
         : "belum ada MCP server yang dikonfigurasi";
@@ -454,8 +455,13 @@ export async function runAgentWorkflow({
           caps.supports.autonomous_mcp_loop ? "autonomous tool loop aktif" : null,
           caps.supports.command_conversation_boundary ? "command/conversation boundary aktif" : null,
           caps.supports.read_only_inspection_boundary ? "inspection boundary aktif" : null,
-          caps.supports.supabase_memory_backend ? "supabase memory backend siap" : null,
+          caps.supports.supabase_rag_ready
+            ? "supabase memory backend siap"
+            : caps.supports.supabase_memory_backend
+              ? "supabase memory backend terpasang tapi belum siap"
+              : null,
           memoryBackendLabel,
+          memoryWarningLabel,
           ...stackBits,
         ].filter(Boolean).join(" • ") || null,
       });

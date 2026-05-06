@@ -684,6 +684,7 @@ export type AgentCapabilities = {
     command_conversation_boundary?: boolean;
     read_only_inspection_boundary?: boolean;
     supabase_memory_backend?: boolean;
+    supabase_rag_ready?: boolean;
     component_library_awareness?: boolean;
     headless_browser_runtime?: boolean;
     playwright_preview_audit?: boolean;
@@ -708,6 +709,8 @@ export type AgentCapabilities = {
     latest_session_ts: number | null;
     latest_project_ts: number | null;
     retrieval_backend?: string;
+    supabase_rag_status?: "ready" | "missing" | "error" | "unconfigured";
+    supabase_warning?: string | null;
   };
   stack: {
     component_libraries: string[];

@@ -106,12 +106,14 @@ def _custom_skill_paths(ws_root: Path, project_dir: Path) -> list[Path]:
     return out
 
 
-def _load_custom_skills(ws_root: Path, project_dir: Path) -> list[SkillDoc]:
+def _load_custom_skills(ws_root: Path, project_dir: Path, *, warnings: list[str] | None = None) -> list[SkillDoc]:
     skills: list[SkillDoc] = []
     for path in _custom_skill_paths(ws_root, project_dir):
         try:
             text = path.read_text(encoding="utf-8", errors="ignore").strip()
-        except Exception:
+        except Exception as exc:
+            if warnings is not None:
+                warnings.append(f"Custom skill '{path.name}' gagal dibaca ({exc}).")
             continue
         if not text:
             continue
@@ -121,19 +123,25 @@ def _load_custom_skills(ws_root: Path, project_dir: Path) -> list[SkillDoc]:
     return skills
 
 
-def _read_package_json(project_dir: Path) -> dict:
+def _read_package_json(project_dir: Path, *, warnings: list[str] | None = None) -> dict:
     path = project_dir / "package.json"
     if not path.exists() or not path.is_file():
         return {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as exc:
+        if warnings is not None:
+            warnings.append(f"package.json nggak kebaca buat stack detection ({exc}).")
         return {}
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        if warnings is not None:
+            warnings.append("package.json kebaca tapi formatnya bukan object JSON, jadi stack detection diskip.")
+        return {}
+    return data
 
 
-def detect_project_stack(project_dir: Path) -> ProjectStackSignals:
-    pkg = _read_package_json(project_dir)
+def detect_project_stack(project_dir: Path, *, warnings: list[str] | None = None) -> ProjectStackSignals:
+    pkg = _read_package_json(project_dir, warnings=warnings)
     deps = pkg.get("dependencies") if isinstance(pkg.get("dependencies"), dict) else {}
     dev_deps = pkg.get("devDependencies") if isinstance(pkg.get("devDependencies"), dict) else {}
     all_names = {str(name).strip() for name in [*deps.keys(), *dev_deps.keys()] if str(name).strip()}
@@ -168,8 +176,8 @@ def detect_project_stack(project_dir: Path) -> ProjectStackSignals:
     )
 
 
-def _stack_skills(project_dir: Path) -> list[SkillDoc]:
-    stack = detect_project_stack(project_dir)
+def _stack_skills(project_dir: Path, *, warnings: list[str] | None = None) -> list[SkillDoc]:
+    stack = detect_project_stack(project_dir, warnings=warnings)
     out: list[SkillDoc] = []
     if stack.component_libraries:
         libs = ", ".join(stack.component_libraries)
@@ -220,8 +228,9 @@ def resolve_agent_skills(
     active_rel: str,
     preview_url: str | None,
     limit: int = 4,
+    warnings: list[str] | None = None,
 ) -> list[SkillDoc]:
-    stack = detect_project_stack(project_dir)
+    stack = detect_project_stack(project_dir, warnings=warnings)
     query_tokens = _tokenize(
         "\n".join(
             filter(
@@ -239,7 +248,7 @@ def resolve_agent_skills(
             )
         )
     )
-    pool = list(_BUILTIN_SKILLS) + _stack_skills(project_dir) + _load_custom_skills(ws_root, project_dir)
+    pool = list(_BUILTIN_SKILLS) + _stack_skills(project_dir, warnings=warnings) + _load_custom_skills(ws_root, project_dir, warnings=warnings)
     scored: list[tuple[float, SkillDoc]] = []
     for skill in pool:
         bonus = 0.0

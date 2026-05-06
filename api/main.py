@@ -20,7 +20,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from api.settings import ROOT, ENV_PATH, load_settings
-from api.supabase_store import has_supabase, upsert_profile
+from api.supabase_store import get_agent_memory_chunks_table_status, has_supabase, upsert_profile
 from api import settings as settings_mod
 from api.app_state import CURRENT_SESSION_ID, CURRENT_USER_ID, STATE
 from api.auth_router import build_auth_router
@@ -1549,7 +1549,15 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
     stack = detect_project_stack(project_dir) if project_dir.exists() else None
     node_runtime = bool(_resolve_node_binary())
     browser_audit_ready = bool(project_dir.exists() and _browser_preview_audit_ready(project_dir))
-    memory_backend = "supabase-doc-chunks" if has_supabase() else "local-doc-chunks"
+    supabase_enabled = has_supabase()
+    supabase_rag_status = get_agent_memory_chunks_table_status() if supabase_enabled else "unconfigured"
+    supabase_rag_ready = supabase_rag_status == "ready"
+    memory_backend = "supabase-doc-chunks" if supabase_rag_ready else "local-doc-chunks"
+    supabase_warning = None
+    if supabase_rag_status == "missing":
+        supabase_warning = "Supabase udah dikonfigurasi, tapi tabel public.agent_memory_chunks belum dibuat. Jalankan docs/supabase-agent-rag.sql dulu."
+    elif supabase_rag_status == "error":
+        supabase_warning = "Supabase RAG belum bisa diverifikasi dari backend ini, jadi retrieval masih fallback ke chunk lokal."
     return {
         "ok": True,
         "runtime": "langgraph",
@@ -1565,7 +1573,8 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "interaction_intent_detection": True,
             "command_conversation_boundary": True,
             "read_only_inspection_boundary": True,
-            "supabase_memory_backend": has_supabase(),
+            "supabase_memory_backend": supabase_enabled,
+            "supabase_rag_ready": supabase_rag_ready,
             "component_library_awareness": True,
             "headless_browser_runtime": browser_audit_ready,
             "playwright_preview_audit": browser_audit_ready,
@@ -1581,7 +1590,7 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "memory_store": ".voiceide/agent-memory",
             "custom_skills_dir": [".voiceide/skills", f"{proj_root}/.voiceide/skills" if proj_root != "." else ".voiceide/skills"],
             "mcp_config_candidates": [".voiceide/mcp.json", f"{proj_root}/.voiceide/mcp.json" if proj_root != "." else ".voiceide/mcp.json", f"{proj_root}/mcp.json" if proj_root != "." else "mcp.json"],
-            "supabase_rag_table": "agent_memory_chunks" if has_supabase() else None,
+            "supabase_rag_table": "agent_memory_chunks" if supabase_enabled else None,
             "mcp_loop_budget": 2,
         },
         "memory": {
@@ -1590,6 +1599,8 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "latest_session_ts": memory_overview.latest_session_ts,
             "latest_project_ts": memory_overview.latest_project_ts,
             "retrieval_backend": memory_backend,
+            "supabase_rag_status": supabase_rag_status,
+            "supabase_warning": supabase_warning,
         },
         "stack": {
             "component_libraries": list(stack.component_libraries) if stack else [],

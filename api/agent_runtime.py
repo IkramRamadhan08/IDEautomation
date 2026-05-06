@@ -421,6 +421,7 @@ def _build_asset_prompt(ctx: PreparedAgentContext) -> str:
 
 
 def prepare_agent_context(req: Any, ws_root: Path) -> PreparedAgentContext:
+    prep_warnings: list[dict[str, str]] = []
     project_root = (getattr(req, "project_root", ".") or ".").strip() or "."
     project_dir = safe_join(ws_root, project_root)
     mode_profile = get_agent_mode_profile(getattr(req, "build_mode", None) or settings_mod.settings.build_mode or "hybrid")
@@ -463,7 +464,8 @@ def prepare_agent_context(req: Any, ws_root: Path) -> PreparedAgentContext:
                 else:
                     txt = content_override
                 relevant_files[rel_local] = txt[:max_chars]
-            except Exception:
+            except Exception as exc:
+                prep_warnings.append({"phase": "context", "message": f"File context '{rel_local}' nggak kebaca ({exc})."[:240]})
                 return
 
         if active_rel:
@@ -498,7 +500,8 @@ def prepare_agent_context(req: Any, ws_root: Path) -> PreparedAgentContext:
                 for p in styles_dir.glob("*.css"):
                     try:
                         rel = str(p.relative_to(project_dir))
-                    except Exception:
+                    except Exception as exc:
+                        prep_warnings.append({"phase": "context", "message": f"Style context '{p.name}' nggak kebaca ({exc})."[:240]})
                         continue
                     if rel not in relevant_files:
                         add_relevant(rel, max_chars=30_000)
@@ -510,8 +513,8 @@ def prepare_agent_context(req: Any, ws_root: Path) -> PreparedAgentContext:
                     css_path = match.lstrip("/")
                     if css_path and css_path not in relevant_files:
                         add_relevant(css_path)
-            except Exception:
-                pass
+            except Exception as exc:
+                prep_warnings.append({"phase": "context", "message": f"Linked CSS discovery dari '{active_rel}' gagal ({exc})."[:240]})
 
         hybrid_seed_needed = mode_profile.build_mode == "full-agent" and should_seed_hybrid(project_dir)
         if hybrid_seed_needed:
@@ -531,12 +534,14 @@ def prepare_agent_context(req: Any, ws_root: Path) -> PreparedAgentContext:
                 continue
             try:
                 asset_abs = safe_join(ws_root, asset_rel)
-            except Exception:
+            except Exception as exc:
+                prep_warnings.append({"phase": "context", "message": f"Asset path '{asset_rel}' nggak valid ({exc})."[:240]})
                 continue
             if not asset_abs.exists() or not asset_abs.is_file():
                 continue
             attached_assets.append(asset_rel)
-    except Exception:
+    except Exception as exc:
+        prep_warnings.append({"phase": "context", "message": f"Project context fallback kepake, jadi context file disederhanain ({exc})."[:240]})
         current = req.current_content if isinstance(getattr(req, "current_content", None), str) else ""
         all_files = []
         relevant_files = {}
@@ -569,7 +574,7 @@ def prepare_agent_context(req: Any, ws_root: Path) -> PreparedAgentContext:
         trace_skill_hits=[],
         trace_mcp_servers=[],
         trace_mcp_tools_used=[],
-        trace_warnings=[],
+        trace_warnings=list(prep_warnings),
     )
     extra_context = "\n\n".join([*_build_context_parts(ctx_stub, req), intent.prompt_block])
     asset_prompt = _build_asset_prompt(ctx_stub)
@@ -636,6 +641,7 @@ def _hydrate_memory_node(state: AgentRuntimeState) -> AgentRuntimeState:
 def _resolve_skills_node(state: AgentRuntimeState) -> AgentRuntimeState:
     ctx = state["context"]
     _emit(state, "status", {"phase": "skills", "message": "Nyocokin skill yang relevan buat task ini..."})
+    skill_warnings: list[str] = []
     skills = resolve_agent_skills(
         ctx.ws_root,
         project_dir=ctx.project_dir,
@@ -643,6 +649,7 @@ def _resolve_skills_node(state: AgentRuntimeState) -> AgentRuntimeState:
         build_mode=ctx.mode_profile.build_mode,
         active_rel=ctx.active_rel,
         preview_url=state.get("request_preview_url"),
+        warnings=skill_warnings,
     )
     ctx.resolved_skill_ids = [skill.skill_id for skill in skills]
     ctx.trace_skill_hits = [
@@ -653,6 +660,8 @@ def _resolve_skills_node(state: AgentRuntimeState) -> AgentRuntimeState:
         }
         for skill in skills
     ]
+    for warning in skill_warnings:
+        ctx.trace_warnings.append({"phase": "skills", "message": str(warning)[:240]})
     ctx.skill_prompt = format_skill_prompt(skills)
     if ctx.skill_prompt:
         ctx.extra_context = f"{ctx.extra_context}\n\n{ctx.skill_prompt}".strip()
@@ -662,7 +671,8 @@ def _resolve_skills_node(state: AgentRuntimeState) -> AgentRuntimeState:
 def _inspect_mcp_node(state: AgentRuntimeState) -> AgentRuntimeState:
     ctx = state["context"]
     _emit(state, "status", {"phase": "mcp", "message": "Cek capability boundary dari MCP registry..."})
-    servers = discover_mcp_servers(ctx.ws_root, ctx.project_dir)
+    mcp_warnings: list[str] = []
+    servers = discover_mcp_servers(ctx.ws_root, ctx.project_dir, warnings=mcp_warnings)
     ctx.mcp_servers = [server.name for server in servers]
     ctx.trace_mcp_servers = [
         {
@@ -674,7 +684,9 @@ def _inspect_mcp_node(state: AgentRuntimeState) -> AgentRuntimeState:
         }
         for server in servers
     ]
-    tool_catalog = list_mcp_tools(ctx.ws_root, ctx.project_dir) if servers else {}
+    tool_catalog = list_mcp_tools(ctx.ws_root, ctx.project_dir, warnings=mcp_warnings) if servers else {}
+    for warning in mcp_warnings:
+        ctx.trace_warnings.append({"phase": "mcp", "message": str(warning)[:240]})
     ctx.mcp_prompt = format_mcp_prompt(servers, tool_catalog=tool_catalog)
     if ctx.mcp_prompt:
         ctx.extra_context = f"{ctx.extra_context}\n\n{ctx.mcp_prompt}".strip()
@@ -720,9 +732,10 @@ def _draft_node(state: AgentRuntimeState) -> AgentRuntimeState:
         log = sug.log
         changes = list(sug.changes or [])
         actions = list(sug.actions or [])
-    except RuntimeError:
+    except RuntimeError as exc:
         if not (ctx.is_full_agent and ctx.hybrid_seed_needed and ctx.intent.should_write_files):
             raise
+        ctx.trace_warnings.append({"phase": "draft", "message": f"LLM draft gagal, jadi fallback ke seed-only baseline ({exc})."[:240]})
         spoken = ""
         log = f"provider={settings_mod.settings.llm_provider} full-agent-mode=seed-only"
         changes = []
@@ -795,6 +808,8 @@ def _execute_mcp_node(state: AgentRuntimeState) -> AgentRuntimeState:
                 "text": result.text[:240],
             }
         )
+        if not result.ok:
+            ctx.trace_warnings.append({"phase": "mcp", "message": f"MCP {result.server}.{result.tool} gagal ({result.error or 'unknown error'})."[:240]})
         _emit(
             state,
             "delta",
@@ -1008,6 +1023,10 @@ def run_agent_pipeline(req: Any, *, ws_root: Path, emit: EventEmitter | None = N
             changes=final_result["changes"],
             actions=final_result["actions"],
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        trace = final_result.get("trace")
+        if isinstance(trace, dict):
+            warnings = trace.get("warnings")
+            if isinstance(warnings, list):
+                warnings.append({"phase": "memory-write", "message": f"Agent run nggak bisa disimpan ke short-term memory ({exc})."[:240]})
     return final_result

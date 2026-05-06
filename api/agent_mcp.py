@@ -134,16 +134,20 @@ def _normalize_server(name: str, raw: dict[str, Any], source: str, *, project_di
     )
 
 
-def discover_mcp_servers(ws_root: Path, project_dir: Path) -> list[MCPServerInfo]:
+def discover_mcp_servers(ws_root: Path, project_dir: Path, *, warnings: list[str] | None = None) -> list[MCPServerInfo]:
     servers: list[MCPServerInfo] = []
     seen: set[tuple[str, str]] = set()
     for config_path in _candidate_configs(ws_root, project_dir):
         try:
             payload = json.loads(config_path.read_text(encoding="utf-8"))
-        except Exception:
+        except Exception as exc:
+            if warnings is not None:
+                warnings.append(f"MCP config '{config_path.name}' nggak kebaca ({exc}).")
             continue
         raw_servers = payload.get("servers") if isinstance(payload, dict) else None
         if not isinstance(raw_servers, dict):
+            if warnings is not None:
+                warnings.append(f"MCP config '{config_path.name}' nggak punya object 'servers' yang valid.")
             continue
         for name, raw in raw_servers.items():
             server = _normalize_server(str(name), raw, str(config_path), project_dir=project_dir, ws_root=ws_root)
@@ -211,10 +215,10 @@ async def _list_tools_async(server: MCPServerInfo) -> list[MCPToolInfo]:
     return tools
 
 
-def list_mcp_tools(ws_root: Path, project_dir: Path, *, refresh: bool = False) -> dict[str, list[MCPToolInfo]]:
+def list_mcp_tools(ws_root: Path, project_dir: Path, *, refresh: bool = False, warnings: list[str] | None = None) -> dict[str, list[MCPToolInfo]]:
     now = time.time()
     out: dict[str, list[MCPToolInfo]] = {}
-    for server in discover_mcp_servers(ws_root, project_dir):
+    for server in discover_mcp_servers(ws_root, project_dir, warnings=warnings):
         key = _server_cache_key(server)
         cached = _LIVE_TOOL_CACHE.get(key)
         if not refresh and cached and (now - cached[0]) < _TOOL_CACHE_TTL_SECONDS:
@@ -222,7 +226,9 @@ def list_mcp_tools(ws_root: Path, project_dir: Path, *, refresh: bool = False) -
             continue
         try:
             tools = asyncio.run(_list_tools_async(server))
-        except Exception:
+        except Exception as exc:
+            if warnings is not None:
+                warnings.append(f"Live MCP tools buat server '{server.name}' gagal di-load ({exc}).")
             tools = []
         _LIVE_TOOL_CACHE[key] = (now, tools)
         out[server.name] = tools

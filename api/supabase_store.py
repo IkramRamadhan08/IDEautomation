@@ -6,6 +6,8 @@ from typing import Any
 
 from api import settings as settings_mod
 
+_AGENT_MEMORY_CHUNKS_STATUS_CACHE: tuple[float, str] | None = None
+
 try:
     from supabase import Client, create_client
 except Exception:  # pragma: no cover
@@ -135,6 +137,40 @@ def archive_project(*, project_id: str, owner_id: str) -> dict[str, Any] | None:
     return data[0] if data else None
 
 
+def _classify_agent_memory_chunks_probe_error(exc: Exception) -> str:
+    message = str(exc or "").lower()
+    if "agent_memory_chunks" in message and (
+        "does not exist" in message
+        or "could not find the table" in message
+        or "relation" in message
+        or "schema cache" in message
+    ):
+        return "missing"
+    return "error"
+
+
+def get_agent_memory_chunks_table_status(*, refresh: bool = False) -> str:
+    global _AGENT_MEMORY_CHUNKS_STATUS_CACHE
+    if not has_supabase():
+        return "unconfigured"
+    now = time.time()
+    if not refresh and _AGENT_MEMORY_CHUNKS_STATUS_CACHE and (now - _AGENT_MEMORY_CHUNKS_STATUS_CACHE[0]) < 60:
+        return _AGENT_MEMORY_CHUNKS_STATUS_CACHE[1]
+
+    client = get_supabase_admin()
+    if not client:
+        status = "unconfigured"
+    else:
+        try:
+            client.table("agent_memory_chunks").select("chunk_id").limit(1).execute()
+            status = "ready"
+        except Exception as exc:
+            status = _classify_agent_memory_chunks_probe_error(exc)
+
+    _AGENT_MEMORY_CHUNKS_STATUS_CACHE = (now, status)
+    return status
+
+
 def upsert_agent_memory_chunks(*, project_root: str, chunks: list[dict[str, Any]]) -> bool:
     client = get_supabase_admin()
     if not client or not chunks:
@@ -165,6 +201,8 @@ def upsert_agent_memory_chunks(*, project_root: str, chunks: list[dict[str, Any]
 
     try:
         client.table("agent_memory_chunks").upsert(payload).execute()
+        global _AGENT_MEMORY_CHUNKS_STATUS_CACHE
+        _AGENT_MEMORY_CHUNKS_STATUS_CACHE = (time.time(), "ready")
         return True
     except Exception:
         return False
@@ -183,6 +221,8 @@ def list_agent_memory_chunks(*, project_root: str, limit: int = 240) -> list[dic
             .limit(max(1, min(int(limit or 240), 1000)))
             .execute()
         )
+        global _AGENT_MEMORY_CHUNKS_STATUS_CACHE
+        _AGENT_MEMORY_CHUNKS_STATUS_CACHE = (time.time(), "ready")
     except Exception:
         return None
     data = getattr(res, "data", None)

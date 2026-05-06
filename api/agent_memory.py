@@ -9,7 +9,7 @@ import time
 from typing import Any
 
 from .app_state import CURRENT_SESSION_ID, CURRENT_USER_ID
-from .supabase_store import has_supabase, list_agent_memory_chunks, upsert_agent_memory_chunks
+from .supabase_store import get_agent_memory_chunks_table_status, has_supabase, list_agent_memory_chunks, upsert_agent_memory_chunks
 
 _TOKEN_RE = re.compile(r"[a-zA-Z0-9_:-]{2,}")
 _STOPWORDS = {
@@ -469,17 +469,23 @@ def retrieve_agent_memory(
     candidate_chunks = local_doc_chunks
 
     if has_supabase():
-        sync_ok = _sync_supabase_doc_chunks(project_root, local_doc_chunks) if local_doc_chunks else False
-        if local_doc_chunks and not sync_ok:
-            warnings.append("Supabase RAG sync gagal, jadi retrieval doc sementara fallback ke chunk lokal.")
-        remote_doc_chunks = _load_supabase_doc_chunks(project_root, limit=max(240, len(local_doc_chunks) + 40))
-        if remote_doc_chunks:
-            candidate_chunks = remote_doc_chunks
-            backend = "supabase-doc-chunks"
-        elif remote_doc_chunks is None:
-            warnings.append("Supabase RAG lookup gagal, jadi retrieval doc sementara fallback ke chunk lokal.")
-        elif local_doc_chunks:
-            warnings.append("Supabase RAG belum punya chunk project ini, jadi retrieval doc sementara fallback ke chunk lokal.")
+        table_status = get_agent_memory_chunks_table_status()
+        if table_status == "missing":
+            warnings.append("Supabase RAG belum siap karena tabel public.agent_memory_chunks belum dibuat, jadi retrieval doc fallback ke chunk lokal.")
+        else:
+            sync_ok = _sync_supabase_doc_chunks(project_root, local_doc_chunks) if local_doc_chunks else False
+            if local_doc_chunks and not sync_ok:
+                warnings.append("Supabase RAG sync gagal, jadi retrieval doc sementara fallback ke chunk lokal.")
+            remote_doc_chunks = _load_supabase_doc_chunks(project_root, limit=max(240, len(local_doc_chunks) + 40))
+            if remote_doc_chunks:
+                candidate_chunks = remote_doc_chunks
+                backend = "supabase-doc-chunks"
+            elif remote_doc_chunks is None:
+                if table_status == "error":
+                    warnings.append("Supabase RAG nggak bisa diverifikasi sekarang, jadi retrieval doc sementara fallback ke chunk lokal.")
+                warnings.append("Supabase RAG lookup gagal, jadi retrieval doc sementara fallback ke chunk lokal.")
+            elif local_doc_chunks:
+                warnings.append("Supabase RAG belum punya chunk project ini, jadi retrieval doc sementara fallback ke chunk lokal.")
 
     long_hits_scored: list[tuple[float, MemoryChunk]] = []
     for chunk in candidate_chunks:
