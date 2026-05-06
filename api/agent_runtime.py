@@ -39,8 +39,8 @@ Shared rules:
 - If the user mixed conversation with a concrete build request, put the conversation in `spoken` and keep edits scoped to the explicit implementation ask.
 - changes must contain FULL file contents, not patches or snippets.
 - Use actions only for steps that are truly needed.
-- Use `type: \"tool\"` for local read-only repo helpers (no external MCP server required).
-- Use `type: \"mcp\"` only when a registered MCP integration would materially improve the answer.
+- Tools are callable interfaces. Use `type: \"tool\"` for local read-only repo helpers (no external MCP server required).
+- MCP is NOT a tool. It is a standard way to connect to external tools/data sources. Use `type: \"mcp\"` only when a registered MCP integration (server exposing tools) would materially improve the answer.
 - If you need tools (local or MCP) before finalizing, return the tool action(s) first and keep `changes` empty until the tool result comes back.
 - Do not mix exploratory tool actions with final shell actions in the same pass unless absolutely unavoidable.
 - If current content is marked as coming from the editor buffer, trust it over on-disk file contents.

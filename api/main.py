@@ -1758,6 +1758,11 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
     return {
         "ok": True,
         "runtime": "langgraph",
+        "glossary": {
+            "tools": "Tools are callable interfaces the agent is allowed to invoke to do work that cannot be reliably done with generative text alone (e.g., read/search repo, call external systems).",
+            "mcp": "MCP (Model Context Protocol) is an interoperability layer to standardize how the agent connects to external data sources and tools. MCP servers expose tools, but MCP itself is not a tool.",
+            "skills": "Skills are higher-level workflow abstractions: curated instructions + prompting + decision logic + (optionally) one or more tools/MCP calls, to keep complex agentic work consistent, auditable, and scoped.",
+        },
         "supports": {
             "graph_runtime": True,
             "short_term_memory_rag": True,
