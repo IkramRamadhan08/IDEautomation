@@ -10,6 +10,7 @@ from api.agent_intent import classify_agent_intent
 from api.agent_mcp import MCPServerInfo, MCPToolCallResult, MCPToolInfo, discover_mcp_servers, execute_mcp_tool, suggest_mcp_actions
 from api.agent_memory import retrieve_agent_memory
 from api.agent_skills import detect_project_stack, resolve_agent_skills
+from api.agent_tools import execute_local_tool
 from api.hybrid import build_hybrid_seed
 from api.main import _build_quality_checks, _extract_preview_snapshot_from_html, agent_capabilities, supabase_rag_status
 from api.settings import load_settings
@@ -323,6 +324,34 @@ class AgentToolsRegressionTests(unittest.TestCase):
         self.assertIn("component-library-awareness", skill_ids)
         self.assertIn("project-component-libraries", skill_ids)
 
+    def test_local_tools_repo_search_and_read_are_read_only_and_work(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src").mkdir(parents=True)
+            (project_dir / "src" / "App.tsx").write_text(
+                "export const x = 'supabase rag';\n",
+                encoding="utf-8",
+            )
+
+            search = execute_local_tool(
+                ws_root,
+                project_dir,
+                tool_name="repo_search",
+                arguments={"project_root": "demo", "query": "supabase"},
+            )
+            self.assertTrue(search.ok)
+            self.assertIn("demo/src/App.tsx", search.text)
+
+            read = execute_local_tool(
+                ws_root,
+                project_dir,
+                tool_name="repo_read",
+                arguments={"path": "demo/src/App.tsx", "max_chars": 2000},
+            )
+            self.assertTrue(read.ok)
+            self.assertIn("supabase rag", read.text)
+
 
 class HybridSeedRegressionTests(unittest.TestCase):
     def test_saas_brief_defaults_to_app_workspace_not_dashboard(self) -> None:
@@ -416,6 +445,7 @@ class CapabilityHonestyRegressionTests(unittest.TestCase):
         self.assertTrue(caps["supports"]["preview_quality_checks"])
         self.assertIn("mcp", caps["supports"]["tool_actions"])
         self.assertIn("shell", caps["supports"]["tool_actions"])
+        self.assertIn("tool", caps["supports"]["tool_actions"])
 
 
 class SupabaseReadinessRegressionTests(unittest.TestCase):

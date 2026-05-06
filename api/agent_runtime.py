@@ -11,6 +11,7 @@ from . import settings as settings_mod
 from .agent import suggest
 from .agent_intent import AgentIntent, classify_agent_intent
 from .agent_mcp import discover_mcp_servers, execute_mcp_tool, format_mcp_prompt, format_mcp_results_prompt, list_mcp_tools, suggest_mcp_actions
+from .agent_tools import execute_local_tool, format_local_tool_results_prompt, format_local_tools_prompt
 from .agent_memory import remember_agent_run, retrieve_agent_memory
 from .agent_skills import format_skill_prompt, resolve_agent_skills
 from .fs import read_text, safe_join
@@ -27,6 +28,7 @@ _RESPONSE_CONTRACT = """Return ONLY valid JSON with this exact shape:
   ],
   \"actions\": [
     {\"type\": \"shell\", \"command\": \"npm install ...\"},
+    {\"type\": \"tool\", \"tool\": \"repo_search\", \"arguments\": {\"query\": \"supabase\"}},
     {\"type\": \"mcp\", \"server\": \"github\", \"tool\": \"search_repos\", \"arguments\": {\"query\": \"voice ide\"}}
   ]
 }
@@ -36,10 +38,11 @@ Shared rules:
 - If the user is mainly chatting, asking for explanation, or checking status, keep `changes` and `actions` empty unless they explicitly ask to modify the project.
 - If the user mixed conversation with a concrete build request, put the conversation in `spoken` and keep edits scoped to the explicit implementation ask.
 - changes must contain FULL file contents, not patches or snippets.
-- Use actions only for steps that are truly needed, such as installs, generators, build/lint commands, or MCP-backed tool lookups.
+- Use actions only for steps that are truly needed.
+- Use `type: \"tool\"` for local read-only repo helpers (no external MCP server required).
 - Use `type: \"mcp\"` only when a registered MCP integration would materially improve the answer.
-- If you need MCP before finalizing, return the MCP action(s) first and keep `changes` empty until the tool result comes back.
-- Do not mix exploratory MCP actions with final shell actions in the same pass unless absolutely unavoidable.
+- If you need tools (local or MCP) before finalizing, return the tool action(s) first and keep `changes` empty until the tool result comes back.
+- Do not mix exploratory tool actions with final shell actions in the same pass unless absolutely unavoidable.
 - If current content is marked as coming from the editor buffer, trust it over on-disk file contents.
 - Reuse the existing stack and patterns unless there is a clear reason not to.
 - Avoid placeholder work, toy UIs, or generic scaffolding unless the user explicitly wants that.
@@ -188,6 +191,7 @@ class PreparedAgentContext:
     memory_prompt: str
     skill_prompt: str
     mcp_prompt: str
+    local_tools_prompt: str
     intent: AgentIntent
     resolved_skill_ids: list[str]
     mcp_servers: list[str]
@@ -195,6 +199,7 @@ class PreparedAgentContext:
     trace_skill_hits: list[dict[str, Any]]
     trace_mcp_servers: list[dict[str, Any]]
     trace_mcp_tools_used: list[dict[str, Any]]
+    trace_local_tools_used: list[dict[str, Any]]
     trace_warnings: list[dict[str, str]]
     suggested_mcp_actions: list[dict[str, Any]]
 
@@ -339,16 +344,35 @@ def _normalize_mcp_action(item: Any) -> dict[str, Any] | None:
     return {"type": "mcp", "server": server, "tool": tool, "arguments": arguments}
 
 
-def _split_runtime_actions(actions: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _normalize_local_tool_action(item: dict[str, Any]) -> dict[str, Any] | None:
+    if str(item.get("type") or "").strip().lower() != "tool":
+        return None
+    tool = str(item.get("tool") or item.get("name") or "").strip()
+    arguments = item.get("arguments")
+    if not isinstance(arguments, dict):
+        arguments = item.get("args") if isinstance(item.get("args"), dict) else {}
+    if not tool:
+        return None
+    return {"type": "tool", "tool": tool, "arguments": arguments}
+
+
+def _split_runtime_actions(actions: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     mcp_actions: list[dict[str, Any]] = []
+    tool_actions: list[dict[str, Any]] = []
     other_actions: list[dict[str, Any]] = []
     for item in actions or []:
+        if not isinstance(item, dict):
+            continue
         normalized_mcp = _normalize_mcp_action(item)
         if normalized_mcp:
             mcp_actions.append(normalized_mcp)
-        elif isinstance(item, dict):
-            other_actions.append(item)
-    return mcp_actions, other_actions
+            continue
+        normalized_tool = _normalize_local_tool_action(item)
+        if normalized_tool:
+            tool_actions.append(normalized_tool)
+            continue
+        other_actions.append(item)
+    return mcp_actions, tool_actions, other_actions
 
 
 def _should_run_refinement(*, build_mode: str, instruction: str, active_rel: str, preview_url: str | None, attached_assets: list[str]) -> bool:
@@ -568,6 +592,7 @@ def prepare_agent_context(req: Any, ws_root: Path) -> PreparedAgentContext:
         memory_prompt="",
         skill_prompt="",
         mcp_prompt="",
+        local_tools_prompt="",
         intent=intent,
         resolved_skill_ids=[],
         mcp_servers=[],
@@ -575,6 +600,7 @@ def prepare_agent_context(req: Any, ws_root: Path) -> PreparedAgentContext:
         trace_skill_hits=[],
         trace_mcp_servers=[],
         trace_mcp_tools_used=[],
+        trace_local_tools_used=[],
         trace_warnings=list(prep_warnings),
         suggested_mcp_actions=[],
     )
@@ -673,6 +699,11 @@ def _resolve_skills_node(state: AgentRuntimeState) -> AgentRuntimeState:
 def _inspect_mcp_node(state: AgentRuntimeState) -> AgentRuntimeState:
     ctx = state["context"]
     _emit(state, "status", {"phase": "mcp", "message": "Cek capability boundary dari MCP registry..."})
+
+    ctx.local_tools_prompt = format_local_tools_prompt()
+    if ctx.local_tools_prompt:
+        ctx.extra_context = f"{ctx.extra_context}\n\n{ctx.local_tools_prompt}".strip()
+
     mcp_warnings: list[str] = []
     servers = discover_mcp_servers(ctx.ws_root, ctx.project_dir, warnings=mcp_warnings)
     ctx.mcp_servers = [server.name for server in servers]
@@ -762,9 +793,9 @@ def _route_after_draft(state: AgentRuntimeState) -> str:
     if not ctx.intent.should_write_files:
         return "finalize"
 
-    mcp_actions, _other_actions = _split_runtime_actions(list(state.get("actions") or []))
+    mcp_actions, tool_actions, _other_actions = _split_runtime_actions(list(state.get("actions") or []))
     if ctx.intent.should_run_tools and int(state.get("tool_iterations") or 0) < _MAX_MCP_TOOL_LOOPS:
-        if mcp_actions or (not state.get("actions") and ctx.suggested_mcp_actions):
+        if tool_actions or mcp_actions or (not state.get("actions") and ctx.suggested_mcp_actions):
             return "tooling"
 
     changes = state.get("changes") or []
@@ -781,19 +812,56 @@ def _route_after_draft(state: AgentRuntimeState) -> str:
     return "finalize"
 
 
-def _execute_mcp_node(state: AgentRuntimeState) -> AgentRuntimeState:
+def _execute_tooling_node(state: AgentRuntimeState) -> AgentRuntimeState:
     ctx = state["context"]
     raw_actions = list(state.get("actions") or [])
-    mcp_actions, _other_actions = _split_runtime_actions(raw_actions)
-    if not mcp_actions and int(state.get("tool_iterations") or 0) == 0:
+    mcp_actions, tool_actions, other_actions = _split_runtime_actions(raw_actions)
+    if not mcp_actions and not tool_actions and int(state.get("tool_iterations") or 0) == 0:
         mcp_actions = list(ctx.suggested_mcp_actions or [])
-    if not mcp_actions:
+    if not mcp_actions and not tool_actions:
         return {"actions": raw_actions}
 
-    _emit(state, "status", {"phase": "tooling", "message": "Aku jalanin tool MCP dulu biar context-nya makin tajam..."})
-    if not raw_actions and mcp_actions:
+    _emit(state, "status", {"phase": "tooling", "message": "Aku jalanin tools dulu biar context-nya makin tajam..."})
+    if not raw_actions and (mcp_actions or tool_actions):
         _emit(state, "delta", {"message": "Aku nemu tool read-only yang cocok, jadi aku pakai dulu buat audit/refine awal."})
-    executed_results = []
+
+    local_results = []
+    for action in tool_actions[:_MAX_MCP_ACTIONS_PER_LOOP]:
+        tool = str(action.get("tool") or "").strip()
+        arguments = action.get("arguments") if isinstance(action.get("arguments"), dict) else {}
+        _emit(state, "delta", {"message": f"Tool {tool} lagi dipanggil..."})
+        result = execute_local_tool(
+            ctx.ws_root,
+            ctx.project_dir,
+            tool_name=tool,
+            arguments=arguments,
+        )
+        local_results.append(result)
+        ctx.trace_local_tools_used.append(
+            {
+                "tool": result.tool,
+                "ok": result.ok,
+                "duration_ms": result.duration_ms,
+                "error": result.error,
+                "arguments": result.arguments,
+                "text": result.text[:240],
+            }
+        )
+        if not result.ok:
+            ctx.trace_warnings.append({"phase": "tool", "message": f"Tool {result.tool} gagal ({result.error or 'unknown error'})."[:240]})
+        _emit(
+            state,
+            "delta",
+            {
+                "message": (
+                    f"Tool {tool} selesai, hasilnya masuk ke context."
+                    if result.ok
+                    else f"Tool {tool} gagal, tapi error-nya tetap kusimpen buat reasoning berikutnya."
+                )
+            },
+        )
+
+    mcp_results = []
     for action in mcp_actions[:_MAX_MCP_ACTIONS_PER_LOOP]:
         server = str(action.get("server") or "").strip()
         tool = str(action.get("tool") or "").strip()
@@ -806,7 +874,7 @@ def _execute_mcp_node(state: AgentRuntimeState) -> AgentRuntimeState:
             tool_name=tool,
             arguments=arguments,
         )
-        executed_results.append(result)
+        mcp_results.append(result)
         ctx.trace_mcp_tools_used.append(
             {
                 "server": result.server,
@@ -832,16 +900,20 @@ def _execute_mcp_node(state: AgentRuntimeState) -> AgentRuntimeState:
             },
         )
 
-    results_prompt = format_mcp_results_prompt(executed_results)
-    if results_prompt:
-        ctx.extra_context = f"{ctx.extra_context}\n\n{results_prompt}".strip()
+    local_prompt = format_local_tool_results_prompt(local_results)
+    if local_prompt:
+        ctx.extra_context = f"{ctx.extra_context}\n\n{local_prompt}".strip()
+
+    mcp_prompt = format_mcp_results_prompt(mcp_results)
+    if mcp_prompt:
+        ctx.extra_context = f"{ctx.extra_context}\n\n{mcp_prompt}".strip()
 
     return {
         "context": ctx,
         "tool_iterations": int(state.get("tool_iterations") or 0) + 1,
-        "mcp_call_count": int(state.get("mcp_call_count") or 0) + len(executed_results),
+        "mcp_call_count": int(state.get("mcp_call_count") or 0) + len(mcp_results),
         "changes": [],
-        "actions": [],
+        "actions": other_actions,
     }
 
 
@@ -954,6 +1026,7 @@ def _finalize_node(state: AgentRuntimeState) -> AgentRuntimeState:
         "skills": list(ctx.trace_skill_hits),
         "mcp_servers": list(ctx.trace_mcp_servers),
         "mcp_tools_used": list(ctx.trace_mcp_tools_used),
+        "local_tools_used": list(ctx.trace_local_tools_used),
         "warnings": list(ctx.trace_warnings),
     }
 
@@ -973,7 +1046,7 @@ _AGENT_GRAPH_BUILDER.add_node("memory", _hydrate_memory_node)
 _AGENT_GRAPH_BUILDER.add_node("skills", _resolve_skills_node)
 _AGENT_GRAPH_BUILDER.add_node("mcp", _inspect_mcp_node)
 _AGENT_GRAPH_BUILDER.add_node("draft", _draft_node)
-_AGENT_GRAPH_BUILDER.add_node("tooling", _execute_mcp_node)
+_AGENT_GRAPH_BUILDER.add_node("tooling", _execute_tooling_node)
 _AGENT_GRAPH_BUILDER.add_node("refine", _refine_node)
 _AGENT_GRAPH_BUILDER.add_node("finalize", _finalize_node)
 _AGENT_GRAPH_BUILDER.set_entry_point("intent")
@@ -1019,6 +1092,7 @@ def run_agent_pipeline(req: Any, *, ws_root: Path, emit: EventEmitter | None = N
             "skills": list(ctx.trace_skill_hits),
             "mcp_servers": list(ctx.trace_mcp_servers),
             "mcp_tools_used": list(ctx.trace_mcp_tools_used),
+            "local_tools_used": list(ctx.trace_local_tools_used),
             "warnings": list(ctx.trace_warnings),
         }),
     }

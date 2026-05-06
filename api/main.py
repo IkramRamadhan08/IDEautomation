@@ -34,6 +34,7 @@ from api.agent_mcp import discover_mcp_servers, list_mcp_tools
 from api.agent_memory import get_agent_memory_overview, sync_project_docs_to_supabase
 from api.agent_runtime import run_agent_pipeline
 from api.agent_skills import detect_project_stack
+from api.agent_tools import list_local_tools
 
 
 app = FastAPI(title="Voice IDE Backend", version="0.1.0")
@@ -1779,7 +1780,7 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "browser_dom_audit": browser_audit_ready,
             "preview_quality_checks": True,
             "preview_audit_mode": "browser" if browser_audit_ready else "html",
-            "tool_actions": ["shell", "mcp"],
+            "tool_actions": ["shell", "mcp", "tool"],
             "streaming_transport": True,
             "native_provider_token_streaming": False,
         },
@@ -1808,6 +1809,14 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "node_runtime": node_runtime,
             "preview_audit_mode": "browser" if browser_audit_ready else "html",
         },
+        "local_tools": [
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "input_schema": tool.input_schema,
+            }
+            for tool in list_local_tools()
+        ],
         "discovered_mcp_servers": [
             {
                 "name": server.name,
