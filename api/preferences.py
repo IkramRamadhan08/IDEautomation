@@ -11,6 +11,7 @@ from api.supabase_store import get_supabase_admin, has_supabase
 USER_SETTINGS_TABLE = "user_settings"
 PROJECT_PREFERENCES_TABLE = "project_preferences"
 HAS_PROJECT_PREFERENCES = False
+OPTIONAL_USER_SETTINGS_COLUMNS = ("groq_model", "gemini_model", "together_model", "cerebras_model", "xai_model")
 
 
 class UserPreferencesRecord(BaseModel):
@@ -96,7 +97,7 @@ def get_user_preferences(*, profile_id: str) -> UserPreferencesRecord:
 
 def upsert_user_preferences(*, profile_id: str, req: UserPreferencesUpdateReq) -> UserPreferencesRecord:
     client = _require_supabase()
-    payload = {
+    payload: dict[str, Any] = {
         "user_id": profile_id,
         "llm_provider": req.llm_provider,
         "build_mode": req.build_mode,
@@ -109,7 +110,14 @@ def upsert_user_preferences(*, profile_id: str, req: UserPreferencesUpdateReq) -
         "cerebras_model": req.cerebras_model,
         "xai_model": req.xai_model,
     }
-    res = client.table(USER_SETTINGS_TABLE).upsert(payload, on_conflict="user_id").execute()
+    try:
+        res = client.table(USER_SETTINGS_TABLE).upsert(payload, on_conflict="user_id").execute()
+    except Exception as exc:
+        if not _is_missing_optional_column_error(exc):
+            raise
+        fallback_payload = {key: value for key, value in payload.items() if key not in OPTIONAL_USER_SETTINGS_COLUMNS}
+        res = client.table(USER_SETTINGS_TABLE).upsert(fallback_payload, on_conflict="user_id").execute()
+        payload = fallback_payload
     data = getattr(res, "data", None) or []
     row = data[0] if data and isinstance(data[0], dict) else payload
     return UserPreferencesRecord(
@@ -125,6 +133,11 @@ def upsert_user_preferences(*, profile_id: str, req: UserPreferencesUpdateReq) -
         cerebras_model=row.get("cerebras_model"),
         xai_model=row.get("xai_model"),
     )
+
+
+def _is_missing_optional_column_error(exc: Exception) -> bool:
+    text = str(exc)
+    return "PGRST204" in text and any(column in text for column in OPTIONAL_USER_SETTINGS_COLUMNS)
 
 
 def get_project_preferences(*, project_id: str) -> ProjectPreferencesRecord:
