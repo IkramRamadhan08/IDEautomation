@@ -841,6 +841,16 @@ a { color: inherit; }
         files.pop("src/pages/Docs.tsx", None)
     if template != "dashboard":
         files.pop("src/pages/Dashboard.tsx", None)
+    if template != "landing":
+        files.pop("src/pages/Contact.tsx", None)
+    if template != "app":
+        files.pop("src/pages/Workspace.tsx", None)
+        files.pop("src/pages/Integrations.tsx", None)
+        files.pop("src/pages/AppSettings.tsx", None)
+    else:
+        files.pop("src/pages/Features.tsx", None)
+        files.pop("src/pages/Pricing.tsx", None)
+        files.pop("src/pages/Contact.tsx", None)
 
     return {_join(project_root, rel): content for rel, content in files.items()}
 

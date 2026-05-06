@@ -151,6 +151,11 @@ class HybridSeedRegressionTests(unittest.TestCase):
         self.assertIn('path="/integrations"', app_tsx)
         self.assertNotIn('path="/dashboard"', app_tsx)
         self.assertIn("demo/src/pages/Workspace.tsx", files)
+        self.assertIn("demo/src/pages/Integrations.tsx", files)
+        self.assertIn("demo/src/pages/AppSettings.tsx", files)
+        self.assertNotIn("demo/src/pages/Features.tsx", files)
+        self.assertNotIn("demo/src/pages/Pricing.tsx", files)
+        self.assertNotIn("demo/src/pages/Contact.tsx", files)
 
     def test_explicit_marketing_brief_keeps_landing_sections(self) -> None:
         files = build_hybrid_seed(
@@ -163,6 +168,41 @@ class HybridSeedRegressionTests(unittest.TestCase):
         self.assertIn("Requested section", files["demo/src/pages/Home.tsx"])
         self.assertIn("Testimonials", files["demo/src/pages/Home.tsx"])
         self.assertIn("FAQ", files["demo/src/pages/Home.tsx"])
+        self.assertIn("demo/src/pages/Contact.tsx", files)
+        self.assertNotIn("demo/src/pages/Workspace.tsx", files)
+        self.assertNotIn("demo/src/pages/Integrations.tsx", files)
+        self.assertNotIn("demo/src/pages/AppSettings.tsx", files)
+
+    def test_docs_brief_prefers_docs_route_over_app_workspace(self) -> None:
+        files = build_hybrid_seed(
+            project_root="demo",
+            project_name="Handbook",
+            instruction="Create product documentation with guides, reference docs, and changelog style navigation.",
+        )
+
+        app_tsx = files["demo/src/App.tsx"]
+        self.assertIn('path="/docs"', app_tsx)
+        self.assertNotIn('path="/workspace"', app_tsx)
+        self.assertIn("demo/src/pages/Docs.tsx", files)
+        self.assertNotIn("demo/src/pages/Workspace.tsx", files)
+        self.assertNotIn("demo/src/pages/Integrations.tsx", files)
+        self.assertNotIn("demo/src/pages/AppSettings.tsx", files)
+
+    def test_dashboard_brief_prefers_dashboard_route_over_landing_or_app_noise(self) -> None:
+        files = build_hybrid_seed(
+            project_root="demo",
+            project_name="Ops Hub",
+            instruction="Build an admin dashboard for operations, analytics, billing, and inventory monitoring.",
+        )
+
+        app_tsx = files["demo/src/App.tsx"]
+        self.assertIn('path="/dashboard"', app_tsx)
+        self.assertNotIn('path="/workspace"', app_tsx)
+        self.assertNotIn('path="/contact"', app_tsx)
+        self.assertIn("demo/src/pages/Dashboard.tsx", files)
+        self.assertNotIn("demo/src/pages/Workspace.tsx", files)
+        self.assertNotIn("demo/src/pages/Integrations.tsx", files)
+        self.assertNotIn("demo/src/pages/AppSettings.tsx", files)
 
 
 class CapabilityHonestyRegressionTests(unittest.TestCase):
