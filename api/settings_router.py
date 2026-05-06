@@ -142,6 +142,7 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
         user = resolve_request_user(authorization=authorization, x_voiceide_user=x_voiceide_user)
         changed: list[str] = []
 
+        is_serverless = bool((os.getenv("VERCEL") or "").strip() or (os.getenv("VERCEL_ENV") or "").strip())
         secrets_ready = has_supabase() and bool((os.getenv("VOICEIDE_SECRET_KEY") or "").strip())
         hosted_mode = secrets_ready and user.auth_source == "supabase"
         has_secret_updates = any(
@@ -152,6 +153,13 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
             storage_note = (
                 "Supabase login terdeteksi, tapi hosted secret storage belum siap (VOICEIDE_SECRET_KEY belum di-set). "
                 "Jadi API key disimpan ke .env (local/dev) bukan per-akun."
+            )
+
+        if is_serverless and not hosted_mode and any(value is not None for value in [req.default_workspace, req.llm_provider, req.build_mode, req.openai_model, req.anthropic_model, req.openrouter_model, req.friendly_free_tier_mode, req.agent_refinement_mode, req.agent_min_gap_seconds, req.agent_requests_per_minute, req.openai_requests_per_minute, req.anthropic_requests_per_minute, req.openrouter_requests_per_minute, req.openai_api_key, req.anthropic_api_key, req.openrouter_api_key]):
+            raise HTTPException(
+                503,
+                "Hosted deploy tidak mendukung penyimpanan settings ke file .env. "
+                "Login Supabase + set VOICEIDE_SECRET_KEY (untuk hosted secret storage) agar settings & BYOK key tersimpan aman per-akun."
             )
 
         if hosted_mode:

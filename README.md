@@ -102,15 +102,19 @@ Jadi frontend dan API sudah diarahkan untuk deploy serverless di Vercel.
 
 ### 3. Isi environment variables di Vercel
 
-Minimal isi ini (baik di Vercel env maupun root `.env` lokal):
+Minimal isi ini di **Vercel Environment Variables**:
 
 ```env
 VITE_SUPABASE_URL=...
 VITE_SUPABASE_ANON_KEY=...
 SUPABASE_URL=...
 SUPABASE_SERVICE_ROLE_KEY=...
-OPENAI_API_KEY=...
+VOICEIDE_SECRET_KEY=...  # random string, required for hosted BYOK secret encryption
 ```
+
+Catatan BYOK (hosted):
+- Di deploy hosted, **jangan mengandalkan** `OPENAI_API_KEY` dari env untuk semua user.
+- User akan isi API key mereka di Settings, lalu key disimpan **per akun** di Supabase (`user_provider_secrets`) dengan enkripsi menggunakan `VOICEIDE_SECRET_KEY`.
 
 Kalau mau set model/config dasar juga, tambahkan:
 
