@@ -107,6 +107,10 @@ function formatValidationReport(validation: ProjectValidationRun, maxChars = 800
 }
 
 function formatPreviewAuditReport(audit: PreviewAuditResult, maxChars = 4000) {
+  const qualitySection = audit.quality_checks && audit.quality_checks.length > 0
+    ? `quality_checks:\n- ${audit.quality_checks.map((check) => `${check.ok ? "ok" : "warn"}: ${check.label} - ${check.detail}`).join("\n- ")}`
+    : null;
+
   const sections = [
     `summary: ${audit.summary}`,
     `audit_mode: ${audit.audit_mode}`,
@@ -114,6 +118,7 @@ function formatPreviewAuditReport(audit: PreviewAuditResult, maxChars = 4000) {
     audit.meta_description ? `meta: ${audit.meta_description}` : "meta: (missing)",
     audit.headings.length > 0 ? `headings: ${audit.headings.join(" | ")}` : "headings: (missing)",
     audit.buttons.length > 0 ? `buttons: ${audit.buttons.join(" | ")}` : "buttons: (none)",
+    qualitySection,
     audit.runtime_warnings.length > 0 ? `runtime_warnings:\n- ${audit.runtime_warnings.join("\n- ")}` : null,
     audit.page_errors.length > 0 ? `page_errors:\n- ${audit.page_errors.join("\n- ")}` : null,
     audit.console_errors.length > 0 ? `console_errors:\n- ${audit.console_errors.join("\n- ")}` : null,
@@ -460,6 +465,8 @@ export async function runAgentWorkflow({
             : caps.supports.supabase_memory_backend
               ? "supabase memory backend terpasang tapi belum siap"
               : null,
+          caps.supports.vector_memory_retrieval ? "vector retrieval aktif" : null,
+          caps.supports.preview_quality_checks ? "quality audit responsive+a11y+states aktif" : null,
           memoryBackendLabel,
           memoryWarningLabel,
           ...stackBits,

@@ -44,13 +44,14 @@ try {
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
   await page.waitForTimeout(settleMs);
 
-  const snapshot = await page.evaluate(() => {
+  const collectSnapshot = async () => page.evaluate(() => {
     const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
     const listText = (selector, limit = 8) => Array.from(document.querySelectorAll(selector))
       .map((node) => clean(node.textContent || node.getAttribute?.('aria-label') || ''))
       .filter(Boolean)
       .slice(0, limit);
-    const buttonText = Array.from(document.querySelectorAll('button, [role="button"], input[type="button"], input[type="submit"]'))
+    const buttonNodes = Array.from(document.querySelectorAll('button, [role="button"], input[type="button"], input[type="submit"]'));
+    const buttonText = buttonNodes
       .map((node) => clean(node.textContent || node.getAttribute('aria-label') || node.getAttribute('value') || ''))
       .filter(Boolean)
       .slice(0, 8);
@@ -60,24 +61,53 @@ try {
       .slice(0, 8);
     const bodyText = clean(document.body?.innerText || '');
     const metaDescription = document.querySelector('meta[name="description"]')?.getAttribute('content') || '';
-    const imageCount = document.querySelectorAll('img').length;
-    const imagesMissingAlt = Array.from(document.querySelectorAll('img')).filter((img) => !clean(img.getAttribute('alt') || '')).length;
+    const imageNodes = Array.from(document.querySelectorAll('img'));
+    const imagesMissingAlt = imageNodes.filter((img) => !clean(img.getAttribute('alt') || '')).length;
+    const formFields = Array.from(document.querySelectorAll('input, textarea, select'));
+    const labeledInputCount = formFields.filter((field) => {
+      const id = clean(field.getAttribute('id') || '');
+      const ariaLabel = clean(field.getAttribute('aria-label') || '');
+      const labelledBy = clean(field.getAttribute('aria-labelledby') || '');
+      const nestedLabel = field.closest('label');
+      const explicitLabel = id ? document.querySelector(`label[for="${id}"]`) : null;
+      return Boolean(ariaLabel || labelledBy || nestedLabel || explicitLabel);
+    }).length;
 
     return {
       title: clean(document.title || ''),
       meta_description: clean(metaDescription),
+      viewport_meta: Boolean(document.querySelector('meta[name="viewport"]')),
+      document_lang: clean(document.documentElement.getAttribute('lang') || ''),
       headings: listText('h1', 3),
       subheadings: listText('h2', 4),
       buttons: buttonText,
       links: linkText,
       form_count: document.querySelectorAll('form').length,
-      input_count: document.querySelectorAll('input, textarea, select').length,
+      input_count: formFields.length,
+      labeled_input_count: labeledInputCount,
+      landmark_count: document.querySelectorAll('main, nav, header, footer, aside, section[aria-label], [role="main"], [role="navigation"], [role="contentinfo"]').length,
+      main_count: document.querySelectorAll('main, [role="main"]').length,
+      button_count: buttonNodes.length,
       word_count: bodyText ? bodyText.split(/\s+/).filter(Boolean).length : 0,
-      image_count: imageCount,
+      image_count: imageNodes.length,
       images_missing_alt: imagesMissingAlt,
+      scroll_width: Math.max(document.documentElement?.scrollWidth || 0, document.body?.scrollWidth || 0),
+      viewport_width: window.innerWidth || document.documentElement?.clientWidth || 0,
       excerpt: bodyText.slice(0, 1200),
     };
   });
+
+  const desktopSnapshot = await collectSnapshot();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(Math.min(settleMs, 500));
+  const mobileSnapshot = await collectSnapshot();
+  const snapshot = {
+    ...desktopSnapshot,
+    mobile_scroll_width: mobileSnapshot.scroll_width,
+    mobile_viewport_width: mobileSnapshot.viewport_width,
+    mobile_overflow_x: mobileSnapshot.scroll_width > mobileSnapshot.viewport_width + 8,
+    desktop_overflow_x: desktopSnapshot.scroll_width > desktopSnapshot.viewport_width + 8,
+  };
 
   console.log(JSON.stringify({
     ok: true,

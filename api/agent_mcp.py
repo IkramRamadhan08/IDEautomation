@@ -361,6 +361,66 @@ def execute_mcp_tool(
     return asyncio.run(_call_tool_async(server, tool_name, args))
 
 
+def _tool_required_arguments(schema: dict[str, Any]) -> list[str]:
+    required = schema.get("required") if isinstance(schema, dict) else None
+    if not isinstance(required, list):
+        return []
+    return [str(item).strip() for item in required if str(item).strip()]
+
+
+def suggest_mcp_actions(query: str, tool_catalog: dict[str, list[MCPToolInfo]] | None = None, *, limit: int = 2) -> list[dict[str, Any]]:
+    query_text = str(query or "").strip().lower()
+    if not query_text or not tool_catalog:
+        return []
+
+    query_bits = {bit for bit in [
+        "audit" if any(token in query_text for token in ["audit", "review", "inspect", "check", "validate"]) else "",
+        "browser" if any(token in query_text for token in ["ui", "layout", "responsive", "a11y", "preview", "browser", "dom"]) else "",
+        "search" if any(token in query_text for token in ["search", "find", "lookup", "trace"]) else "",
+        "logs" if any(token in query_text for token in ["error", "log", "console", "fail"]) else "",
+    ] if bit}
+    if not query_bits:
+        return []
+
+    candidates: list[tuple[float, dict[str, Any]]] = []
+    for server_name, tools in tool_catalog.items():
+        for tool in tools:
+            required = _tool_required_arguments(tool.input_schema)
+            if required:
+                continue
+            hay = f"{tool.name} {tool.description}".lower()
+            score = 0.0
+            if any(token in hay for token in ["audit", "inspect", "check", "validate", "axe", "lighthouse"]):
+                score += 1.2 if "audit" in query_bits else 0.35
+            if any(token in hay for token in ["browser", "playwright", "dom", "snapshot", "screenshot"]):
+                score += 1.0 if "browser" in query_bits else 0.25
+            if any(token in hay for token in ["search", "read", "fetch", "list", "query", "lookup"]):
+                score += 0.9 if "search" in query_bits else 0.2
+            if any(token in hay for token in ["log", "console", "trace"]):
+                score += 0.8 if "logs" in query_bits else 0.15
+            if score <= 0.0:
+                continue
+            candidates.append((score, {
+                "type": "mcp",
+                "server": server_name,
+                "tool": tool.name,
+                "arguments": {},
+            }))
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    actions: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for _score_value, action in candidates:
+        key = (str(action["server"]), str(action["tool"]))
+        if key in seen:
+            continue
+        seen.add(key)
+        actions.append(action)
+        if len(actions) >= max(1, min(limit, 4)):
+            break
+    return actions
+
+
 def format_mcp_prompt(servers: list[MCPServerInfo], tool_catalog: dict[str, list[MCPToolInfo]] | None = None) -> str:
     if not servers:
         return ""

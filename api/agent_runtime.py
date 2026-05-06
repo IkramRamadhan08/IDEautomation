@@ -10,7 +10,7 @@ from langgraph.graph import END, StateGraph
 from . import settings as settings_mod
 from .agent import suggest
 from .agent_intent import AgentIntent, classify_agent_intent
-from .agent_mcp import discover_mcp_servers, execute_mcp_tool, format_mcp_prompt, format_mcp_results_prompt, list_mcp_tools
+from .agent_mcp import discover_mcp_servers, execute_mcp_tool, format_mcp_prompt, format_mcp_results_prompt, list_mcp_tools, suggest_mcp_actions
 from .agent_memory import remember_agent_run, retrieve_agent_memory
 from .agent_skills import format_skill_prompt, resolve_agent_skills
 from .fs import read_text, safe_join
@@ -196,6 +196,7 @@ class PreparedAgentContext:
     trace_mcp_servers: list[dict[str, Any]]
     trace_mcp_tools_used: list[dict[str, Any]]
     trace_warnings: list[dict[str, str]]
+    suggested_mcp_actions: list[dict[str, Any]]
 
     @property
     def is_full_agent(self) -> bool:
@@ -575,6 +576,7 @@ def prepare_agent_context(req: Any, ws_root: Path) -> PreparedAgentContext:
         trace_mcp_servers=[],
         trace_mcp_tools_used=[],
         trace_warnings=list(prep_warnings),
+        suggested_mcp_actions=[],
     )
     extra_context = "\n\n".join([*_build_context_parts(ctx_stub, req), intent.prompt_block])
     asset_prompt = _build_asset_prompt(ctx_stub)
@@ -685,8 +687,11 @@ def _inspect_mcp_node(state: AgentRuntimeState) -> AgentRuntimeState:
         for server in servers
     ]
     tool_catalog = list_mcp_tools(ctx.ws_root, ctx.project_dir, warnings=mcp_warnings) if servers else {}
+    ctx.suggested_mcp_actions = suggest_mcp_actions(state["input"], tool_catalog=tool_catalog, limit=2) if tool_catalog else []
     for warning in mcp_warnings:
         ctx.trace_warnings.append({"phase": "mcp", "message": str(warning)[:240]})
+    if ctx.suggested_mcp_actions:
+        ctx.trace_warnings.append({"phase": "mcp", "message": f"Auto MCP hints siap: {len(ctx.suggested_mcp_actions)} tool read-only bisa dipakai buat audit/refine."})
     ctx.mcp_prompt = format_mcp_prompt(servers, tool_catalog=tool_catalog)
     if ctx.mcp_prompt:
         ctx.extra_context = f"{ctx.extra_context}\n\n{ctx.mcp_prompt}".strip()
@@ -758,8 +763,9 @@ def _route_after_draft(state: AgentRuntimeState) -> str:
         return "finalize"
 
     mcp_actions, _other_actions = _split_runtime_actions(list(state.get("actions") or []))
-    if ctx.intent.should_run_tools and mcp_actions and int(state.get("tool_iterations") or 0) < _MAX_MCP_TOOL_LOOPS:
-        return "tooling"
+    if ctx.intent.should_run_tools and int(state.get("tool_iterations") or 0) < _MAX_MCP_TOOL_LOOPS:
+        if mcp_actions or (not state.get("actions") and ctx.suggested_mcp_actions):
+            return "tooling"
 
     changes = state.get("changes") or []
     if not changes:
@@ -779,10 +785,14 @@ def _execute_mcp_node(state: AgentRuntimeState) -> AgentRuntimeState:
     ctx = state["context"]
     raw_actions = list(state.get("actions") or [])
     mcp_actions, _other_actions = _split_runtime_actions(raw_actions)
+    if not mcp_actions and int(state.get("tool_iterations") or 0) == 0:
+        mcp_actions = list(ctx.suggested_mcp_actions or [])
     if not mcp_actions:
         return {"actions": raw_actions}
 
     _emit(state, "status", {"phase": "tooling", "message": "Aku jalanin tool MCP dulu biar context-nya makin tajam..."})
+    if not raw_actions and mcp_actions:
+        _emit(state, "delta", {"message": "Aku nemu tool read-only yang cocok, jadi aku pakai dulu buat audit/refine awal."})
     executed_results = []
     for action in mcp_actions[:_MAX_MCP_ACTIONS_PER_LOOP]:
         server = str(action.get("server") or "").strip()

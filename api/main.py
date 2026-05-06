@@ -468,6 +468,102 @@ def _extract_text_matches(pattern: str, html: str, limit: int) -> list[str]:
     return values
 
 
+def _scan_project_quality_signals(project_dir: Path) -> dict[str, bool]:
+    patterns = {
+        "responsive": [r"@media\b", r"\bsm:", r"\bmd:", r"\blg:", r"clamp\(", r"minmax\(", r"grid-template", r"useMediaQuery", r"matchMedia\("],
+        "loading": [r"\bloading\b", r"isLoading", r"pending", r"skeleton", r"spinner"],
+        "error": [r"\berror\b", r"failed", r"retry", r"try again", r"catch \("],
+        "empty": [r"empty state", r"no results", r"no items", r"not found", r"belum ada", r"empty"],
+        "labels": [r"<label\b", r"htmlFor=", r"aria-label=", r"aria-labelledby="],
+    }
+    hits = {key: False for key in patterns}
+    candidates: list[Path] = []
+    for rel in ("index.html",):
+        path = project_dir / rel
+        if path.exists() and path.is_file():
+            candidates.append(path)
+    src_dir = project_dir / "src"
+    if src_dir.exists() and src_dir.is_dir():
+        for pattern in ("**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js", "**/*.css", "**/*.html"):
+            for path in src_dir.glob(pattern):
+                if path.is_file():
+                    candidates.append(path)
+    for path in candidates[:80]:
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")[:24000]
+        except Exception:
+            continue
+        for key, variants in patterns.items():
+            if hits[key]:
+                continue
+            if any(re.search(variant, text, flags=re.IGNORECASE) for variant in variants):
+                hits[key] = True
+        if all(hits.values()):
+            break
+    return hits
+
+
+def _build_quality_checks(snapshot: dict, *, project_signals: dict[str, bool] | None = None) -> list[dict[str, str | bool]]:
+    project_signals = project_signals or {}
+    viewport_meta = bool(snapshot.get("viewport_meta"))
+    document_lang = str(snapshot.get("document_lang") or "").strip()
+    main_count = max(0, int(snapshot.get("main_count") or 0))
+    landmark_count = max(0, int(snapshot.get("landmark_count") or 0))
+    input_count = max(0, int(snapshot.get("input_count") or 0))
+    labeled_input_count = max(0, int(snapshot.get("labeled_input_count") or 0))
+    mobile_overflow = bool(snapshot.get("mobile_overflow_x"))
+    checks: list[dict[str, str | bool]] = []
+    checks.append({
+        "id": "responsive-foundation",
+        "label": "Responsive foundation",
+        "ok": viewport_meta or bool(project_signals.get("responsive")),
+        "detail": "Viewport/meta responsive basics detected." if (viewport_meta or project_signals.get("responsive")) else "Belum kelihatan viewport meta atau pola responsive layout yang meyakinkan.",
+    })
+    checks.append({
+        "id": "responsive-overflow",
+        "label": "Mobile overflow",
+        "ok": not mobile_overflow,
+        "detail": "Nggak kelihatan overflow horizontal di viewport mobile audit." if not mobile_overflow else "Preview masih overflow secara horizontal di viewport mobile.",
+    })
+    checks.append({
+        "id": "a11y-landmarks",
+        "label": "A11y landmarks",
+        "ok": main_count > 0 and landmark_count >= 2 and bool(document_lang),
+        "detail": "Lang, main landmark, dan struktur dasar aksesibilitas kelihatan ada." if (main_count > 0 and landmark_count >= 2 and bool(document_lang)) else "Lang/main landmark masih lemah atau belum kelihatan lengkap.",
+    })
+    checks.append({
+        "id": "a11y-alt-text",
+        "label": "Alt text",
+        "ok": max(0, int(snapshot.get("images_missing_alt") or 0)) == 0,
+        "detail": "Semua gambar yang ke-detect punya alt text." if max(0, int(snapshot.get("images_missing_alt") or 0)) == 0 else "Masih ada gambar tanpa alt text yang layak.",
+    })
+    checks.append({
+        "id": "a11y-form-labels",
+        "label": "Form labels",
+        "ok": input_count == 0 or labeled_input_count >= input_count or bool(project_signals.get("labels")),
+        "detail": "Field form terlihat punya label/aria yang cukup." if (input_count == 0 or labeled_input_count >= input_count or project_signals.get("labels")) else "Field form belum kelihatan punya label/aria yang rapi.",
+    })
+    checks.append({
+        "id": "state-loading",
+        "label": "Loading state",
+        "ok": bool(project_signals.get("loading")),
+        "detail": "Ada sinyal loading/skeleton state di source." if project_signals.get("loading") else "Belum ketemu loading/skeleton state yang jelas di source.",
+    })
+    checks.append({
+        "id": "state-error",
+        "label": "Error state",
+        "ok": bool(project_signals.get("error")),
+        "detail": "Ada sinyal error/retry handling di source." if project_signals.get("error") else "Belum ketemu error/retry state yang jelas di source.",
+    })
+    checks.append({
+        "id": "state-empty",
+        "label": "Empty state",
+        "ok": bool(project_signals.get("empty")),
+        "detail": "Ada sinyal empty/no-results state di source." if project_signals.get("empty") else "Belum ketemu empty/no-results state yang jelas di source.",
+    })
+    return checks
+
+
 def _build_preview_audit_result(
     preview_url: str,
     snapshot: dict,
@@ -475,6 +571,7 @@ def _build_preview_audit_result(
     audit_mode: str,
     max_excerpt_chars: int = 800,
     runtime_warnings: list[str] | None = None,
+    project_signals: dict[str, bool] | None = None,
 ) -> dict:
     title = str(snapshot.get("title") or "").strip()
     meta_description = str(snapshot.get("meta_description") or "").strip()
@@ -490,6 +587,8 @@ def _build_preview_audit_result(
     images_missing_alt = max(0, int(snapshot.get("images_missing_alt") or 0))
     console_errors = [str(item).strip()[:240] for item in (snapshot.get("console_errors") or []) if str(item).strip()][:8]
     page_errors = [str(item).strip()[:240] for item in (snapshot.get("page_errors") or []) if str(item).strip()][:6]
+    quality_checks = _build_quality_checks(snapshot, project_signals=project_signals)
+    quality_failures = [check for check in quality_checks if not check.get("ok")]
 
     issues: list[str] = []
     if not title:
@@ -508,6 +607,8 @@ def _build_preview_audit_result(
         issues.append(f"Preview threw {len(page_errors)} runtime browser error(s).")
     if console_errors:
         issues.append(f"Preview logged {len(console_errors)} browser console warning/error message(s).")
+    if quality_failures:
+        issues.append(f"Preview quality checks flagged {len(quality_failures)} area(s) across responsive/a11y/state readiness.")
 
     summary_parts = [
         f"mode={audit_mode}",
@@ -517,6 +618,7 @@ def _build_preview_audit_result(
         f"links={len(links)}",
         f"forms={form_count}",
         f"words={word_count}",
+        f"quality_failures={len(quality_failures)}",
     ]
 
     return {
@@ -538,6 +640,7 @@ def _build_preview_audit_result(
         "page_errors": page_errors,
         "runtime_warnings": runtime_warnings or [],
         "issues": issues,
+        "quality_checks": quality_checks,
         "excerpt": excerpt,
         "summary": "; ".join(summary_parts),
     }
@@ -569,15 +672,29 @@ def _extract_preview_snapshot_from_html(html: str, max_excerpt_chars: int = 800)
         if not alt_match or not _clean_html_text(alt_match.group(1)):
             images_missing_alt += 1
 
+    html_open_match = re.search(r"<html[^>]*lang=['\"]([^'\"]+)['\"]", html, flags=re.IGNORECASE | re.DOTALL)
+    labeled_input_count = 0
+    input_tags = re.findall(r"<(input|textarea|select)\b[^>]*>", html, flags=re.IGNORECASE | re.DOTALL)
+    if input_tags:
+        labeled_input_count = len(re.findall(r"<label\b", html, flags=re.IGNORECASE))
+        labeled_input_count += len(re.findall(r"aria-label\s*=|aria-labelledby\s*=", html, flags=re.IGNORECASE))
+
     return {
         "title": title,
         "meta_description": meta_description,
+        "viewport_meta": bool(re.search(r"<meta[^>]+name=['\"]viewport['\"]", html, flags=re.IGNORECASE | re.DOTALL)),
+        "document_lang": _clean_html_text(html_open_match.group(1)) if html_open_match else "",
         "headings": headings,
         "subheadings": subheadings,
         "buttons": buttons,
         "links": links,
         "form_count": len(re.findall(r"<form\b", html, flags=re.IGNORECASE)),
         "input_count": len(re.findall(r"<(input|textarea|select)\b", html, flags=re.IGNORECASE)),
+        "labeled_input_count": labeled_input_count,
+        "landmark_count": len(re.findall(r"<(main|nav|header|footer|aside)\b", html, flags=re.IGNORECASE)),
+        "main_count": len(re.findall(r"<main\b", html, flags=re.IGNORECASE)),
+        "button_count": len(re.findall(r"<button\b", html, flags=re.IGNORECASE)),
+        "mobile_overflow_x": False,
         "word_count": len(re.findall(r"\b\w+\b", body_text)),
         "image_count": len(image_tags),
         "images_missing_alt": images_missing_alt,
@@ -609,7 +726,13 @@ def _fetch_preview_html(preview_url: str, attempts: int = 3) -> str:
     raise HTTPException(502, f"Preview audit fetch failed: {last_error}")
 
 
-def _run_playwright_preview_audit(preview_url: str, project_dir: Path, max_excerpt_chars: int = 800) -> tuple[dict | None, str | None]:
+def _run_playwright_preview_audit(
+    preview_url: str,
+    project_dir: Path,
+    max_excerpt_chars: int = 800,
+    *,
+    project_signals: dict[str, bool] | None = None,
+) -> tuple[dict | None, str | None]:
     if not _browser_preview_audit_ready(project_dir):
         return None, "Playwright browser audit is not ready in this project/runtime yet, so preview audit fell back to HTML inspection."
 
@@ -656,16 +779,24 @@ def _run_playwright_preview_audit(preview_url: str, project_dir: Path, max_excer
         snapshot,
         audit_mode="browser",
         max_excerpt_chars=max_excerpt_chars,
+        project_signals=project_signals,
     ), None
 
 
-def _audit_preview_html(preview_url: str, html: str, max_excerpt_chars: int = 800) -> dict:
+def _audit_preview_html(
+    preview_url: str,
+    html: str,
+    max_excerpt_chars: int = 800,
+    *,
+    project_signals: dict[str, bool] | None = None,
+) -> dict:
     snapshot = _extract_preview_snapshot_from_html(html, max_excerpt_chars=max_excerpt_chars)
     return _build_preview_audit_result(
         preview_url,
         snapshot,
         audit_mode="html",
         max_excerpt_chars=max_excerpt_chars,
+        project_signals=project_signals,
     )
 
 
@@ -1465,20 +1596,26 @@ def preview_audit(req: PreviewAuditReq):
     project_root = (req.project_root or ".").strip() or "."
     project_dir = safe_join(_ws(), project_root)
     warnings: list[str] = []
+    project_signals = _scan_project_quality_signals(project_dir) if project_dir.exists() else {}
 
     requested_mode = str(req.mode or "auto").strip().lower()
     if requested_mode not in {"auto", "html", "browser"}:
         requested_mode = "auto"
 
     if requested_mode != "html":
-        browser_audit, browser_warning = _run_playwright_preview_audit(preview_url, project_dir, max_excerpt_chars=max_excerpt_chars)
+        browser_audit, browser_warning = _run_playwright_preview_audit(
+            preview_url,
+            project_dir,
+            max_excerpt_chars=max_excerpt_chars,
+            project_signals=project_signals,
+        )
         if browser_audit:
             return browser_audit
         if browser_warning:
             warnings.append(browser_warning)
 
     html = _fetch_preview_html(preview_url, attempts=max(1, min(req.attempts, 5)))
-    audit = _audit_preview_html(preview_url, html, max_excerpt_chars=max_excerpt_chars)
+    audit = _audit_preview_html(preview_url, html, max_excerpt_chars=max_excerpt_chars, project_signals=project_signals)
     if warnings:
         audit["runtime_warnings"] = [*audit.get("runtime_warnings", []), *warnings]
     return audit
@@ -1552,7 +1689,7 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
     supabase_enabled = has_supabase()
     supabase_rag_status = get_agent_memory_chunks_table_status() if supabase_enabled else "unconfigured"
     supabase_rag_ready = supabase_rag_status == "ready"
-    memory_backend = "supabase-doc-chunks" if supabase_rag_ready else "local-doc-chunks"
+    memory_backend = "supabase-hash-vector-chunks" if supabase_rag_ready else "local-hash-vector-chunks"
     supabase_warning = None
     if supabase_rag_status == "missing":
         supabase_warning = "Supabase udah dikonfigurasi, tapi tabel public.agent_memory_chunks belum dibuat. Jalankan docs/supabase-agent-rag.sql dulu."
@@ -1566,6 +1703,7 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "short_term_memory_rag": True,
             "project_scoped_short_memory": True,
             "long_term_memory_rag": True,
+            "vector_memory_retrieval": True,
             "skill_registry": True,
             "mcp_registry": True,
             "mcp_tool_execution": True,
@@ -1580,6 +1718,7 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "playwright_preview_audit": browser_audit_ready,
             "webcontainer_runtime": False,
             "browser_dom_audit": browser_audit_ready,
+            "preview_quality_checks": True,
             "preview_audit_mode": "browser" if browser_audit_ready else "html",
             "tool_actions": ["shell", "mcp"],
             "streaming_transport": True,

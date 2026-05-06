@@ -560,6 +560,12 @@ export type PreviewAuditResult = {
   page_errors: string[];
   runtime_warnings: string[];
   issues: string[];
+  quality_checks?: Array<{
+    id: string;
+    label: string;
+    ok: boolean;
+    detail: string;
+  }>;
   excerpt: string;
   summary: string;
 };
@@ -676,6 +682,7 @@ export type AgentCapabilities = {
     short_term_memory_rag: boolean;
     project_scoped_short_memory?: boolean;
     long_term_memory_rag: boolean;
+    vector_memory_retrieval?: boolean;
     skill_registry: boolean;
     mcp_registry: boolean;
     mcp_tool_execution: boolean;
@@ -690,6 +697,7 @@ export type AgentCapabilities = {
     playwright_preview_audit?: boolean;
     webcontainer_runtime?: boolean;
     browser_dom_audit?: boolean;
+    preview_quality_checks?: boolean;
     preview_audit_mode?: "browser" | "html";
     tool_actions: string[];
     streaming_transport: boolean;

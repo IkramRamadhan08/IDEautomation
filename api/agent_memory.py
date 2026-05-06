@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import hashlib
 import json
+import math
 import re
 import time
 from typing import Any
@@ -21,6 +22,8 @@ _MAX_DOC_SOURCE_CHARS = 80_000
 _DOC_CHUNK_CHARS = 1_100
 _DOC_CHUNK_OVERLAP_CHARS = 180
 _MAX_DOC_CHUNKS_PER_SOURCE = 24
+_VECTOR_DIMS = 96
+_VECTOR_CACHE: dict[str, list[float]] = {}
 
 
 @dataclass
@@ -41,6 +44,7 @@ class MemoryChunk:
     chunk_count: int
     content_hash: str
     updated_at: str
+    embedding: list[float] | None = None
 
 
 @dataclass
@@ -48,7 +52,7 @@ class AgentMemoryBundle:
     short_term: list[MemoryHit]
     long_term: list[MemoryHit]
     warnings: list[str] = field(default_factory=list)
-    backend: str = "local-doc-chunks"
+    backend: str = "local-hash-vector-chunks"
 
     @property
     def prompt(self) -> str:
@@ -95,6 +99,50 @@ def _score(query_tokens: set[str], text: str, freshness: float = 0.0) -> float:
     density = len(overlap) / max(1.0, len(query_tokens))
     focus = len(overlap) / max(6.0, min(60.0, float(len(hay))))
     return density * 3.0 + focus + freshness
+
+
+def _hash_vector(text: str, *, dims: int = _VECTOR_DIMS) -> list[float]:
+    tokens = [token for token in _TOKEN_RE.findall((text or "").lower()) if token and not token.isdigit()]
+    if not tokens:
+        return [0.0] * dims
+
+    vec = [0.0] * dims
+    weighted_tokens: list[tuple[str, float]] = []
+    for token in tokens:
+        weight = 0.35 if token in _STOPWORDS else 1.0
+        weighted_tokens.append((token, weight))
+    for index in range(len(tokens) - 1):
+        pair = f"{tokens[index]}::{tokens[index + 1]}"
+        weighted_tokens.append((pair, 0.7))
+
+    for token, weight in weighted_tokens:
+        digest = hashlib.sha1(token.encode("utf-8", errors="ignore")).digest()
+        idx_a = int.from_bytes(digest[0:2], "big") % dims
+        idx_b = int.from_bytes(digest[2:4], "big") % dims
+        sign_a = 1.0 if digest[4] % 2 else -1.0
+        sign_b = 1.0 if digest[5] % 2 else -1.0
+        vec[idx_a] += weight * sign_a
+        vec[idx_b] += (weight * 0.55) * sign_b
+
+    norm = math.sqrt(sum(value * value for value in vec))
+    if norm <= 1e-9:
+        return [0.0] * dims
+    return [round(value / norm, 6) for value in vec]
+
+
+def _embed_text_cached(text: str, *, cache_key: str) -> list[float]:
+    cached = _VECTOR_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    vector = _hash_vector(text)
+    _VECTOR_CACHE[cache_key] = vector
+    return vector
+
+
+def _cosine_similarity(left: list[float] | None, right: list[float] | None) -> float:
+    if not left or not right or len(left) != len(right):
+        return 0.0
+    return sum(a * b for a, b in zip(left, right))
 
 
 def _memory_root(ws_root: Path) -> Path:
@@ -320,6 +368,7 @@ def _build_local_long_term_chunks(project_dir: Path, *, project_root: str) -> li
                 chunk_count=chunk_count,
                 content_hash=content_hash,
                 updated_at=updated_at,
+                embedding=_embed_text_cached(f"{title}\n{piece}", cache_key=f"{content_hash}:{index}"),
             ))
     return chunks
 
@@ -399,15 +448,25 @@ def _load_supabase_doc_chunks(project_root: str, limit: int) -> list[MemoryChunk
             chunk_count=chunk_count,
             content_hash=content_hash,
             updated_at=updated_at,
+            embedding=_embed_text_cached(f"{title}\n{content}", cache_key=f"supabase:{content_hash}:{chunk_index}"),
         )
 
     return [selected[key] for key in sorted(selected.keys(), key=lambda item: (item[0], item[1]))]
 
 
-def _score_long_term_chunk(query_tokens: set[str], chunk: MemoryChunk, *, active_rel: str, open_files: list[str]) -> float:
-    score = _score(query_tokens, f"{chunk.title}\n{chunk.text}")
-    if score <= 0:
+def _score_long_term_chunk(
+    query_tokens: set[str],
+    query_embedding: list[float],
+    chunk: MemoryChunk,
+    *,
+    active_rel: str,
+    open_files: list[str],
+) -> float:
+    lexical_score = _score(query_tokens, f"{chunk.title}\n{chunk.text}")
+    vector_score = max(0.0, _cosine_similarity(query_embedding, chunk.embedding))
+    if lexical_score <= 0 and vector_score < 0.08:
         return 0.0
+    score = lexical_score * 0.72 + vector_score * 2.4
     if active_rel and chunk.source == active_rel:
         score += 0.55
     if active_rel and chunk.source.rsplit("/", 1)[-1] == active_rel.rsplit("/", 1)[-1]:
@@ -464,9 +523,13 @@ def retrieve_agent_memory(
         deduped_short.append(hit)
 
     warnings: list[str] = []
-    backend = "local-doc-chunks"
+    backend = "local-hash-vector-chunks"
     local_doc_chunks = _build_local_long_term_chunks(project_dir, project_root=project_root)
     candidate_chunks = local_doc_chunks
+    query_embedding = _embed_text_cached(
+        query_text,
+        cache_key=f"query:{hashlib.sha1(query_text.encode('utf-8', errors='ignore')).hexdigest()[:20]}",
+    )
 
     if has_supabase():
         table_status = get_agent_memory_chunks_table_status()
@@ -479,7 +542,7 @@ def retrieve_agent_memory(
             remote_doc_chunks = _load_supabase_doc_chunks(project_root, limit=max(240, len(local_doc_chunks) + 40))
             if remote_doc_chunks:
                 candidate_chunks = remote_doc_chunks
-                backend = "supabase-doc-chunks"
+                backend = "supabase-hash-vector-chunks"
             elif remote_doc_chunks is None:
                 if table_status == "error":
                     warnings.append("Supabase RAG nggak bisa diverifikasi sekarang, jadi retrieval doc sementara fallback ke chunk lokal.")
@@ -489,7 +552,7 @@ def retrieve_agent_memory(
 
     long_hits_scored: list[tuple[float, MemoryChunk]] = []
     for chunk in candidate_chunks:
-        score = _score_long_term_chunk(query_tokens, chunk, active_rel=active_rel, open_files=open_files)
+        score = _score_long_term_chunk(query_tokens, query_embedding, chunk, active_rel=active_rel, open_files=open_files)
         if score <= 0:
             continue
         long_hits_scored.append((score, chunk))
