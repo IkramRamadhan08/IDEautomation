@@ -53,28 +53,29 @@ def upsert_profile(*, user_id: str, supabase_user_id: str | None = None, display
         return None
 
     updated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    legacy_row: dict[str, Any] | None = None
 
     if supabase_user_id:
-        payload_uuid = {
-            "id": supabase_user_id,
-            "supabase_user_id": supabase_user_id,
-            "display_name": display_name,
-            "email": email,
-            "updated_at": updated_at,
-        }
         try:
-            res_uuid = client.table("profiles").upsert(payload_uuid).execute()
-            data_uuid = getattr(res_uuid, "data", None) or []
-            if data_uuid:
-                return data_uuid[0]
+            res_legacy = client.table("profiles").select("*").eq("supabase_user_id", supabase_user_id).limit(1).execute()
+            legacy_data = getattr(res_legacy, "data", None) or []
+            if legacy_data and isinstance(legacy_data[0], dict):
+                legacy_row = legacy_data[0]
         except Exception:
-            pass
+            legacy_row = None
+
+        legacy_id = str((legacy_row or {}).get("id") or "").strip()
+        if legacy_id and legacy_id != user_id:
+            try:
+                client.table("profiles").update({"supabase_user_id": None, "updated_at": updated_at}).eq("id", legacy_id).execute()
+            except Exception:
+                pass
 
     payload = {
         "id": user_id,
         "supabase_user_id": supabase_user_id,
-        "display_name": display_name,
-        "email": email,
+        "display_name": display_name if display_name is not None else (legacy_row or {}).get("display_name"),
+        "email": email if email is not None else (legacy_row or {}).get("email"),
         "updated_at": updated_at,
     }
     res = client.table("profiles").upsert(payload).execute()

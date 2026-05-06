@@ -22,6 +22,7 @@ from api.preferences import UserPreferencesRecord
 from api.preferences_router import build_preferences_router
 from api.settings import load_settings
 from api.settings_router import build_settings_router
+from api.supabase_store import upsert_profile
 
 
 class AgentIntentRegressionTests(unittest.TestCase):
@@ -429,6 +430,90 @@ class HybridSeedRegressionTests(unittest.TestCase):
 
 
 class HostedProfileIdRegressionTests(unittest.TestCase):
+    def test_upsert_profile_migrates_legacy_uuid_profile_to_internal_id(self) -> None:
+        class FakeResponse:
+            def __init__(self, data):
+                self.data = data
+
+        class FakeQuery:
+            def __init__(self, client, op, payload=None):
+                self.client = client
+                self.op = op
+                self.payload = payload or {}
+                self.filters: dict[str, str] = {}
+                self._limit = None
+
+            def select(self, _fields: str):
+                self.op = "select"
+                return self
+
+            def eq(self, key: str, value: str):
+                self.filters[key] = value
+                return self
+
+            def limit(self, value: int):
+                self._limit = value
+                return self
+
+            def update(self, payload):
+                self.op = "update"
+                self.payload = payload
+                return self
+
+            def upsert(self, payload):
+                self.op = "upsert"
+                self.payload = payload
+                return self
+
+            def execute(self):
+                if self.op == "select":
+                    rows = [
+                        row for row in self.client.rows.values()
+                        if all(str(row.get(k)) == str(v) for k, v in self.filters.items())
+                    ]
+                    if self._limit is not None:
+                        rows = rows[: self._limit]
+                    return FakeResponse(rows)
+                if self.op == "update":
+                    target_id = self.filters.get("id")
+                    row = dict(self.client.rows.get(target_id, {}))
+                    row.update(self.payload)
+                    self.client.rows[target_id] = row
+                    return FakeResponse([row])
+                if self.op == "upsert":
+                    row = dict(self.payload)
+                    self.client.rows[str(row["id"])] = row
+                    return FakeResponse([row])
+                raise AssertionError(f"Unexpected op: {self.op}")
+
+        class FakeClient:
+            def __init__(self):
+                self.rows = {
+                    "00000000-0000-0000-0000-000000000123": {
+                        "id": "00000000-0000-0000-0000-000000000123",
+                        "supabase_user_id": "00000000-0000-0000-0000-000000000123",
+                        "display_name": "Legacy User",
+                        "email": "legacy@example.com",
+                    }
+                }
+
+            def table(self, _name: str):
+                return FakeQuery(self, "select")
+
+        fake_client = FakeClient()
+        with patch("api.supabase_store.get_supabase_admin", return_value=fake_client):
+            row = upsert_profile(
+                user_id="sb-user-123",
+                supabase_user_id="00000000-0000-0000-0000-000000000123",
+                display_name=None,
+                email=None,
+            )
+
+        self.assertEqual(row["id"], "sb-user-123")
+        self.assertEqual(fake_client.rows["sb-user-123"]["supabase_user_id"], "00000000-0000-0000-0000-000000000123")
+        self.assertIsNone(fake_client.rows["00000000-0000-0000-0000-000000000123"]["supabase_user_id"])
+        self.assertEqual(fake_client.rows["sb-user-123"]["display_name"], "Legacy User")
+
     def test_hosted_settings_save_uses_internal_profile_id_for_secrets_and_preferences(self) -> None:
         app = FastAPI()
         app.include_router(build_settings_router(session_state=lambda: {"workspace": None}, env_set=lambda *_args, **_kwargs: None, env_unset=lambda *_args, **_kwargs: None, reload_settings=lambda: None))
