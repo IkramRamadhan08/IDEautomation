@@ -1,7 +1,8 @@
 import React from "react";
 import { type OnMount } from "@monaco-editor/react";
-import { type FileBuffer } from "../../types";
-import { Save, RotateCcw, Sparkles } from "lucide-react";
+import { type AgentAction, type AgentLiveItem, type FileBuffer } from "../../types";
+import { Save, RotateCcw, Sparkles, TerminalSquare } from "lucide-react";
+import { terminalRun } from "../../api";
 
 interface MonacoEditorProps {
   activeFile: string;
@@ -10,6 +11,9 @@ interface MonacoEditorProps {
   editorBusy: boolean;
   agentStatus: string;
   editorStatus: string;
+  recentActions: AgentAction[];
+  agentLiveItems: AgentLiveItem[];
+  selectedProject: string;
   onSetActiveFile: (path: string) => void;
   onCloseFile: (path: string) => void;
   onRunInlineHelp: () => void;
@@ -27,6 +31,9 @@ export const MonacoEditor: React.FC<MonacoEditorProps> = ({
   editorBusy,
   agentStatus,
   editorStatus,
+  recentActions,
+  agentLiveItems,
+  selectedProject,
   onSetActiveFile,
   onCloseFile,
   onRunInlineHelp,
@@ -34,6 +41,18 @@ export const MonacoEditor: React.FC<MonacoEditorProps> = ({
   onOpenFile,
   onBufferChange,
 }) => {
+  const [activePanel, setActivePanel] = React.useState<"terminal" | "output" | "problems">("terminal");
+  const [terminalCommand, setTerminalCommand] = React.useState("");
+  const [terminalBusy, setTerminalBusy] = React.useState(false);
+  const [terminalHistory, setTerminalHistory] = React.useState<Array<{
+    id: string;
+    command: string;
+    stdout: string;
+    stderr: string;
+    returncode: number;
+    syncedFiles?: number;
+  }>>([]);
+
   const languageForFile = (path: string) => {
     const lower = path.toLowerCase();
     if (lower.endsWith(".tsx")) return "typescript";
@@ -51,10 +70,50 @@ export const MonacoEditor: React.FC<MonacoEditorProps> = ({
   };
 
   const activeBuffer = activeFile ? buffers[activeFile] : undefined;
+  const visibleActions = recentActions.slice(-5);
+  const visibleTools = agentLiveItems.filter((item) => item.role === "tool").slice(-4);
+  const hasActivity = terminalHistory.length > 0 || visibleActions.length > 0 || visibleTools.length > 0;
 
   const handleEditorMount: OnMount = (editor) => {
     requestAnimationFrame(() => editor.layout());
     window.setTimeout(() => editor.layout(), 80);
+  };
+
+  const runFreeShellCommand = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const command = terminalCommand.trim();
+    if (!command || terminalBusy) return;
+    setTerminalCommand("");
+    setTerminalBusy(true);
+    setActivePanel("terminal");
+    try {
+      const result = await terminalRun(command, selectedProject !== "." ? selectedProject : undefined);
+      setTerminalHistory((prev) => [
+        ...prev.slice(-8),
+        {
+          id: `${Date.now()}-${prev.length}`,
+          command,
+          stdout: result.stdout || "",
+          stderr: result.stderr || "",
+          returncode: result.returncode,
+          syncedFiles: result.synced_files,
+        },
+      ]);
+    } catch (error) {
+      setTerminalHistory((prev) => [
+        ...prev.slice(-8),
+        {
+          id: `${Date.now()}-${prev.length}`,
+          command,
+          stdout: "",
+          stderr: error instanceof Error ? error.message : String(error),
+          returncode: 1,
+          syncedFiles: 0,
+        },
+      ]);
+    } finally {
+      setTerminalBusy(false);
+    }
   };
 
   return (
@@ -157,6 +216,97 @@ export const MonacoEditor: React.FC<MonacoEditorProps> = ({
                 </div>
               </div>
             )}
+          </div>
+        </div>
+
+        <div className="hybridTerminalPanel">
+          <div className="terminalTabs">
+            {(["problems", "output", "terminal"] as const).map((panel) => (
+              <button
+                key={panel}
+                className={`terminalTab ${activePanel === panel ? "active" : ""}`}
+                onClick={() => setActivePanel(panel)}
+                type="button"
+              >
+                {panel}
+              </button>
+            ))}
+            <div className="terminalTabsSpacer" />
+            <span className={`terminalStatusDot ${agentStatus === "thinking" ? "running" : agentStatus === "error" ? "error" : ""}`} />
+            <span className="terminalStatusText">{agentStatus === "thinking" ? "running" : agentStatus === "error" ? "needs review" : "idle"}</span>
+          </div>
+
+          <div className="terminalViewport">
+            {activePanel === "problems" ? (
+              <div className="terminalEmptyState">
+                <span>No problems detected in this session.</span>
+              </div>
+            ) : null}
+
+            {activePanel === "output" ? (
+              <div className="terminalLines">
+                <div className="terminalLine muted">[voice-ide] {editorStatus || "Ready"}</div>
+                <div className="terminalLine muted">[editor] {activeFile ? `Active file: ${activeFile}` : "No active file"}</div>
+                <div className="terminalLine muted">[workspace] {openFiles.length} open tab{openFiles.length === 1 ? "" : "s"}</div>
+              </div>
+            ) : null}
+
+            {activePanel === "terminal" ? (
+              <div className="terminalLines">
+                <div className="terminalLine prompt">
+                  <TerminalSquare size={14} />
+                  <span>free shell</span>
+                  <span className="terminalLineMeta">user + agent commands</span>
+                </div>
+                {hasActivity ? null : (
+                  <div className="terminalLine muted">Waiting for shell commands, agent commands, and tool activity...</div>
+                )}
+                {terminalHistory.map((entry) => (
+                  <React.Fragment key={entry.id}>
+                    <div className="terminalLine">
+                      <span className="terminalPrefix">$</span>
+                      <span>{entry.command}</span>
+                      <span className={`terminalLineMeta ${entry.returncode === 0 ? "success" : "error"}`}>
+                        exit {entry.returncode}{typeof entry.syncedFiles === "number" && entry.syncedFiles > 0 ? ` · synced ${entry.syncedFiles}` : ""}
+                      </span>
+                    </div>
+                    {entry.stdout ? (
+                      <pre className="terminalPre">{entry.stdout}</pre>
+                    ) : null}
+                    {entry.stderr ? (
+                      <pre className="terminalPre error">{entry.stderr}</pre>
+                    ) : null}
+                  </React.Fragment>
+                ))}
+                {visibleActions.map((action, index) => (
+                  <div key={`${String(action.type)}-${index}`} className="terminalLine">
+                    <span className="terminalPrefix">$</span>
+                    <span>{String(action.command || action.type)}</span>
+                    {action.path ? <span className="terminalLineMeta">{String(action.path)}</span> : null}
+                  </div>
+                ))}
+                {visibleTools.map((item) => (
+                  <div key={item.id} className="terminalLine muted">
+                    <span className="terminalPrefix">&gt;</span>
+                    <span>{item.text}</span>
+                    {item.meta ? <span className="terminalLineMeta">{item.meta}</span> : null}
+                  </div>
+                ))}
+                <form className="terminalInputLine" onSubmit={runFreeShellCommand}>
+                  <span className="terminalPrompt">shell $</span>
+                  <input
+                    className="terminalCommandInput"
+                    value={terminalCommand}
+                    onChange={(event) => setTerminalCommand(event.target.value)}
+                    disabled={terminalBusy}
+                    spellCheck={false}
+                    autoComplete="off"
+                    aria-label="Run shell command"
+                  />
+                  {terminalBusy ? <span className="terminalLineMeta">running...</span> : <span className="terminalCursor" />}
+                </form>
+              </div>
+            ) : null}
           </div>
         </div>
 

@@ -1,20 +1,16 @@
 import React from "react";
-import { type BuildMode, type IdentityInfo, type ProjectInfo } from "../../types";
-import { FolderOpen, Settings, Play, Command, PanelLeft, PanelRight, CircleDot, Search } from "lucide-react";
+import { type BuildMode, type IdentityInfo } from "../../types";
+import { Settings, Play, Command, PanelLeft, PanelRight, CircleDot, Search } from "lucide-react";
 
 interface TopbarProps {
   ws: string | null;
   identity: IdentityInfo | null;
   previewUrl: string;
   buildMode: BuildMode;
-  projects: ProjectInfo[];
-  selectedProject: string;
   showExplorerPane: boolean;
   showAssistPane: boolean;
   onQuickSwitchBuildMode: (mode: BuildMode) => void;
-  onPickWorkspace: () => void;
   onOpenSettings: () => void;
-  onSelectProject: (project: string) => void;
   onEnsurePreviewRunning: () => void;
   onToggleExplorerPane: () => void;
   onToggleAssistPane: () => void;
@@ -25,19 +21,14 @@ export const Topbar: React.FC<TopbarProps> = ({
   identity,
   previewUrl,
   buildMode,
-  projects,
-  selectedProject,
   showExplorerPane,
   showAssistPane,
   onQuickSwitchBuildMode,
-  onPickWorkspace,
   onOpenSettings,
-  onSelectProject,
   onEnsurePreviewRunning,
   onToggleExplorerPane,
   onToggleAssistPane,
 }) => {
-  const selectedProjectInfo = projects.find((project) => project.root === selectedProject) ?? null;
   const userLabel = identity?.display_name || identity?.email || "Signed in";
   const userInitial = userLabel.trim().charAt(0).toUpperCase() || "V";
   const browserHost = typeof window !== "undefined" ? window.location.hostname.toLowerCase() : "";
@@ -59,12 +50,11 @@ export const Topbar: React.FC<TopbarProps> = ({
           <CircleDot size={12} />
           {previewUrl ? "Live" : "Ready"}
         </span>
-        <span className="topbarPath" title={selectedProject}>{selectedProjectInfo?.name || "No project"}</span>
       </div>
 
       <button className="commandBarButton" type="button" onClick={onOpenSettings} title="Command menu">
         <Search size={14} />
-        <span>Search settings, models, projects</span>
+        <span>Search settings and models</span>
         <kbd>⌘K</kbd>
       </button>
 
@@ -100,28 +90,6 @@ export const Topbar: React.FC<TopbarProps> = ({
             </>
           ) : null}
         </div>
-
-        <div className="topbarSelectWrap">
-          <select
-            className="topbarSelect"
-            value={selectedProject}
-            disabled={!ws || projects.length === 0}
-            onChange={(e) => onSelectProject(e.target.value)}
-            aria-label="Project"
-          >
-            {projects.length === 0 ? <option value=".">No project</option> : null}
-            {projects.map((project) => (
-              <option key={project.root} value={project.root}>
-                {project.name}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <button className="btn iconBtn" onClick={onPickWorkspace} title="Project">
-          <FolderOpen size={16} />
-          <span>Project</span>
-        </button>
 
         <button className="btn iconBtn" onClick={onOpenSettings} title="Settings">
           <Settings size={16} />

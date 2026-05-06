@@ -75,6 +75,25 @@ def _project_root(workspace_root: Path, slug: str) -> Path:
     return root
 
 
+def _available_project_slug(*, workspace_root: Path, owner_id: str, base_slug: str) -> str:
+    existing_remote_slugs: set[str] = set()
+    if has_supabase():
+        for raw in supabase_list_projects(owner_id=owner_id) or []:
+            if isinstance(raw, dict):
+                existing_remote_slugs.add(str(raw.get("slug") or raw.get("root") or "").strip())
+
+    for index in range(1, 100):
+        slug = base_slug if index == 1 else f"{base_slug}-{index}"
+        root = _project_root(workspace_root, slug)
+        if slug in existing_remote_slugs:
+            continue
+        if root.exists() and any(root.iterdir()):
+            continue
+        return slug
+
+    return f"{base_slug}-{uuid.uuid4().hex[:8]}"
+
+
 def list_projects(*, workspace_root: Path | None, owner_id: str) -> list[ProjectRecord]:
     if has_supabase():
         remote = supabase_list_projects(owner_id=owner_id) or []
@@ -115,10 +134,8 @@ def create_project(*, workspace_root: Path, owner_id: str, req: ProjectCreateReq
     if not name:
         raise HTTPException(400, "Project name is required")
 
-    slug = _slugify(req.slug or name)
+    slug = _available_project_slug(workspace_root=workspace_root, owner_id=owner_id, base_slug=_slugify(req.slug or name))
     root = _project_root(workspace_root, slug)
-    if root.exists() and any(root.iterdir()):
-        raise HTTPException(409, "A project with that slug already exists in this workspace")
 
     root.mkdir(parents=True, exist_ok=True)
     now = int(time.time())

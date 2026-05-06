@@ -4,12 +4,14 @@ import { Folder, FolderOpen as FolderOpenIcon, File, Plus, RefreshCw } from "luc
 
 interface FileExplorerProps {
   selectedProject: string;
+  projectOptions: Array<{ root: string; name: string }>;
   explorerItems: ExplorerItem[];
   treeExpanded: Record<string, boolean>;
   treeChildren: Record<string, ExplorerItem[]>;
   treeLoading: Record<string, boolean>;
   activeFile: string;
-  onRefresh: () => void;
+  onRefresh: () => void | Promise<void>;
+  onSelectProject: (project: string) => void;
   onToggleDir: (path: string) => void;
   onOpenFile: (path: string) => void;
   onHide: () => void;
@@ -18,12 +20,14 @@ interface FileExplorerProps {
 
 export const FileExplorer: React.FC<FileExplorerProps> = ({
   selectedProject,
+  projectOptions,
   explorerItems,
   treeExpanded,
   treeChildren,
   treeLoading,
   activeFile,
   onRefresh,
+  onSelectProject,
   onToggleDir,
   onOpenFile,
   onHide,
@@ -94,10 +98,26 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
         <div className="explorerSummaryCard compact">
           <div className="explorerSummaryTitle">{projectLabel}</div>
           {selectedProject !== "." ? <div className="explorerSummaryMeta" title={selectedProject}>{selectedProject}</div> : null}
+          {projectOptions.length > 0 ? (
+            <label className="explorerProjectSelectWrap">
+              <span>Saved projects</span>
+              <select
+                className="explorerProjectSelect"
+                value={selectedProject}
+                onChange={(event) => onSelectProject(event.target.value)}
+              >
+                {projectOptions.map((project) => (
+                  <option key={project.root} value={project.root}>
+                    {project.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
         </div>
 
         <div className="explorerToolbar">
-          <button className="btn subtleBtn" onClick={onRefresh}>
+          <button className="btn subtleBtn" onClick={() => void onRefresh()}>
             <RefreshCw size={14} />
             <span>Refresh</span>
           </button>

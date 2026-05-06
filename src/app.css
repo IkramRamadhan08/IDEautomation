@@ -564,6 +564,34 @@ a {
   text-overflow: ellipsis;
 }
 
+.explorerProjectSelectWrap {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.explorerProjectSelectWrap span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.explorerProjectSelect {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(5, 6, 9, 0.82);
+  color: var(--text);
+  padding: 0 10px;
+  font: inherit;
+  font-size: 12px;
+  outline: 0;
+}
+
 .explorerToolbar {
   display: flex;
   gap: 8px;
@@ -769,7 +797,7 @@ a {
   overflow: hidden;
   background: #0b1220;
   display: flex;
-  min-height: 420px;
+  min-height: 0;
 }
 
 .codeEditorShell > * {
@@ -1197,6 +1225,10 @@ a {
   margin: 10px 10px 0;
 }
 
+.hybridInteractionCard {
+  margin: 10px 10px 0;
+}
+
 .missionCard {
   border-radius: 8px;
 }
@@ -1229,6 +1261,188 @@ a {
 
 .codeEditorShell {
   background: #0a0b0e;
+}
+
+.hybridTerminalPanel {
+  height: 184px;
+  min-height: 184px;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid rgba(229, 231, 235, 0.09);
+  background: #090a0d;
+}
+
+.terminalTabs {
+  height: 35px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 10px;
+  border-bottom: 1px solid rgba(229, 231, 235, 0.075);
+  background: #0f1013;
+}
+
+.terminalTab {
+  height: 35px;
+  padding: 0 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.terminalTab:hover {
+  color: var(--text);
+}
+
+.terminalTab.active {
+  color: var(--text);
+  border-bottom-color: var(--brand-strong);
+}
+
+.terminalTabsSpacer {
+  flex: 1;
+}
+
+.terminalStatusDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.7);
+}
+
+.terminalStatusDot.running {
+  background: #38d39f;
+  box-shadow: 0 0 0 4px rgba(56, 211, 159, 0.09);
+}
+
+.terminalStatusDot.error {
+  background: #fb7185;
+}
+
+.terminalStatusText {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.terminalViewport {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px;
+  background:
+    linear-gradient(90deg, rgba(124, 140, 255, 0.035), transparent 34%),
+    #08090b;
+}
+
+.terminalLines {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(229, 231, 235, 0.92);
+}
+
+.terminalLine,
+.terminalInputLine,
+.terminalEmptyState {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.terminalLine span,
+.terminalInputLine span,
+.terminalEmptyState span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.terminalLine.muted,
+.terminalEmptyState {
+  color: rgba(148, 163, 184, 0.88);
+}
+
+.terminalLine.prompt {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.terminalPrefix,
+.terminalPrompt {
+  flex-shrink: 0;
+  color: #38d39f;
+}
+
+.terminalLineMeta {
+  margin-left: auto;
+  color: rgba(148, 163, 184, 0.72);
+  font-size: 11px;
+}
+
+.terminalLineMeta.success {
+  color: #38d39f;
+}
+
+.terminalLineMeta.error {
+  color: #fb7185;
+}
+
+.terminalPre {
+  margin: 0;
+  padding: 7px 9px;
+  max-height: 180px;
+  overflow: auto;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  background: rgba(255, 255, 255, 0.025);
+  color: rgba(229, 231, 235, 0.9);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
+
+.terminalPre.error {
+  border-color: rgba(251, 113, 133, 0.18);
+  color: #fecdd3;
+}
+
+.terminalInputLine {
+  margin-top: auto;
+  padding-top: 7px;
+  border-top: 1px solid rgba(229, 231, 235, 0.055);
+}
+
+.terminalCommandInput {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: rgba(229, 231, 235, 0.95);
+  font: inherit;
+}
+
+.terminalCommandInput:disabled {
+  color: rgba(148, 163, 184, 0.72);
+}
+
+.terminalCursor {
+  flex-shrink: 0;
+  width: 7px;
+  height: 15px;
+  background: rgba(229, 231, 235, 0.76);
 }
 
 .topbarModeSwitch,
@@ -1957,6 +2171,92 @@ a {
   gap: 12px;
   margin-top: 26px;
   flex-wrap: wrap;
+}
+
+.savedProjectsPanel {
+  margin-top: 20px;
+  padding: 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.savedProjectsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.savedProjectsEyebrow {
+  color: var(--brand-strong);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.savedProjectsTitle {
+  margin-top: 4px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.savedProjectsList {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.savedProjectItem {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.savedProjectItem:hover {
+  border-color: rgba(124, 140, 255, 0.3);
+  background: rgba(124, 140, 255, 0.08);
+}
+
+.savedProjectItem span:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.savedProjectItem strong,
+.savedProjectItem small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.savedProjectItem strong {
+  font-size: 13px;
+}
+
+.savedProjectItem small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.savedProjectOpen {
+  flex-shrink: 0;
+  color: var(--brand-strong);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .modalBackdrop {

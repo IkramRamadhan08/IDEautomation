@@ -87,6 +87,10 @@ export default function App() {
   const [workingMsg, setWorkingMsg] = useState<string>("");
   const [agentLiveItems, setAgentLiveItems] = useState<AgentLiveItem[]>([]);
   const [agentAuditTrail, setAgentAuditTrail] = useState<AgentAuditSnapshot[]>([]);
+
+  const projectOptions = hostedProjects.length > 0
+    ? hostedProjects.map((project) => ({ root: project.root, name: project.name }))
+    : projects.map((project) => ({ root: project.root, name: project.name }));
   const [agentRunViewPinned, setAgentRunViewPinned] = useState(false);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -368,7 +372,7 @@ export default function App() {
     }
   };
 
-  const refreshExplorer = async (path = ".") => {
+  const refreshExplorer = async (path = selectedProject !== "." ? selectedProject : ".") => {
     setTreeLoading((prev) => ({ ...prev, [path]: true }));
     try {
       const res = await listDir(path);
@@ -383,7 +387,7 @@ export default function App() {
           if (a.type !== b.type) return a.type === "dir" ? -1 : 1;
           return a.name.localeCompare(b.name);
         });
-      if (path === ".") setExplorerItems(items);
+      if (path === "." || path === selectedProject) setExplorerItems(items);
       setTreeChildren((prev) => ({ ...prev, [path]: items }));
     } catch (e) {
       console.error("Failed to refresh explorer", e);
@@ -401,6 +405,12 @@ export default function App() {
   }, [ws]);
 
   useEffect(() => {
+    if (hasVerifiedHostedAuth) {
+      void refreshProjects();
+    }
+  }, [hasVerifiedHostedAuth]);
+
+  useEffect(() => {
     if (selectedProject !== ".") return;
     if (hostedProjects.length > 0) {
       setSelectedProject(hostedProjects[0].root);
@@ -413,6 +423,11 @@ export default function App() {
 
   useEffect(() => {
     setAttachedImage(null);
+    setTreeExpanded({});
+    setTreeChildren({});
+    if (ws) {
+      void refreshExplorer(selectedProject !== "." ? selectedProject : ".");
+    }
   }, [selectedProject, ws]);
 
   useEffect(() => {
@@ -440,6 +455,27 @@ export default function App() {
     setTreeExpanded((prev) => ({ ...prev, [path]: nextExpanded }));
     if (nextExpanded) {
       await refreshExplorer(path);
+    }
+  };
+
+  const selectProject = (project: string) => {
+    setSelectedProject(project);
+    setActiveFile("");
+    setOpenFiles([]);
+    setPreviewUrl("");
+  };
+
+  const openSavedProject = async (projectRoot: string) => {
+    try {
+      if (!ws) {
+        const provisioned = await provisionWorkspace();
+        setWs(provisioned.path);
+      }
+      selectProject(projectRoot);
+      setEditorStatus(`Project ready: ${projectRoot}`);
+      toast.success("Project dibuka");
+    } catch (e) {
+      toast.error("Gagal membuka project: " + errorMessage(e));
     }
   };
 
@@ -500,19 +536,6 @@ export default function App() {
       }
     } catch {
       folderInputRef.current?.click();
-    }
-  };
-
-  const createManagedWorkspace = async () => {
-    try {
-      const res = await provisionWorkspace();
-      setWs(res.path);
-      setEditorStatus(`Workspace ready: ${res.path}`);
-      await refreshProjects();
-      toast.success("Workspace siap");
-    } catch (e) {
-      setEditorStatus("Failed to create workspace");
-      toast.error("Gagal membuat workspace: " + errorMessage(e));
     }
   };
 
@@ -801,31 +824,51 @@ export default function App() {
   const renderWorkspaceOnboarding = () => (
     <div className="workspaceGateWrap workspaceSetupWrap">
       <div className="workspaceGateCard pane workspaceSetupCard">
-        <div className="workspaceGateKicker">Workspace setup</div>
-        <div className="workspaceGateTitle">Choose where this session should build</div>
+        <div className="workspaceGateKicker">Project setup</div>
+        <div className="workspaceGateTitle">Start a project for this session</div>
         <div className="workspaceGateSubtitle">
-          Open an existing hosted project, or create a new Supabase-backed workspace for the agent.
+          Open an existing project, upload one, or create a new Supabase-backed project for the agent.
           {isHostedBrowser() ? " Project text files are restored from Supabase between serverless runs." : ""}
         </div>
         <div className="workspaceGateFeatureGrid">
           <div className="gateFeatureCard">
-            <div className="gateFeatureTitle">Open existing project</div>
+            <div className="gateFeatureTitle">Open or upload project</div>
             <div className="gateFeatureText">Best when you already have a repo and want to keep working immediately.</div>
           </div>
           <div className="gateFeatureCard">
-            <div className="gateFeatureTitle">Create new workspace</div>
-            <div className="gateFeatureText">Best when you want an isolated place to scaffold and ship without clutter.</div>
+            <div className="gateFeatureTitle">Create new project</div>
+            <div className="gateFeatureText">Best when you want Clara or Raka to scaffold a fresh app from a simple brief.</div>
           </div>
         </div>
         <div className="workspaceGateActions">
           <button className="btn primary" onClick={pickWorkspace}>{isHostedBrowser() ? "Upload project…" : "Open project…"}</button>
-          <button className="btn" onClick={createManagedWorkspace}>New workspace</button>
           <button className="btn" onClick={createHostedProjectFromPrompt}>New project</button>
           <button className="btn" onClick={logoutToStart}>Logout</button>
         </div>
         {hasVerifiedHostedAuth && hostedProjects.length > 0 ? (
-          <div className="settingsSubtle" style={{ marginTop: 12 }}>
-            Existing projects: {hostedProjects.map((project) => project.name).join(", ")}
+          <div className="savedProjectsPanel">
+            <div className="savedProjectsHeader">
+              <div>
+                <div className="savedProjectsEyebrow">Saved projects</div>
+                <div className="savedProjectsTitle">Project yang pernah dibuat</div>
+              </div>
+              <button className="btn subtleBtn" onClick={() => void refreshProjects()}>Refresh</button>
+            </div>
+            <div className="savedProjectsList">
+              {hostedProjects.map((project) => (
+                <button
+                  key={project.id}
+                  className="savedProjectItem"
+                  onClick={() => void openSavedProject(project.root)}
+                >
+                  <span>
+                    <strong>{project.name}</strong>
+                    <small>{project.root}</small>
+                  </span>
+                  <span className="savedProjectOpen">Open</span>
+                </button>
+              ))}
+            </div>
           </div>
         ) : null}
         {renderFolderInput()}
@@ -850,6 +893,7 @@ export default function App() {
     <HybridWorkspace
       ws={ws}
       selectedProject={selectedProject}
+      projectOptions={projectOptions}
       explorerItems={explorerItems}
       treeExpanded={treeExpanded}
       treeChildren={treeChildren}
@@ -866,11 +910,11 @@ export default function App() {
       isResizingAssistPane={isResizingAssistPane}
       previewUrl={previewUrl}
       previewFrameKey={previewFrameKey}
-      attachedAssetName={attachedImage?.name || null}
       recentActions={agentActions}
       agentLiveItems={agentLiveItems}
       agentAuditTrail={agentAuditTrail}
       onRefreshExplorer={refreshExplorer}
+      onSelectProject={selectProject}
       onToggleDir={toggleTreeDir}
       onOpenFile={openFile}
       onHideExplorer={() => setShowExplorerPane(false)}
@@ -957,14 +1001,10 @@ export default function App() {
         identity={identity}
         previewUrl={previewUrl}
         buildMode={buildMode}
-        projects={projects}
-        selectedProject={selectedProject}
         showExplorerPane={showExplorerPane}
         showAssistPane={showAssistPane}
         onQuickSwitchBuildMode={quickSwitchBuildMode}
-        onPickWorkspace={pickWorkspace}
         onOpenSettings={openSettings}
-        onSelectProject={setSelectedProject}
         onEnsurePreviewRunning={ensurePreviewRunning}
         onToggleExplorerPane={() => setShowExplorerPane((v) => !v)}
         onToggleAssistPane={() => setShowAssistPane((v) => !v)}

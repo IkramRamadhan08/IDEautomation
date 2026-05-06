@@ -101,8 +101,6 @@ def insert_project(*, owner_id: str, name: str, slug: str, root: str) -> dict[st
         "name": name,
         "slug": slug,
         "root": root,
-        "agent_mode_default": "hybrid",
-        "runtime_status": "idle",
     }
     res = client.table("projects").insert(payload).execute()
     data = getattr(res, "data", None) or []

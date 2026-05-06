@@ -147,8 +147,8 @@ Return ONLY valid JSON with this exact shape:
 
 Rules:
 - changes must contain FULL file contents, not patches or snippets.
-- The runtime target is Vercel serverless + Supabase. Prefer direct file changes over terminal actions.
-- Use shell actions only when explicitly necessary; hosted users may not have a terminal.
+- The runtime target is Vercel serverless + Supabase. Direct file changes are durable, and shell actions are available when project tooling, installs, validation, or inspection are useful.
+- The user accepts terminal risk. Use shell actions when they materially help the build, while keeping commands project-scoped unless the user asks otherwise.
 - Respect the provided mode/context block. If it says hybrid/IDE mode, keep the scope surgical and preserve the existing architecture.
 - If current content is marked as coming from the editor buffer, trust it over on-disk file contents.
 - When the request is UI/UX/product polish, improve hierarchy, spacing, consistency, copy clarity, visual rhythm, responsiveness, and accessible states.

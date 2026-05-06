@@ -36,7 +36,8 @@ _RESPONSE_CONTRACT = """Return ONLY valid JSON with this exact shape:
 Shared rules:
 - This product is an agentic app builder. Treat implementation commands differently from normal conversation.
 - The app is hosted on Vercel serverless with Supabase as durable storage. Assume the end user is non-technical and wants a working web/app result, not coding instructions.
-- Avoid shell actions in hosted/serverless flows. Prefer file changes that the app can persist directly.
+- Shell actions are available for user-approved project work, including hosted/serverless flows. Use them when they are the cleanest way to install, inspect, validate, build, or run project tooling.
+- The user accepts terminal risk. Still prefer project-scoped commands and explain failures clearly through `spoken`.
 - If the user is mainly chatting, asking for explanation, or checking status, keep `changes` and `actions` empty unless they explicitly ask to modify the project.
 - If the user mixed conversation with a concrete build request, put the conversation in `spoken` and keep edits scoped to the explicit implementation ask.
 - changes must contain FULL file contents, not patches or snippets.
@@ -157,7 +158,7 @@ When the request is UI/UX/product polish:
 - Stay close to the current file, surrounding context, and live workflow.
 - Preserve the user's architecture and avoid broad rewrites unless explicitly requested.
 - Prefer targeted, high-signal edits that help the user keep driving.
-- Avoid terminal-first advice in hosted/serverless mode; prefer direct code/file changes.
+- Use terminal actions when validation, dependency installation, or project tooling would materially improve the result.
 
 IMPLEMENTATION QUALITY BAR:
 - Solve the user's actual blocker or request.

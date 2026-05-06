@@ -528,7 +528,7 @@ export async function validateProject(project_root: string, max_commands = 4): P
   return r.json();
 }
 
-export async function terminalRun(command: string, cwd?: string): Promise<{ ok: boolean; stdout: string; stderr: string; returncode: number }> {
+export async function terminalRun(command: string, cwd?: string): Promise<{ ok: boolean; stdout: string; stderr: string; returncode: number; synced_files?: number }> {
   const r = await apiFetch(`/api/terminal/run`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

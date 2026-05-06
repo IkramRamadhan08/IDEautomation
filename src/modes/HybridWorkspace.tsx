@@ -2,14 +2,13 @@ import React from "react";
 import { FileExplorer } from "../components/explorer/FileExplorer";
 import { MonacoEditor } from "../components/editor/MonacoEditor";
 import { PreviewPane } from "../components/preview/PreviewPane";
-import { AgentLiveStage } from "../components/agent/AgentLiveStage";
 import { AgentAuditTrail } from "../components/agent/AgentAuditTrail";
-import { getBuildModeProfile } from "../agent/runtime";
 import { type AgentAction, type AgentAuditSnapshot, type AgentLiveItem, type ExplorerItem, type FileBuffer } from "../types";
 
 interface HybridWorkspaceProps {
   ws: string | null;
   selectedProject: string;
+  projectOptions: Array<{ root: string; name: string }>;
   explorerItems: ExplorerItem[];
   treeExpanded: Record<string, boolean>;
   treeChildren: Record<string, ExplorerItem[]>;
@@ -26,11 +25,11 @@ interface HybridWorkspaceProps {
   isResizingAssistPane: boolean;
   previewUrl: string;
   previewFrameKey: number;
-  attachedAssetName?: string | null;
   recentActions: AgentAction[];
   agentLiveItems: AgentLiveItem[];
   agentAuditTrail: AgentAuditSnapshot[];
   onRefreshExplorer: () => void | Promise<void>;
+  onSelectProject: (project: string) => void;
   onToggleDir: (path: string) => void | Promise<void>;
   onOpenFile: (path: string) => void | Promise<void>;
   onHideExplorer: () => void;
@@ -47,6 +46,7 @@ interface HybridWorkspaceProps {
 export const HybridWorkspace: React.FC<HybridWorkspaceProps> = ({
   ws,
   selectedProject,
+  projectOptions,
   explorerItems,
   treeExpanded,
   treeChildren,
@@ -63,11 +63,11 @@ export const HybridWorkspace: React.FC<HybridWorkspaceProps> = ({
   isResizingAssistPane,
   previewUrl,
   previewFrameKey,
-  attachedAssetName,
   recentActions,
   agentLiveItems,
   agentAuditTrail,
   onRefreshExplorer,
+  onSelectProject,
   onToggleDir,
   onOpenFile,
   onHideExplorer,
@@ -80,9 +80,6 @@ export const HybridWorkspace: React.FC<HybridWorkspaceProps> = ({
   onStartResizeAssistPane,
   onEnsurePreviewRunning,
 }) => {
-  const profile = getBuildModeProfile("hybrid");
-  const activeFileName = activeFile.split("/").pop() || "No file selected";
-  const recentAction = recentActions.length > 0 ? recentActions[recentActions.length - 1] : undefined;
   const toolItems = agentLiveItems.filter((item) => item.role === "tool").slice(-4);
 
   return (
@@ -90,12 +87,14 @@ export const HybridWorkspace: React.FC<HybridWorkspaceProps> = ({
       {showExplorerPane && (
         <FileExplorer
           selectedProject={selectedProject}
+          projectOptions={projectOptions}
           explorerItems={explorerItems}
           treeExpanded={treeExpanded}
           treeChildren={treeChildren}
           treeLoading={treeLoading}
           activeFile={activeFile}
           onRefresh={onRefreshExplorer}
+          onSelectProject={onSelectProject}
           onToggleDir={onToggleDir}
           onOpenFile={onOpenFile}
           onHide={onHideExplorer}
@@ -110,6 +109,9 @@ export const HybridWorkspace: React.FC<HybridWorkspaceProps> = ({
         editorBusy={editorBusy}
         agentStatus={agentStatus}
         editorStatus={editorStatus}
+        recentActions={recentActions}
+        agentLiveItems={agentLiveItems}
+        selectedProject={selectedProject}
         onSetActiveFile={onSetActiveFile}
         onCloseFile={onCloseFile}
         onRunInlineHelp={onRunInlineHelp}
@@ -128,67 +130,8 @@ export const HybridWorkspace: React.FC<HybridWorkspaceProps> = ({
             aria-label="Resize assist panel"
           />
           <aside className="hybridSidePane hybridAssistRail" style={{ width: assistPaneWidth }}>
-            <div className="hybridAssistSummary missionCard">
-              <div className="missionCardHeader">
-                <div>
-                  <div className="missionCardEyebrow">{profile.personaName}</div>
-                  <div className="missionCardTitle">{profile.personaRole}</div>
-                </div>
-                <div className={`previewStatusPill ${previewUrl ? "live" : "idle"}`}>
-                  {previewUrl ? "Watching preview" : "Watching editor"}
-                </div>
-              </div>
-              <div className="missionPrimaryText">{profile.modeSummary}</div>
-              <div className="missionCompactList">
-                <div className="missionCompactItem static">
-                  <div>
-                    <div className="missionCompactPrimary">Current focus</div>
-                    <div className="missionCompactMeta">{activeFileName}</div>
-                  </div>
-                </div>
-                <div className="missionCompactItem static">
-                  <div>
-                    <div className="missionCompactPrimary">Open tabs</div>
-                    <div className="missionCompactMeta">{openFiles.length} file active in the coding lane</div>
-                  </div>
-                </div>
-                <div className="missionCompactItem static">
-                  <div>
-                    <div className="missionCompactPrimary">Latest signal</div>
-                    <div className="missionCompactMeta">{recentAction ? `${String(recentAction.type)} ${String(recentAction.command || recentAction.path || "")}` : editorStatus}</div>
-                  </div>
-                </div>
-                {attachedAssetName ? (
-                  <div className="missionCompactItem static">
-                    <div>
-                      <div className="missionCompactPrimary">Attached asset</div>
-                      <div className="missionCompactMeta">{attachedAssetName}</div>
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            </div>
-            {agentLiveItems.length > 0 || agentStatus === "thinking" ? (
-              <div className="missionCard hybridLiveCard">
-                <div className="missionCardHeader">
-                  <div>
-                    <div className="missionCardEyebrow">Live interaction</div>
-                    <div className="missionCardTitle">Streaming response Raka</div>
-                  </div>
-                </div>
-                <AgentLiveStage
-                  items={agentLiveItems.slice(-6)}
-                  agentStatus={agentStatus === "thinking" ? "thinking" : agentStatus === "error" ? "error" : "idle"}
-                  personaName={profile.personaName}
-                  workingMsg={editorStatus}
-                  compact
-                  includeTools={false}
-                  conversationOnly
-                />
-              </div>
-            ) : null}
             {recentActions.length > 0 || toolItems.length > 0 || agentAuditTrail.length > 0 ? (
-              <div className="missionCard hybridLiveCard">
+              <div className="missionCard hybridInteractionCard">
                 <div className="missionCardHeader">
                   <div>
                     <div className="missionCardEyebrow">Interaction module</div>

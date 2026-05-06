@@ -147,6 +147,71 @@ def _persist_hosted_file(rel_path: str, content: str) -> None:
         pass
 
 
+HOSTED_SHELL_SYNC_EXCLUDED_DIRS = {
+    ".git",
+    ".next",
+    ".nuxt",
+    ".output",
+    ".svelte-kit",
+    ".turbo",
+    ".venv",
+    ".vercel",
+    "__pycache__",
+    "build",
+    "coverage",
+    "dist",
+    "node_modules",
+    "venv",
+}
+
+
+def _sync_hosted_project_text_files_after_shell(ws_root: Path, cwd: Path, max_files: int = 500, max_bytes: int = 400_000) -> int:
+    if not _hosted_project_files_enabled():
+        return 0
+    try:
+        rel_cwd = cwd.resolve().relative_to(ws_root.resolve())
+    except Exception:
+        return 0
+    parts = rel_cwd.parts
+    if not parts:
+        return 0
+
+    project_root = parts[0]
+    project_dir = safe_join(ws_root, project_root)
+    if not project_dir.exists() or not project_dir.is_dir():
+        return 0
+
+    files: list[dict[str, str]] = []
+    for path in project_dir.rglob("*"):
+        if len(files) >= max_files:
+            break
+        if not path.is_file():
+            continue
+        try:
+            rel = PurePosixPath(str(path.relative_to(project_dir)))
+        except Exception:
+            continue
+        if any(part in HOSTED_SHELL_SYNC_EXCLUDED_DIRS for part in rel.parts):
+            continue
+        rel_str = str(rel)
+        if not _is_text_rel_path(rel_str):
+            continue
+        try:
+            if path.stat().st_size > max_bytes:
+                continue
+            files.append({"path": rel_str, "content": path.read_text(encoding="utf-8")})
+        except Exception:
+            continue
+
+    if not files:
+        return 0
+    try:
+        supabase_upsert_project_files(owner_id=CURRENT_USER_ID.get(), project_root=project_root, files=files)
+        return len(files)
+    except Exception:
+        return 0
+
+
 def _hydrate_hosted_project(ws_root: Path, project_root: str) -> None:
     if not _hosted_project_files_enabled():
         return
@@ -818,46 +883,25 @@ def _audit_preview_html(
 
 
 def _run_shell_command(command: str, cwd: Path, timeout: int = 120) -> dict:
-    if _is_serverless_runtime():
-        raise HTTPException(400, "Terminal commands are disabled in hosted/serverless deployments.")
-
-    if any(fragment in command for fragment in DANGEROUS_COMMAND_FRAGMENTS):
-        raise HTTPException(403, "Command blocked for safety")
-
-    translated_command, translated_note = _translate_package_manager_command(command, cwd)
-    if translated_command is None:
-        return {
-            "ok": False,
-            "stdout": "",
-            "stderr": translated_note or "Command could not be translated for this runtime.",
-            "returncode": 127,
-        }
-
     try:
         proc = subprocess.run(
-            translated_command,
+            command,
             shell=True,
             cwd=str(cwd),
             capture_output=True,
             text=True,
             timeout=timeout,
         )
-        stdout = proc.stdout or ""
-        if translated_note:
-            stdout = f"{translated_note}\n{stdout}".strip()
         return {
             "ok": proc.returncode == 0,
-            "stdout": stdout,
+            "stdout": proc.stdout or "",
             "stderr": proc.stderr,
             "returncode": proc.returncode,
         }
     except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout or ""
-        if translated_note:
-            stdout = f"{translated_note}\n{stdout}".strip()
         return {
             "ok": False,
-            "stdout": stdout,
+            "stdout": exc.stdout or "",
             "stderr": (exc.stderr or "") + "\nCommand timed out",
             "returncode": 124,
         }
@@ -916,7 +960,9 @@ def terminal_run(req: TerminalRunReq):
         cwd = safe_join(ws_root, req.cwd)
 
     try:
-        return _run_shell_command(req.command, cwd)
+        result = _run_shell_command(req.command, cwd)
+        result["synced_files"] = _sync_hosted_project_text_files_after_shell(ws_root, cwd)
+        return result
     except HTTPException:
         raise
     except Exception as e:
