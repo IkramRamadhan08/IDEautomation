@@ -39,7 +39,6 @@ export const FullAgentWorkspace: React.FC<FullAgentWorkspaceProps> = ({
   agentLog,
   agentActions,
   agentLiveItems,
-  agentAuditTrail,
   attachedAssetName,
   onEnsurePreviewRunning,
 }) => {

@@ -5,8 +5,11 @@ from pathlib import Path
 
 
 def safe_join(root: Path, rel: str) -> Path:
-    p = (root / rel).resolve()
-    if not str(p).startswith(str(root.resolve())):
+    resolved_root = root.resolve()
+    p = (resolved_root / rel).resolve()
+    try:
+        p.relative_to(resolved_root)
+    except ValueError:
         raise ValueError("Path escapes workspace")
     return p
 

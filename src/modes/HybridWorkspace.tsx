@@ -65,7 +65,6 @@ export const HybridWorkspace: React.FC<HybridWorkspaceProps> = ({
   attachedAssetName,
   recentActions,
   agentLiveItems,
-  agentAuditTrail,
   onRefreshExplorer,
   onToggleDir,
   onOpenFile,

@@ -42,7 +42,7 @@ export type BuildModeProfile = {
 };
 
 const PREVIEW_INTENT_RE = /\b(preview|run|launch|start|ship|deploy)\b/i;
-const VALIDATION_INTENT_RE = /\b(fix|bug|audit|review|polish|refine|build|production|preview|ship|launch|repair)\b/i;
+const VALIDATION_INTENT_RE = /\b(fix|bug|audit|review|polish|refine|build|production|preview|ship|launch|repair|bikin|buat|tambah|tambahin|ubah|rapihin|benahin|perbaiki|validasi|cek)\b/i;
 const AUDIT_INTENT_RE = /\b(audit|ux|ui|design|landing|hero|preview|polish|refine)\b/i;
 const WRITE_RE = /\b(fix|build|ship|implement|create|add|remove|update|change|edit|refactor|repair|wire|connect|integrate|generate|scaffold|run|start|launch|deploy|bikin|buat|tambahin|tambah|hapus|ubah|rapihin|benahin|perbaiki|jalanin|gas|lanjut|lanjutin|pastiin)\b/i;
 const INSPECTION_RE = /\b(debug|audit|review|validate|check|inspect|analy[sz]e|cek|validasi|analisa|analisis)\b/i;
@@ -259,8 +259,8 @@ export function getAgentRunPlan(buildMode: BuildMode, input: string, previewUrl:
     return {
       requestEditorStatus,
       shouldDrivePreview: intent.shouldWriteFiles,
-      shouldRunValidation: intent.shouldWriteFiles && wantsValidation,
-      shouldAuditPreview: intent.shouldWriteFiles && wantsAudit,
+      shouldRunValidation: intent.shouldWriteFiles,
+      shouldAuditPreview: intent.shouldWriteFiles && (wantsAudit || wantsPreview),
       intent,
     };
   }

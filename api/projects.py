@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from api.settings import ROOT
 from api.supabase_store import archive_project as supabase_archive_project
-from api.supabase_store import has_supabase, insert_project, list_projects as supabase_list_projects, update_project_name
+from api.supabase_store import has_supabase, insert_project, list_projects as supabase_list_projects, update_project_name, upsert_project_files
 
 
 class ProjectRecord(BaseModel):
@@ -138,6 +138,7 @@ def create_project(*, workspace_root: Path, owner_id: str, req: ProjectCreateReq
         readme.write_text(f"# {name}\n\nCreated by Voice IDE project setup.\n", encoding="utf-8")
 
     if has_supabase():
+        upsert_project_files(owner_id=owner_id, project_root=slug, files=[{"path": "README.md", "content": readme.read_text(encoding="utf-8")}])
         remote = insert_project(owner_id=owner_id, name=name, slug=slug, root=slug)
         if remote:
             return ProjectRecord(**remote)

@@ -138,6 +138,48 @@ def archive_project(*, project_id: str, owner_id: str) -> dict[str, Any] | None:
     return data[0] if data else None
 
 
+def list_project_files(*, owner_id: str, project_root: str, limit: int = 2000) -> list[dict[str, Any]] | None:
+    client = get_supabase_admin()
+    if not client:
+        return None
+    res = (
+        client.table("project_files")
+        .select("project_root,path,content,updated_at")
+        .eq("owner_id", owner_id)
+        .eq("project_root", str(project_root or ".").strip() or ".")
+        .order("path")
+        .limit(max(1, min(int(limit or 2000), 5000)))
+        .execute()
+    )
+    data = getattr(res, "data", None)
+    return data if isinstance(data, list) else []
+
+
+def upsert_project_files(*, owner_id: str, project_root: str, files: list[dict[str, str]]) -> bool:
+    client = get_supabase_admin()
+    if not client or not files:
+        return False
+    normalized_root = str(project_root or ".").strip() or "."
+    payload: list[dict[str, str]] = []
+    for item in files:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("path") or "").strip().lstrip("/")
+        content = item.get("content")
+        if not path or path in {".", ".."} or ".." in path.split("/") or not isinstance(content, str):
+            continue
+        payload.append({
+            "owner_id": owner_id,
+            "project_root": normalized_root,
+            "path": path,
+            "content": content,
+        })
+    if not payload:
+        return False
+    client.table("project_files").upsert(payload).execute()
+    return True
+
+
 def _classify_agent_memory_chunks_probe_error(exc: Exception) -> str:
     message = str(exc or "").lower()
     if "agent_memory_chunks" in message and (

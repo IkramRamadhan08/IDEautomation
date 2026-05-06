@@ -720,8 +720,8 @@ export default function App() {
         <div className="workspaceGateKicker">Workspace setup</div>
         <div className="workspaceGateTitle">Choose where this session should build</div>
         <div className="workspaceGateSubtitle">
-          Open an existing project, or create a new workspace and start from a cleaner default surface.
-          {isHostedBrowser() ? " In this deployment, uploaded projects are temporary." : ""}
+          Open an existing hosted project, or create a new Supabase-backed workspace for the agent.
+          {isHostedBrowser() ? " Project text files are restored from Supabase between serverless runs." : ""}
         </div>
         <div className="workspaceGateFeatureGrid">
           <div className="gateFeatureCard">

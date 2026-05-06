@@ -61,6 +61,16 @@ create table if not exists public.project_preferences (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.project_files (
+  owner_id text not null references public.profiles(id) on delete cascade,
+  project_root text not null,
+  path text not null,
+  content text not null default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (owner_id, project_root, path)
+);
+
 create table if not exists public.user_provider_secrets (
   profile_id text not null references public.profiles(id) on delete cascade,
   provider text not null,
@@ -73,6 +83,7 @@ create table if not exists public.user_provider_secrets (
 create index if not exists idx_projects_owner_id on public.projects(owner_id);
 create index if not exists idx_projects_updated_at on public.projects(updated_at desc);
 create index if not exists idx_project_members_profile_id on public.project_members(profile_id);
+create index if not exists idx_project_files_owner_root on public.project_files(owner_id, project_root);
 
 create or replace function public.set_updated_at()
 returns trigger
@@ -104,11 +115,17 @@ create trigger trg_project_preferences_updated_at
 before update on public.project_preferences
 for each row execute function public.set_updated_at();
 
+drop trigger if exists trg_project_files_updated_at on public.project_files;
+create trigger trg_project_files_updated_at
+before update on public.project_files
+for each row execute function public.set_updated_at();
+
 alter table public.profiles enable row level security;
 alter table public.projects enable row level security;
 alter table public.project_members enable row level security;
 alter table public.user_settings enable row level security;
 alter table public.project_preferences enable row level security;
+alter table public.project_files enable row level security;
 alter table public.user_provider_secrets enable row level security;
 
 -- Trial-stage RLS:
@@ -204,6 +221,46 @@ do $$ begin
         select 1 from public.project_members pm
         join public.profiles p on p.id = pm.profile_id
         where pm.project_id = project_preferences.project_id and p.supabase_user_id::text = auth.uid()::text
+      )
+    );
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  create policy "project_files_select_owner" on public.project_files
+    for select using (
+      exists (
+        select 1 from public.profiles p
+        where p.id = owner_id and p.supabase_user_id::text = auth.uid()::text
+      )
+    );
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  create policy "project_files_insert_owner" on public.project_files
+    for insert with check (
+      exists (
+        select 1 from public.profiles p
+        where p.id = owner_id and p.supabase_user_id::text = auth.uid()::text
+      )
+    );
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  create policy "project_files_update_owner" on public.project_files
+    for update using (
+      exists (
+        select 1 from public.profiles p
+        where p.id = owner_id and p.supabase_user_id::text = auth.uid()::text
+      )
+    );
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  create policy "project_files_delete_owner" on public.project_files
+    for delete using (
+      exists (
+        select 1 from public.profiles p
+        where p.id = owner_id and p.supabase_user_id::text = auth.uid()::text
       )
     );
 exception when duplicate_object then null; end $$;

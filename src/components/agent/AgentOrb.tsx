@@ -52,7 +52,6 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
   agentOrbPosition,
   workingMsg,
   agentLiveItems,
-  agentAuditTrail,
   agentRunViewPinned,
   editorStatus,
   activeFile,

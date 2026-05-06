@@ -16,11 +16,19 @@ from urllib.request import Request as URLRequest, urlopen
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from api.settings import ROOT, ENV_PATH, load_settings
-from api.supabase_store import get_agent_memory_chunks_summary, get_agent_memory_chunks_table_status, has_supabase, upsert_profile
+from api.supabase_store import (
+    get_agent_memory_chunks_summary,
+    get_agent_memory_chunks_table_status,
+    has_supabase,
+    list_project_files as supabase_list_project_files,
+    list_projects as supabase_list_projects,
+    upsert_profile,
+    upsert_project_files as supabase_upsert_project_files,
+)
 from api import settings as settings_mod
 from api.app_state import CURRENT_SESSION_ID, CURRENT_USER_ID, STATE
 from api.auth_router import build_auth_router
@@ -38,6 +46,13 @@ from api.agent_tools import list_local_tools
 
 
 app = FastAPI(title="Voice IDE Backend", version="0.1.0")
+
+
+@app.exception_handler(ValueError)
+async def value_error_handler(_request: Request, exc: ValueError):
+    message = str(exc) or "Invalid request"
+    status_code = 400 if "workspace" in message.lower() or "path" in message.lower() else 400
+    return JSONResponse(status_code=status_code, content={"detail": message})
 
 # Serialize LLM calls per provider to avoid provider-specific rate-limit bursts (429)
 # without making unrelated providers block each other.
@@ -58,6 +73,120 @@ def _agent_lock_for_current_provider() -> threading.Lock:
 
 def _reload_settings():
     settings_mod.settings = load_settings()
+
+
+def _is_serverless_runtime() -> bool:
+    return bool(
+        os.environ.get("VERCEL")
+        or os.environ.get("VERCEL_ENV")
+        or os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
+        or os.environ.get("LAMBDA_TASK_ROOT")
+    )
+
+
+SENSITIVE_HOSTED_API_PREFIXES = (
+    "/api/workspace",
+    "/api/fs",
+    "/api/terminal",
+    "/api/run",
+    "/api/agent",
+    "/api/assets",
+    "/api/project/validate",
+    "/api/preview/audit",
+    "/api/supabase/rag",
+)
+
+
+def _requires_verified_hosted_user(path: str) -> bool:
+    if not has_supabase():
+        return False
+    if path in {"/api/healthz", "/api/settings", "/api/models"}:
+        return False
+    return any(path == prefix or path.startswith(prefix + "/") for prefix in SENSITIVE_HOSTED_API_PREFIXES)
+
+
+def _is_text_rel_path(rel: str) -> bool:
+    suffix = PurePosixPath(rel).suffix.lower()
+    if suffix in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".woff", ".woff2", ".ttf", ".otf", ".mp4", ".mov", ".zip"}:
+        return False
+    return True
+
+
+def _hosted_project_files_enabled() -> bool:
+    return _is_serverless_runtime() and has_supabase()
+
+
+def _split_project_path(rel_path: str) -> tuple[str, str] | None:
+    rel = str(PurePosixPath(str(rel_path or "").strip().lstrip("/")))
+    if not rel or rel in {".", ".."}:
+        return None
+    parts = PurePosixPath(rel).parts
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        return None
+    project_root = parts[0]
+    file_rel = str(PurePosixPath(*parts[1:])) if len(parts) > 1 else "README.md"
+    return project_root, file_rel
+
+
+def _persist_hosted_file(rel_path: str, content: str) -> None:
+    if not _hosted_project_files_enabled():
+        return
+    split = _split_project_path(rel_path)
+    if not split:
+        return
+    project_root, file_rel = split
+    if not _is_text_rel_path(file_rel):
+        return
+    try:
+        supabase_upsert_project_files(
+            owner_id=CURRENT_USER_ID.get(),
+            project_root=project_root,
+            files=[{"path": file_rel, "content": content}],
+        )
+    except Exception:
+        pass
+
+
+def _hydrate_hosted_project(ws_root: Path, project_root: str) -> None:
+    if not _hosted_project_files_enabled():
+        return
+    root = str(project_root or ".").strip().strip("/") or "."
+    if root == ".":
+        return
+    try:
+        rows = supabase_list_project_files(owner_id=CURRENT_USER_ID.get(), project_root=root) or []
+    except Exception:
+        return
+    project_dir = safe_join(ws_root, root)
+    project_dir.mkdir(parents=True, exist_ok=True)
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        rel = str(row.get("path") or "").strip().lstrip("/")
+        content = row.get("content")
+        if not rel or not isinstance(content, str):
+            continue
+        try:
+            target = safe_join(project_dir, rel)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+        except Exception:
+            continue
+
+
+def _hydrate_hosted_projects(ws_root: Path) -> None:
+    if not _hosted_project_files_enabled():
+        return
+    try:
+        projects = supabase_list_projects(owner_id=CURRENT_USER_ID.get()) or []
+    except Exception:
+        return
+    for project in projects[:50]:
+        if not isinstance(project, dict):
+            continue
+        root = str(project.get("root") or project.get("slug") or "").strip()
+        if root:
+            _hydrate_hosted_project(ws_root, root)
 
 
 def _read_json(path: Path) -> dict | None:
@@ -385,6 +514,16 @@ async def bind_voiceide_session(request: Request, call_next):
     user_token = CURRENT_USER_ID.set(resolved_user.user_id)
     profile_token = CURRENT_PROFILE_ID.set(resolved_user.user_id)
     try:
+        if _requires_verified_hosted_user(request.url.path) and resolved_user.auth_source != "supabase":
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "detail": (
+                        "Hosted agent/workspace routes require verified login. "
+                        "Sign in so the frontend can send a Supabase bearer token."
+                    )
+                },
+            )
         session = _session_state()
         google_user = session.get("google_user") or {}
         if resolved_user.auth_source != "supabase":
@@ -802,6 +941,9 @@ def _audit_preview_html(
 
 
 def _run_shell_command(command: str, cwd: Path, timeout: int = 120) -> dict:
+    if _is_serverless_runtime():
+        raise HTTPException(400, "Terminal commands are disabled in hosted/serverless deployments.")
+
     if any(fragment in command for fragment in DANGEROUS_COMMAND_FRAGMENTS):
         raise HTTPException(403, "Command blocked for safety")
 
@@ -1026,11 +1168,18 @@ def get_workspace():
     # Public-friendly behavior: workspace is session-only.
     # Do not auto-restore from DEFAULT_WORKSPACE or any previously persisted choice.
     p: Path | None = _session_state()["workspace"]
+    if p is None and has_supabase():
+        p, _created = _provision_managed_workspace()
+        _session_state()["workspace"] = p
+    if p is not None:
+        _hydrate_hosted_projects(p)
     return WorkspaceInfo(path=str(p) if p else None, default=settings_mod.settings.default_workspace)
 
 
 @app.post("/api/workspace")
 def set_workspace(req: WorkspaceSetReq):
+    if _is_serverless_runtime():
+        raise HTTPException(400, "Picking arbitrary host folders is disabled in hosted/serverless deployments.")
     p = Path(req.path).expanduser().resolve()
     if not p.exists() or not p.is_dir():
         raise HTTPException(400, "Workspace path must be an existing directory")
@@ -1062,6 +1211,9 @@ def pick_workspace():
 
     import shutil
     import subprocess
+
+    if _is_serverless_runtime():
+        raise HTTPException(400, "Native folder picking is only available in local desktop/dev mode.")
 
     # Prefer zenity on Linux desktops
     if shutil.which("zenity"):
@@ -1138,6 +1290,15 @@ async def import_browser_folder(files: list[UploadFile] = File(...), paths: list
         dest.parent.mkdir(parents=True, exist_ok=True)
         content = await upload.read()
         dest.write_bytes(content)
+        if has_supabase() and _is_text_rel_path(str(PurePosixPath(*inner_parts))):
+            try:
+                supabase_upsert_project_files(
+                    owner_id=CURRENT_USER_ID.get(),
+                    project_root=root_name,
+                    files=[{"path": str(PurePosixPath(*inner_parts)), "content": content.decode("utf-8")}],
+                )
+            except Exception:
+                pass
 
     if target_root is None:
         raise HTTPException(400, "No folder content received")
@@ -1224,6 +1385,7 @@ def _ws() -> Path:
             p = None
     if p is None:
         raise HTTPException(400, "Workspace not set")
+    _hydrate_hosted_projects(p)
     return p
 
 
@@ -1314,6 +1476,7 @@ class DetectedProject(BaseModel):
 @app.get("/api/run/detect")
 def run_detect():
     base = _ws()
+    _hydrate_hosted_projects(base)
     out: list[dict] = []
     seen = set()
 
@@ -1375,6 +1538,7 @@ def run_start(req: RunStartReq):
         raise HTTPException(400, "Embedded preview is not available in this deployment.")
 
     base = _ws()
+    _hydrate_hosted_project(base, req.project_root)
     proj = safe_join(base, req.project_root)
     if not proj.exists() or not proj.is_dir():
         raise HTTPException(400, "project_root must exist inside workspace")
@@ -1513,6 +1677,13 @@ class ListReq(BaseModel):
 
 @app.post("/api/fs/list")
 def fs_list(req: ListReq):
+    root = _ws()
+    if req.path == ".":
+        _hydrate_hosted_projects(root)
+    else:
+        split = _split_project_path(req.path)
+        if split:
+            _hydrate_hosted_project(root, split[0])
     return {"items": list_tree(_ws(), req.path)}
 
 
@@ -1523,9 +1694,15 @@ class ReadReq(BaseModel):
 @app.post("/api/fs/read")
 def fs_read(req: ReadReq):
     try:
-        return {"content": (_ws() / req.path).read_text(encoding="utf-8")}
+        root = _ws()
+        split = _split_project_path(req.path)
+        if split:
+            _hydrate_hosted_project(root, split[0])
+        return {"content": read_text(root, req.path)}
     except FileNotFoundError:
         raise HTTPException(404, "Not found")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 
 class WriteReq(BaseModel):
@@ -1537,6 +1714,7 @@ class WriteReq(BaseModel):
 @app.post("/api/fs/write")
 def fs_write(req: WriteReq):
     write_text(_ws(), req.path, req.content)
+    _persist_hosted_file(req.path, req.content)
     return {"ok": True}
 
 
@@ -1566,6 +1744,7 @@ def fs_apply_many(req: ApplyManyReq):
 
     for op in req.ops:
         write_text(root, op.path, op.content)
+        _persist_hosted_file(op.path, op.content)
 
     return {"ok": True, "count": len(req.ops)}
 
@@ -1577,7 +1756,11 @@ class DiffReq(BaseModel):
 
 @app.post("/api/fs/diff")
 def fs_diff(req: DiffReq):
-    old = read_text(_ws(), req.path)
+    root = _ws()
+    split = _split_project_path(req.path)
+    if split:
+        _hydrate_hosted_project(root, split[0])
+    old = read_text(root, req.path)
     d = diff_text(old, req.new_content, filename=req.path)
     return {"diff": d}
 
@@ -1595,6 +1778,7 @@ def preview_audit(req: PreviewAuditReq):
     preview_url = _normalize_preview_url(req.preview_url)
     max_excerpt_chars = max(200, min(req.max_excerpt_chars, 4000))
     project_root = (req.project_root or ".").strip() or "."
+    _hydrate_hosted_project(_ws(), project_root)
     project_dir = safe_join(_ws(), project_root)
     warnings: list[str] = []
     project_signals = _scan_project_quality_signals(project_dir) if project_dir.exists() else {}
@@ -1635,6 +1819,7 @@ class SupabaseRagSyncReq(BaseModel):
 def supabase_rag_status(project_root: str = "."):
     ws_root = _ws()
     proj_root = (project_root or ".").strip() or "."
+    _hydrate_hosted_project(ws_root, proj_root)
     project_dir = safe_join(ws_root, proj_root)
     supabase_enabled = has_supabase()
     frontend_auth_ready = bool(getattr(settings_mod.settings, "supabase_frontend_ready", False))
@@ -1671,6 +1856,7 @@ def supabase_rag_status(project_root: str = "."):
 def supabase_rag_sync(req: SupabaseRagSyncReq):
     ws_root = _ws()
     proj_root = (req.project_root or ".").strip() or "."
+    _hydrate_hosted_project(ws_root, proj_root)
     project_dir = safe_join(ws_root, proj_root)
     if not project_dir.exists() or not project_dir.is_dir():
         raise HTTPException(400, "project_root must exist inside workspace")
@@ -1690,6 +1876,7 @@ def supabase_rag_sync(req: SupabaseRagSyncReq):
 def project_validate(req: ProjectValidateReq):
     ws_root = _ws()
     project_root = (req.project_root or ".").strip() or "."
+    _hydrate_hosted_project(ws_root, project_root)
     project_dir = safe_join(ws_root, project_root)
     if not project_dir.exists() or not project_dir.is_dir():
         raise HTTPException(400, "project_root must exist inside workspace")
@@ -1739,6 +1926,7 @@ class ImageAssetResp(BaseModel):
 def agent_capabilities(project_root: str = ".", include_live_tools: bool = False):
     ws_root = _ws()
     proj_root = (project_root or ".").strip() or "."
+    _hydrate_hosted_project(ws_root, proj_root)
     project_dir = safe_join(ws_root, proj_root)
     servers = discover_mcp_servers(ws_root, project_dir) if project_dir.exists() else []
     tool_catalog = list_mcp_tools(ws_root, project_dir, refresh=False) if include_live_tools and servers else {}
@@ -1937,6 +2125,7 @@ def _sanitize_uploaded_filename(name: str) -> str:
 async def upload_image_asset(project_root: str = Form("."), file: UploadFile = File(...)):
     ws_root = _ws()
     proj_root = (project_root or ".").strip() or "."
+    _hydrate_hosted_project(ws_root, proj_root)
     project_dir = safe_join(ws_root, proj_root)
     if not project_dir.exists() or not project_dir.is_dir():
         raise HTTPException(400, "project_root must exist inside workspace")
@@ -1974,6 +2163,7 @@ def _run_agent_impl(req: AgentReq, event_cb=None):
 
     emit("status", {"phase": "starting", "message": "Nyusun konteks kerja dulu..."})
     ws_root = _ws()
+    _hydrate_hosted_project(ws_root, getattr(req, "project_root", ".") or ".")
 
     try:
         with _agent_lock_for_current_provider():

@@ -16,6 +16,7 @@ from api.agent_skills import detect_project_stack, resolve_agent_skills
 from api.agent_tools import execute_local_tool
 from api.auth_identity import AuthenticatedUser
 from api.auth_policy import require_hosted_user
+from api.fs import safe_join
 from api.hybrid import build_hybrid_seed
 from api.main import _build_quality_checks, _extract_preview_snapshot_from_html, agent_capabilities, app as main_app, supabase_rag_status
 from api.preferences import UserPreferencesRecord
@@ -715,6 +716,27 @@ class SupabaseReadinessRegressionTests(unittest.TestCase):
         self.assertTrue(settings.supabase_anon_key_set)
         self.assertTrue(settings.supabase_missing_env)
         self.assertIn("SUPABASE_SERVICE_ROLE_KEY", settings.supabase_missing_env)
+
+
+class WorkspaceBoundaryRegressionTests(unittest.TestCase):
+    def test_safe_join_rejects_prefix_sibling_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "workspace"
+            sibling = base / "workspace-evil"
+            root.mkdir()
+            sibling.mkdir()
+
+            with self.assertRaises(ValueError):
+                safe_join(root, "../workspace-evil/secret.txt")
+
+    def test_hosted_sensitive_routes_require_verified_user(self) -> None:
+        with patch("api.main.has_supabase", return_value=True):
+            client = TestClient(main_app)
+            resp = client.post("/api/fs/list", json={"path": "."})
+
+        self.assertEqual(resp.status_code, 401)
+        self.assertIn("verified login", resp.text)
 
 
 class TranscriptPurityRegressionTests(unittest.TestCase):
