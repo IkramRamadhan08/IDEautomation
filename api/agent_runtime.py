@@ -733,12 +733,20 @@ def _draft_node(state: AgentRuntimeState) -> AgentRuntimeState:
     ctx = state["context"]
     _emit(state, "status", {"phase": "context_ready", "message": "Konteks siap, agent mulai mikir..."})
     is_tool_follow_up = int(state.get("tool_iterations") or 0) > 0
+    if is_tool_follow_up:
+        drafting_message = "Hasil tool udah masuk, sekarang agent nyusun solusi finalnya..."
+    elif ctx.intent.kind == "conversation":
+        drafting_message = "Lagi nyusun balasan yang nyambung..."
+    elif ctx.intent.kind == "inspection":
+        drafting_message = "Lagi nyusun hasil review tanpa ubah file..."
+    else:
+        drafting_message = "Lagi nulis draft perubahan pertama..."
     _emit(
         state,
         "status",
         {
             "phase": "drafting",
-            "message": "Lagi nulis draft perubahan pertama..." if not is_tool_follow_up else "Hasil tool udah masuk, sekarang agent nyusun solusi finalnya...",
+            "message": drafting_message,
         },
     )
 
@@ -777,7 +785,13 @@ def _draft_node(state: AgentRuntimeState) -> AgentRuntimeState:
         changes = []
         actions = []
 
-    _emit(state, "delta", {"message": "Draft pertama jadi, lagi rapihin hasilnya...", "changes_so_far": len(changes)})
+    if ctx.intent.kind == "conversation":
+        done_message = "Balasan udah siap, tinggal dirapihin..."
+    elif ctx.intent.kind == "inspection" and not changes:
+        done_message = "Hasil review udah siap, tanpa perubahan file..."
+    else:
+        done_message = "Draft pertama jadi, lagi rapihin hasilnya..."
+    _emit(state, "delta", {"message": done_message, "changes_so_far": len(changes)})
     return {
         "spoken": spoken,
         "log": log,

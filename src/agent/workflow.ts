@@ -64,7 +64,7 @@ const PHASE_LABELS: Record<string, string> = {
   skills: "Milih skill yang paling kepake…",
   mcp: "Ngecek integrasi MCP yang tersedia…",
   context_ready: "Konteks siap, mulai ngerjain…",
-  drafting: "Lagi nulis solusi pertamanya…",
+  drafting: "Lagi nyusun respons…",
   tooling: "Lagi jalanin tool agent…",
   refining: "Lagi merapikan hasil…",
   diffing: "Lagi nyusun patch yang rapi…",

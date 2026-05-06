@@ -2009,6 +2009,26 @@ a {
   overflow: hidden;
 }
 
+.agentOrb.raka .agentOrbButton {
+  border-color: rgba(94, 234, 212, 0.3);
+  background: radial-gradient(circle at 30% 30%, rgba(187, 247, 238, 0.98), rgba(45, 212, 191, 0.72) 42%, rgba(15, 118, 110, 0.96) 100%);
+}
+
+.agentOrb.clara .agentOrbButton {
+  border-color: rgba(244, 114, 182, 0.26);
+  background: radial-gradient(circle at 30% 30%, rgba(252, 231, 243, 0.98), rgba(244, 114, 182, 0.72) 42%, rgba(147, 51, 123, 0.96) 100%);
+}
+
+.agentOrb.raka .agentOrbBubble.playful,
+.agentOrb.raka .agentOrbBubble.curious {
+  background: rgba(8, 31, 34, 0.96);
+}
+
+.agentOrb.clara .agentOrbBubble.playful,
+.agentOrb.clara .agentOrbBubble.curious {
+  background: rgba(35, 18, 36, 0.96);
+}
+
 .agentOrbButton::after {
   content: "";
   position: absolute;
@@ -2060,6 +2080,32 @@ a {
   width: 34px;
   height: 34px;
   z-index: 1;
+}
+
+.agentOrbPersonaMark {
+  position: absolute;
+  top: -13px;
+  right: -13px;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  background: rgba(6, 11, 20, 0.72);
+  color: white;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.agentOrb.raka .agentOrbPersonaMark {
+  background: rgba(6, 78, 59, 0.82);
+}
+
+.agentOrb.clara .agentOrbPersonaMark {
+  background: rgba(131, 24, 67, 0.82);
 }
 
 .orbEye,

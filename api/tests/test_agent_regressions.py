@@ -44,6 +44,13 @@ class AgentIntentRegressionTests(unittest.TestCase):
                 self.assertEqual(intent.should_write_files, should_write)
                 self.assertEqual(intent.should_run_tools, should_tools)
 
+    def test_short_greetings_stay_conversational(self) -> None:
+        for prompt in ["hi", "hello", "hei", "hai", "halo", "p", "bro"]:
+            with self.subTest(prompt=prompt):
+                intent = classify_agent_intent(prompt, build_mode="full-agent", active_file="src/App.tsx", open_files=["src/App.tsx"])
+                self.assertEqual(intent.kind, "conversation")
+                self.assertFalse(intent.should_write_files)
+
 
 class MemoryRetrievalRegressionTests(unittest.TestCase):
     def test_local_vector_memory_retrieval_prefers_relevant_chunks(self) -> None:

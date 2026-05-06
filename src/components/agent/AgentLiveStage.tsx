@@ -5,6 +5,7 @@ import { type AgentLiveItem } from "../../types";
 interface AgentLiveStageProps {
   items: AgentLiveItem[];
   agentStatus: "idle" | "thinking" | "error";
+  personaName?: string;
   workingMsg?: string;
   emptyText?: string;
   compact?: boolean;
@@ -12,10 +13,10 @@ interface AgentLiveStageProps {
   conversationOnly?: boolean;
 }
 
-function roleLabel(item: AgentLiveItem) {
+function roleLabel(item: AgentLiveItem, personaName: string) {
   if (item.role === "user") return "You";
   if (item.role === "tool") return "Action";
-  return "Clara";
+  return personaName;
 }
 
 function roleIcon(item: AgentLiveItem) {
@@ -27,6 +28,7 @@ function roleIcon(item: AgentLiveItem) {
 export const AgentLiveStage: React.FC<AgentLiveStageProps> = ({
   items,
   agentStatus,
+  personaName = "Agent",
   workingMsg,
   emptyText = "Run agent untuk lihat jawaban Clara muncul live di sini.",
   compact = false,
@@ -48,7 +50,7 @@ export const AgentLiveStage: React.FC<AgentLiveStageProps> = ({
         <div key={item.id} className={`agentLiveBubble ${item.role} ${item.tone || "default"}`}>
           <div className="agentLiveBubbleMeta">
             <span className="agentLiveBubbleIcon">{roleIcon(item)}</span>
-            <span>{roleLabel(item)}</span>
+            <span>{roleLabel(item, personaName)}</span>
           </div>
           <div className="agentLiveBubbleText">{item.text}</div>
           {item.meta ? <div className="agentLiveBubbleSubtext">{item.meta}</div> : null}

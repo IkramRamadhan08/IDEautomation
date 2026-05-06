@@ -3,6 +3,7 @@ import { FileExplorer } from "../components/explorer/FileExplorer";
 import { MonacoEditor } from "../components/editor/MonacoEditor";
 import { PreviewPane } from "../components/preview/PreviewPane";
 import { AgentLiveStage } from "../components/agent/AgentLiveStage";
+import { AgentAuditTrail } from "../components/agent/AgentAuditTrail";
 import { getBuildModeProfile } from "../agent/runtime";
 import { type AgentAction, type AgentAuditSnapshot, type AgentLiveItem, type ExplorerItem, type FileBuffer } from "../types";
 
@@ -65,6 +66,7 @@ export const HybridWorkspace: React.FC<HybridWorkspaceProps> = ({
   attachedAssetName,
   recentActions,
   agentLiveItems,
+  agentAuditTrail,
   onRefreshExplorer,
   onToggleDir,
   onOpenFile,
@@ -81,6 +83,7 @@ export const HybridWorkspace: React.FC<HybridWorkspaceProps> = ({
   const profile = getBuildModeProfile("hybrid");
   const activeFileName = activeFile.split("/").pop() || "No file selected";
   const recentAction = recentActions.length > 0 ? recentActions[recentActions.length - 1] : undefined;
+  const toolItems = agentLiveItems.filter((item) => item.role === "tool").slice(-4);
 
   return (
     <div className="hybridLayout hybridWorkspaceShell">
@@ -170,17 +173,47 @@ export const HybridWorkspace: React.FC<HybridWorkspaceProps> = ({
                 <div className="missionCardHeader">
                   <div>
                     <div className="missionCardEyebrow">Live interaction</div>
-                    <div className="missionCardTitle">Raka lagi jelasin langkahnya</div>
+                    <div className="missionCardTitle">Streaming response Raka</div>
                   </div>
                 </div>
                 <AgentLiveStage
                   items={agentLiveItems.slice(-6)}
                   agentStatus={agentStatus === "thinking" ? "thinking" : agentStatus === "error" ? "error" : "idle"}
+                  personaName={profile.personaName}
                   workingMsg={editorStatus}
                   compact
                   includeTools={false}
                   conversationOnly
                 />
+              </div>
+            ) : null}
+            {recentActions.length > 0 || toolItems.length > 0 || agentAuditTrail.length > 0 ? (
+              <div className="missionCard hybridLiveCard">
+                <div className="missionCardHeader">
+                  <div>
+                    <div className="missionCardEyebrow">Interaction module</div>
+                    <div className="missionCardTitle">Aksi agent</div>
+                  </div>
+                </div>
+                <div className="missionCompactList">
+                  {recentActions.slice(-3).map((action, index) => (
+                    <div key={`${String(action.type)}-${index}`} className="missionCompactItem static">
+                      <div>
+                        <div className="missionCompactPrimary">{String(action.type)}</div>
+                        <div className="missionCompactMeta">{String(action.command || action.path || "No extra detail")}</div>
+                      </div>
+                    </div>
+                  ))}
+                  {toolItems.map((item) => (
+                    <div key={item.id} className="missionCompactItem static">
+                      <div>
+                        <div className="missionCompactPrimary">tool</div>
+                        <div className="missionCompactMeta">{item.text}{item.meta ? ` • ${item.meta}` : ""}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {agentAuditTrail.length > 0 ? <AgentAuditTrail snapshots={agentAuditTrail.slice(-1)} compact /> : null}
               </div>
             ) : null}
             <PreviewPane ws={ws} previewUrl={previewUrl} previewFrameKey={previewFrameKey} onEnsurePreviewRunning={onEnsurePreviewRunning} isSmall />

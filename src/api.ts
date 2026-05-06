@@ -21,21 +21,6 @@ export type IdentityInfo = {
   managed_workspace_path: string;
 };
 
-export type GoogleUserInfo = {
-  sub: string;
-  email: string | null;
-  name: string | null;
-  picture: string | null;
-};
-
-export type GoogleAuthStatus = {
-  ok: boolean;
-  authenticated: boolean;
-  phase: string;
-  auth_url?: string | null;
-  user?: GoogleUserInfo | null;
-};
-
 export type ProviderStatus = {
   provider: "openai" | "anthropic" | "openrouter";
   connected: boolean;
@@ -162,18 +147,6 @@ function getUserId(): string {
   return next;
 }
 
-export function getClientUserId(): string {
-  return getUserId();
-}
-
-export function setClientUserId(nextUserId: string): string {
-  const normalized = normalizeUserId(nextUserId);
-  if (typeof window !== "undefined") {
-    window.localStorage.setItem(USER_STORAGE_KEY, normalized);
-  }
-  return normalized;
-}
-
 export function resetClientIdentity() {
   if (typeof window === "undefined") return;
   window.localStorage.removeItem(SESSION_STORAGE_KEY);
@@ -210,24 +183,6 @@ export async function createHostedProject(payload: { name: string; slug?: string
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
-  });
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
-}
-
-export async function renameHostedProject(projectId: string, payload: { name: string }): Promise<{ ok: boolean; project: HostedProject }> {
-  const r = await apiFetch(`/api/projects/${encodeURIComponent(projectId)}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
-}
-
-export async function archiveHostedProject(projectId: string): Promise<{ ok: boolean; project: HostedProject }> {
-  const r = await apiFetch(`/api/projects/${encodeURIComponent(projectId)}`, {
-    method: "DELETE",
   });
   if (!r.ok) throw new Error(await r.text());
   return r.json();
@@ -331,38 +286,8 @@ export async function importBrowserFolder(files: File[]): Promise<WorkspaceProvi
   return lastResponse;
 }
 
-export async function clearWorkspace(): Promise<{ ok: boolean }> {
-  const r = await apiFetch(`/api/workspace/clear`, {
-    method: "POST",
-  });
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
-}
-
 export async function provisionWorkspace(): Promise<WorkspaceProvisionInfo> {
   const r = await apiFetch(`/api/workspace/provision`, {
-    method: "POST",
-  });
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
-}
-
-export async function getGoogleAuthStatus(): Promise<GoogleAuthStatus> {
-  const r = await apiFetch(`/api/auth/google/status`);
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
-}
-
-export async function startGoogleAuthLogin(): Promise<GoogleAuthStatus> {
-  const r = await apiFetch(`/api/auth/google/login-start`, {
-    method: "POST",
-  });
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
-}
-
-export async function logoutGoogleAuth(): Promise<{ ok: boolean }> {
-  const r = await apiFetch(`/api/auth/google/logout`, {
     method: "POST",
   });
   if (!r.ok) throw new Error(await r.text());
@@ -399,16 +324,6 @@ export async function getProjectPreferences(projectId: string): Promise<{ ok: bo
 
 export async function updateProjectPreferences(projectId: string, payload: Partial<ProjectPreferences>): Promise<{ ok: boolean; preferences: ProjectPreferences }> {
   const r = await apiFetch(`/api/preferences/projects/${encodeURIComponent(projectId)}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
-}
-
-export async function updateIdentity(payload: Partial<{ display_name: string | null; email: string | null }>): Promise<IdentityInfo> {
-  const r = await apiFetch(`/api/identity`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -469,20 +384,6 @@ export async function updateSettings(patch: SettingsUpdate): Promise<{ ok: boole
   return r.json();
 }
 
-export async function generatePrd(
-  name: string,
-  goal: string,
-  ref_url?: string
-): Promise<{ ok: boolean; spoken: string; prd_markdown: string; log: string }> {
-  const r = await apiFetch(`/api/agent/prd`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, goal, ref_url }),
-  });
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
-}
-
 export async function applyMany(
   ops: Array<{ path: string; content: string }>,
   overwrite = false
@@ -491,16 +392,6 @@ export async function applyMany(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ops, overwrite }),
-  });
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
-}
-
-export async function diffFile(path: string, new_content: string): Promise<{ diff: string }> {
-  const r = await apiFetch(`/api/fs/diff`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path, new_content }),
   });
   if (!r.ok) throw new Error(await r.text());
   return r.json();

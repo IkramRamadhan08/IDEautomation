@@ -196,16 +196,7 @@ def _read_json(path: Path) -> dict | None:
         return None
 
 
-_RELATIVE_IMPORT_RE = re.compile(r'(?:import\s+(?:[^\"\']+?\s+from\s+)?|export\s+[^\"\']*?\s+from\s+|import\()\s*["\']([^"\']+)["\']')
-_FRONTEND_EXTS = {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".css", ".scss", ".sass", ".less", ".html"}
 _KNOWN_PACKAGE_MANAGERS = ("npm", "pnpm", "yarn", "bun")
-
-
-def _localize_project_rel(rel_path: str | None, project_root: str) -> str:
-    rel = str(rel_path or "").strip().lstrip("/")
-    if rel and project_root != "." and rel.startswith(project_root + "/"):
-        rel = rel[len(project_root) + 1 :]
-    return rel
 
 
 def _package_manager_preference_order(project_dir: Path) -> list[str]:
@@ -284,107 +275,6 @@ def _translate_package_manager_command(command: str, project_dir: Path) -> tuple
         f"This runtime only knows how to translate basic npm install/run commands automatically. "
         f"Unsupported command: {command}"
     )
-
-
-def _resolve_related_files(active_rel: str, content: str, file_candidates: set[str]) -> list[str]:
-    if not active_rel or not content:
-        return []
-
-    active_path = PurePosixPath(active_rel)
-    base_dir = active_path.parent
-    resolved: list[str] = []
-    seen: set[str] = set()
-    candidate_exts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json", ".css", ".scss", ".sass", ".less"]
-
-    def add_candidate(rel: str) -> None:
-        rel = str(PurePosixPath(rel)).lstrip("/")
-        if rel in file_candidates and rel not in seen:
-            seen.add(rel)
-            resolved.append(rel)
-
-    for spec in _RELATIVE_IMPORT_RE.findall(content):
-        if not spec.startswith('.'):
-            continue
-        joined = PurePosixPath(base_dir, spec)
-        if joined.suffix:
-            add_candidate(str(joined))
-            continue
-        joined_str = str(joined)
-        for ext in candidate_exts:
-            add_candidate(joined_str + ext)
-            add_candidate(f"{joined_str}/index{ext}")
-
-    base_name = str(active_path.with_suffix(''))
-    for suffix in [".css", ".scss", ".sass", ".less", ".module.css", ".module.scss"]:
-        add_candidate(f"{base_name}{suffix}")
-
-    if active_path.parent != PurePosixPath('.'):
-        for name in ("index.ts", "index.tsx", "index.js", "index.jsx"):
-            add_candidate(str(active_path.parent / name))
-
-    return resolved
-
-
-def _should_run_refinement(*, build_mode: str, instruction: str, active_rel: str, preview_url: str | None, attached_assets: list[str]) -> bool:
-    refinement_mode = str(getattr(settings_mod.settings, "agent_refinement_mode", "auto") or "auto").strip().lower()
-    if refinement_mode == "off":
-        return False
-    if refinement_mode == "always":
-        return True
-
-    friendly_mode = bool(getattr(settings_mod.settings, "friendly_free_tier_mode", True))
-    if build_mode == "full-agent":
-        return not friendly_mode
-    if preview_url or attached_assets:
-        return not friendly_mode
-
-    hint = (instruction or "").lower()
-    strong_refine_keywords = (
-        "polish", "refine", "audit", "review", "production", "ux", "ui", "layout", "spacing",
-        "responsive", "design", "landing", "dashboard", "improve", "better", "theme", "style", "visual", "state",
-    )
-    bugfix_keywords = ("fix", "bug", "error", "broken", "crash")
-    if any(word in hint for word in strong_refine_keywords):
-        return not friendly_mode
-    if any(word in hint for word in bugfix_keywords):
-        return False
-
-    return PurePosixPath(active_rel or "").suffix in _FRONTEND_EXTS and not friendly_mode
-
-
-def _merge_change_sets(*batches: list[dict[str, str]]) -> list[dict[str, str]]:
-    order: list[str] = []
-    merged: dict[str, str] = {}
-    for batch in batches:
-        for item in batch or []:
-            if not isinstance(item, dict):
-                continue
-            rel = str(item.get("path") or "").strip().lstrip("/")
-            new_content = item.get("new_content")
-            if not rel or not isinstance(new_content, str):
-                continue
-            if rel not in merged:
-                order.append(rel)
-            merged[rel] = new_content
-    return [{"path": rel, "new_content": merged[rel]} for rel in order]
-
-
-def _merge_action_sets(*batches: list[dict]) -> list[dict]:
-    out: list[dict] = []
-    seen: set[str] = set()
-    for batch in batches:
-        for item in batch or []:
-            if not isinstance(item, dict):
-                continue
-            try:
-                key = json.dumps(item, ensure_ascii=False, sort_keys=True)
-            except Exception:
-                key = str(item)
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append(item)
-    return out
 
 
 def _spoken_stream_chunks(text: str, *, max_chars: int = 28) -> list[str]:
@@ -489,19 +379,6 @@ def _session_state() -> dict:
             "google_user": None,
         }
     return sessions[sid]
-
-
-def _effective_user_id(fallback_raw: str | None = None) -> str:
-    google_user = _session_state().get("google_user") or {}
-    sub = str(google_user.get("sub") or "").strip()
-    email = str(google_user.get("email") or "").strip().lower()
-    if sub:
-        return sanitize_user_id(f"google-{sub}")
-    if email:
-        return sanitize_user_id(f"google-{email}")
-
-    explicit = sanitize_user_id(fallback_raw)
-    return explicit
 
 
 @app.middleware("http")

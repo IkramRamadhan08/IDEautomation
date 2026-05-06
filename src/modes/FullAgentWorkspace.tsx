@@ -2,6 +2,7 @@ import React from "react";
 import { Bot, Image as ImageIcon, Play, Sparkles, Wand2 } from "lucide-react";
 import { PreviewPane } from "../components/preview/PreviewPane";
 import { AgentLiveStage } from "../components/agent/AgentLiveStage";
+import { AgentAuditTrail } from "../components/agent/AgentAuditTrail";
 import { getBuildModeProfile } from "../agent/runtime";
 import { type AgentAction, type AgentAuditSnapshot, type AgentLiveItem } from "../types";
 
@@ -39,6 +40,7 @@ export const FullAgentWorkspace: React.FC<FullAgentWorkspaceProps> = ({
   agentLog,
   agentActions,
   agentLiveItems,
+  agentAuditTrail,
   attachedAssetName,
   onEnsurePreviewRunning,
 }) => {
@@ -46,6 +48,7 @@ export const FullAgentWorkspace: React.FC<FullAgentWorkspaceProps> = ({
   const statusTone = getStatusTone(agentStatus, previewUrl);
   const logLines = agentLog.split("\n").filter(Boolean).slice(-6);
   const recentActions = agentActions.slice(-4);
+  const toolItems = agentLiveItems.filter((item) => item.role === "tool").slice(-6);
   const browserHost = typeof window !== "undefined" ? window.location.hostname.toLowerCase() : "";
   const hostedPreviewUnavailable = Boolean(browserHost && !["localhost", "127.0.0.1", "::1"].includes(browserHost) && !previewUrl);
   const statusText = agentStatus === "thinking"
@@ -175,13 +178,14 @@ export const FullAgentWorkspace: React.FC<FullAgentWorkspaceProps> = ({
             <div className="missionCardHeader">
               <div>
                 <div className="missionCardEyebrow">Live interaction</div>
-                <div className="missionCardTitle">Clara lagi ngomong sambil kerja</div>
+                <div className="missionCardTitle">Streaming response Clara</div>
               </div>
               <Sparkles size={16} />
             </div>
             <AgentLiveStage
               items={agentLiveItems}
               agentStatus={agentStatus}
+              personaName={profile.personaName}
               workingMsg={workingMsg}
               emptyText={agentReply || "Begitu Clara mulai jalan, jawaban live-nya bakal muncul di sini."}
               compact
@@ -194,7 +198,7 @@ export const FullAgentWorkspace: React.FC<FullAgentWorkspaceProps> = ({
             <div className="missionCardHeader">
               <div>
                 <div className="missionCardEyebrow">Recent actions</div>
-                <div className="missionCardTitle">Build trail</div>
+                <div className="missionCardTitle">Interaction module</div>
               </div>
               <Bot size={16} />
             </div>
@@ -206,10 +210,30 @@ export const FullAgentWorkspace: React.FC<FullAgentWorkspaceProps> = ({
                     <div className="missionCompactMeta">{String(action.command || action.path || "No extra detail")}</div>
                   </div>
                 </div>
-              )) : (
-                <div className="missionEmpty">No recent actions yet. Once Clara starts, her latest moves show up here.</div>
-              )}
+              )) : null}
+              {toolItems.length > 0 ? toolItems.map((item) => (
+                <div key={item.id} className="missionCompactItem static">
+                  <div>
+                    <div className="missionCompactPrimary">tool</div>
+                    <div className="missionCompactMeta">{item.text}{item.meta ? ` • ${item.meta}` : ""}</div>
+                  </div>
+                </div>
+              )) : null}
+              {recentActions.length === 0 && toolItems.length === 0 ? (
+                <div className="missionEmpty">No actions yet. File writes, validation, tools, and audit steps show up here.</div>
+              ) : null}
             </div>
+          </div>
+
+          <div className="missionCard">
+            <div className="missionCardHeader">
+              <div>
+                <div className="missionCardEyebrow">Audit trail</div>
+                <div className="missionCardTitle">Reasoning boundary</div>
+              </div>
+              <Bot size={16} />
+            </div>
+            <AgentAuditTrail snapshots={agentAuditTrail} compact />
           </div>
 
           <div className="missionCard">

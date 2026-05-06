@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { X, Paperclip, SendHorizontal, Play, Sparkles, MessageSquarePlus } from "lucide-react";
 import { getBuildModeProfile, getModeQuickPrompts } from "../../agent/runtime";
 import { AgentLiveStage } from "./AgentLiveStage";
-import { type AgentAction, type AgentAuditSnapshot, type AgentLiveItem, type BuildMode, type UploadedImageAsset } from "../../types";
+import { type AgentLiveItem, type BuildMode, type UploadedImageAsset } from "../../types";
 
 type OrbMode = "idle" | "playful" | "curious" | "sleepy" | "sleeping" | "working" | "celebrate" | "surprised" | "error";
 
@@ -12,14 +12,11 @@ interface AgentOrbProps {
   ws: string | null;
   buildMode: BuildMode;
   agentStatus: "idle" | "thinking" | "error";
-  agentLog: string;
   agentReply: string;
-  agentActions: AgentAction[];
   agentWidgetOpen: boolean;
   agentOrbPosition: { x: number; y: number } | null;
   workingMsg: string;
   agentLiveItems: AgentLiveItem[];
-  agentAuditTrail: AgentAuditSnapshot[];
   agentRunViewPinned: boolean;
   editorStatus: string;
   activeFile: string;
@@ -45,9 +42,7 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
   ws,
   buildMode,
   agentStatus,
-  agentLog,
   agentReply,
-  agentActions,
   agentWidgetOpen,
   agentOrbPosition,
   workingMsg,
@@ -85,11 +80,11 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
     onSetPosition({ x: data.x, y: data.y });
   };
 
-  const compactLogLines = (raw: string) => raw.split("\n").filter(Boolean).slice(-2);
-  const logLines = compactLogLines(agentLog);
   const activeFileName = activeFile.split("/").pop() || activeFile;
   const promptHasIntent = agentInput.trim().length > 8;
   const showRunExperience = agentRunViewPinned || agentStatus === "thinking";
+  const personaClass = buildMode === "full-agent" ? "clara" : "raka";
+  const visibleConversationItems = agentLiveItems.filter((item) => item.role === "user" || item.role === "assistant");
   const contextChips = [
     `${modeProfile.personaName} • ${modeProfile.personaRole}`,
     activeFileName ? `File: ${activeFileName}` : null,
@@ -285,7 +280,7 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
       onStop={handleStop}
       cancel=".agentOrbPanel"
     >
-      <div ref={nodeRef} className={`agentOrb ${agentWidgetOpen ? "open" : "collapsed"}`}>
+      <div ref={nodeRef} className={`agentOrb ${personaClass} ${agentWidgetOpen ? "open" : "collapsed"}`}>
         <AnimatePresence>
           {!agentWidgetOpen && bubbleText ? (
             <motion.div
@@ -346,7 +341,7 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
                     <div className="agentOrbRunHeader">
                       <div>
                         <div className="agentOrbSectionLabel">Live run</div>
-                        <div className="agentOrbRunTitle">{agentStatus === "thinking" ? "Clara lagi kerja sambil ngomong" : "Run terakhir Clara"}</div>
+                        <div className="agentOrbRunTitle">{agentStatus === "thinking" ? `${modeProfile.personaName} lagi ngobrol live` : `Obrolan terakhir ${modeProfile.personaName}`}</div>
                       </div>
                       {agentStatus !== "thinking" ? (
                         <button className="btn subtleBtn agentOrbNewTaskBtn" onClick={onResetRunView}>
@@ -357,29 +352,14 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
                     </div>
 
                     <AgentLiveStage
-                      items={agentLiveItems}
+                      items={visibleConversationItems}
                       agentStatus={agentStatus}
+                      personaName={modeProfile.personaName}
                       workingMsg={workingMsg}
-                      emptyText={agentReply || "Begitu kamu run, jawaban Clara bakal muncul live di sini."}
+                      emptyText={agentReply || `Begitu kamu run, jawaban ${modeProfile.personaName} bakal muncul live di sini.`}
                       includeTools={false}
                       conversationOnly
                     />
-
-                    {agentActions.length > 0 ? (
-                      <div className="agentOrbSection">
-                        <div className="agentOrbSectionLabel">Aksi terbaru</div>
-                        <div className="agentOrbSteps">
-                          {agentActions.slice(-3).map((act, index) => (
-                            <div key={index} className="agentOrbStep">
-                              <span className="agentOrbStepIcon">⚡</span>
-                              <span>{String(act.type)}: {String(act.command || act.path || "")}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
-
-                    {logLines.length > 0 ? <pre className="agentOrbLog">{logLines.join("\n")}</pre> : null}
                   </>
                 ) : (
                   <>
@@ -456,6 +436,7 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
           transition={{ duration: orbMode === "playful" ? 0.5 : orbMode === "surprised" ? 0.35 : orbMode === "celebrate" ? 0.7 : orbMode === "working" ? 0.9 : 2.6, repeat: orbMode === "surprised" ? 1 : Infinity, ease: "easeInOut" }}
         >
           <span className={`agentOrbFace ${orbMode}`}>
+            <span className="agentOrbPersonaMark">{buildMode === "full-agent" ? "C" : "R"}</span>
             <span className="orbEye left" />
             <span className="orbEye right" />
             <span className="orbMouth" />

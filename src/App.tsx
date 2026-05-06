@@ -897,14 +897,11 @@ export default function App() {
         ws={ws}
         buildMode={buildMode}
         agentStatus={agentStatus}
-        agentLog={agentLog}
         agentReply={agentReply}
-        agentActions={agentActions}
         agentWidgetOpen={agentWidgetOpen}
         agentOrbPosition={agentOrbPosition}
         workingMsg={workingMsg}
         agentLiveItems={agentLiveItems}
-        agentAuditTrail={agentAuditTrail}
         agentRunViewPinned={agentRunViewPinned}
         editorStatus={editorStatus}
         activeFile={activeFile}
