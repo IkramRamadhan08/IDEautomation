@@ -28,8 +28,7 @@ from api.secrets_store import get_provider_secret, has_provider_secret
 from api.settings import load_settings
 from api.settings_router import build_settings_router
 from api.supabase_store import upsert_profile
-from api.oauth_runtime import CURRENT_PROFILE_ID
-from api.oauth_runtime import list_models as list_provider_models, provider_catalog
+from api.oauth_runtime import CURRENT_PROFILE_ID, list_models as list_provider_models, provider_catalog
 
 
 class AgentIntentRegressionTests(unittest.TestCase):
@@ -1010,6 +1009,66 @@ class ProviderCatalogRegressionTests(unittest.TestCase):
         self.assertEqual(provider, "openrouter")
         self.assertEqual(model, "openrouter/free")
         self.assertEqual(data["spoken"], "ok")
+
+    def test_generate_json_uses_hosted_user_preferences_for_provider_and_model(self) -> None:
+        snapshot = {
+            "openrouter": {"connected": True},
+            "gemini": {"connected": True},
+        }
+
+        with patch("api.agent.get_user_preferences", return_value=UserPreferencesRecord(profile_id="sb-user-123", llm_provider="gemini", gemini_model="gemini-3-flash-preview")), \
+            patch.object(agent_mod.settings_mod.settings, "llm_provider", "openrouter"), \
+            patch.object(agent_mod.settings_mod.settings, "openrouter_model", "x-ai/grok-4.3"), \
+            patch.object(agent_mod.settings_mod.settings, "friendly_free_tier_mode", True), \
+            patch("api.agent.auth_snapshot", return_value=snapshot), \
+            patch("api.agent.require_provider_connected", return_value=None), \
+            patch("api.agent.get_provider_cooldown_remaining", return_value=0), \
+            patch("api.agent._throttle_llm_calls", return_value=None), \
+            patch("api.agent._generate_json_once", return_value={"spoken": "ok", "changes": [], "actions": []}):
+            token = CURRENT_PROFILE_ID.set("sb-user-123")
+            try:
+                provider, model, data = agent_mod._generate_json(system="system", user="user")
+            finally:
+                CURRENT_PROFILE_ID.reset(token)
+
+        self.assertEqual(provider, "gemini")
+        self.assertEqual(model, "gemini-3-flash-preview")
+        self.assertEqual(data["spoken"], "ok")
+
+    def test_provider_key_prefers_decryptable_hosted_secret_over_env(self) -> None:
+        from api import oauth_runtime
+
+        with patch("api.oauth_runtime.has_provider_secret", return_value=True), \
+            patch("api.oauth_runtime.get_provider_secret", return_value="sk-user"), \
+            patch("api.oauth_runtime.os.getenv", return_value="sk-env"):
+            token = CURRENT_PROFILE_ID.set("sb-user-123")
+            try:
+                key = oauth_runtime._provider_key_from_env_or_secret("openrouter")
+                status = oauth_runtime.openrouter_status()
+            finally:
+                CURRENT_PROFILE_ID.reset(token)
+
+        self.assertEqual(key, "sk-user")
+        self.assertTrue(status["connected"])
+        self.assertEqual(status["source"], "hosted_secret")
+
+    def test_provider_status_reports_unreadable_hosted_secret_without_env_fallback(self) -> None:
+        from api import oauth_runtime
+
+        with patch("api.oauth_runtime.has_provider_secret", return_value=True), \
+            patch("api.oauth_runtime.get_provider_secret", return_value=None), \
+            patch("api.oauth_runtime.os.getenv", return_value="sk-env"):
+            token = CURRENT_PROFILE_ID.set("sb-user-123")
+            try:
+                key = oauth_runtime._provider_key_from_env_or_secret("openrouter")
+                status = oauth_runtime.openrouter_status()
+            finally:
+                CURRENT_PROFILE_ID.reset(token)
+
+        self.assertEqual(key, "")
+        self.assertFalse(status["connected"])
+        self.assertEqual(status["source"], "hosted_secret_unreadable")
+        self.assertIn("tidak bisa decrypt", status["hint"])
 
 
 class WorkspaceBoundaryRegressionTests(unittest.TestCase):

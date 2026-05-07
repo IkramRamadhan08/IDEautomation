@@ -176,6 +176,10 @@ def _google_oauth_client_secret() -> str:
 
 
 def _provider_key_from_env_or_secret(provider: str) -> str:
+    return str(_provider_key_info(provider).get("key") or "")
+
+
+def _env_key_for_provider(provider: str) -> str:
     env_map = {
         OPENAI_PROVIDER: "OPENAI_API_KEY",
         ANTHROPIC_PROVIDER: "ANTHROPIC_API_KEY",
@@ -187,88 +191,65 @@ def _provider_key_from_env_or_secret(provider: str) -> str:
         XAI_PROVIDER: "XAI_API_KEY",
     }
     env_key = env_map.get(provider, "")
-    if env_key:
-        direct = (os.getenv(env_key) or "").strip()
-        if direct:
-            return direct
+    return (os.getenv(env_key) or "").strip() if env_key else ""
+
+
+def _provider_key_info(provider: str) -> dict[str, Any]:
     profile_id = CURRENT_PROFILE_ID.get()
     if profile_id:
         try:
-            return (get_provider_secret(profile_id=profile_id, provider=provider) or "").strip()
+            stored = has_provider_secret(profile_id=profile_id, provider=provider)
+            secret = (get_provider_secret(profile_id=profile_id, provider=provider) or "").strip()
+            if secret:
+                return {"key": secret, "source": "hosted_secret", "stored": True, "decrypt_error": False}
+            if stored:
+                return {"key": "", "source": "hosted_secret_unreadable", "stored": True, "decrypt_error": True}
         except Exception:
-            return ""
-    return ""
+            pass
+
+    env_key = _env_key_for_provider(provider)
+    if env_key:
+        return {"key": env_key, "source": ".env", "stored": False, "decrypt_error": False}
+    return {"key": "", "source": None, "stored": False, "decrypt_error": False}
+
+
+def _provider_status(provider: str, login_hint: str) -> dict[str, Any]:
+    key_info = _provider_key_info(provider)
+    catalog = HOSTED_PROVIDER_CATALOG[provider]
+    source = str(key_info.get("source") or "") or None
+    connected = bool(key_info.get("key"))
+    hint = catalog["hint"] if connected else login_hint
+    if source == "hosted_secret_unreadable":
+        hint = "API key tersimpan di akun ini, tapi backend tidak bisa decrypt. Re-save key di Settings atau cek VOICEIDE_SECRET_KEY deploy."
+    return {
+        "provider": provider,
+        "connected": connected,
+        "auth_type": "byok" if connected or source == "hosted_secret_unreadable" else None,
+        "source": source,
+        "hint": hint,
+        "recommended_model": catalog["recommended_model"],
+        "free_tier_models": catalog["free_tier_models"],
+    }
 
 
 def openai_status() -> dict[str, Any]:
-    has_key = bool(_provider_key_from_env_or_secret(OPENAI_PROVIDER))
-    catalog = HOSTED_PROVIDER_CATALOG[OPENAI_PROVIDER]
-    return {
-        "provider": OPENAI_PROVIDER,
-        "connected": has_key,
-        "profile_id": None,
-        "account_id": None,
-        "source": ".env" if has_key else None,
-        "hint": catalog["hint"] if has_key else OPENAI_LOGIN_HINT,
-        "recommended_model": catalog["recommended_model"],
-        "free_tier_models": catalog["free_tier_models"],
-    }
+    return {**_provider_status(OPENAI_PROVIDER, OPENAI_LOGIN_HINT), "profile_id": None, "account_id": None}
 
 
 def anthropic_status() -> dict[str, Any]:
-    has_key = bool(_provider_key_from_env_or_secret(ANTHROPIC_PROVIDER))
-    catalog = HOSTED_PROVIDER_CATALOG[ANTHROPIC_PROVIDER]
-    return {
-        "provider": ANTHROPIC_PROVIDER,
-        "connected": has_key,
-        "auth_type": "byok" if has_key else None,
-        "source": ".env" if has_key else None,
-        "hint": None if has_key else ANTHROPIC_LOGIN_HINT,
-        "recommended_model": catalog["recommended_model"],
-        "free_tier_models": catalog["free_tier_models"],
-    }
+    return _provider_status(ANTHROPIC_PROVIDER, ANTHROPIC_LOGIN_HINT)
 
 
 def openrouter_status() -> dict[str, Any]:
-    has_key = bool(_provider_key_from_env_or_secret(OPENROUTER_PROVIDER))
-    catalog = HOSTED_PROVIDER_CATALOG[OPENROUTER_PROVIDER]
-    return {
-        "provider": OPENROUTER_PROVIDER,
-        "connected": has_key,
-        "auth_type": "byok" if has_key else None,
-        "source": ".env" if has_key else None,
-        "hint": None if has_key else OPENROUTER_LOGIN_HINT,
-        "recommended_model": catalog["recommended_model"],
-        "free_tier_models": catalog["free_tier_models"],
-    }
+    return _provider_status(OPENROUTER_PROVIDER, OPENROUTER_LOGIN_HINT)
 
 
 def groq_status() -> dict[str, Any]:
-    has_key = bool(_provider_key_from_env_or_secret(GROQ_PROVIDER))
-    catalog = HOSTED_PROVIDER_CATALOG[GROQ_PROVIDER]
-    return {
-        "provider": GROQ_PROVIDER,
-        "connected": has_key,
-        "auth_type": "byok" if has_key else None,
-        "source": ".env" if has_key else None,
-        "hint": catalog["hint"] if has_key else GROQ_LOGIN_HINT,
-        "recommended_model": catalog["recommended_model"],
-        "free_tier_models": catalog["free_tier_models"],
-    }
+    return _provider_status(GROQ_PROVIDER, GROQ_LOGIN_HINT)
 
 
 def _catalog_status(provider: str, login_hint: str) -> dict[str, Any]:
-    has_key = bool(_provider_key_from_env_or_secret(provider))
-    catalog = HOSTED_PROVIDER_CATALOG[provider]
-    return {
-        "provider": provider,
-        "connected": has_key,
-        "auth_type": "byok" if has_key else None,
-        "source": ".env" if has_key else None,
-        "hint": catalog["hint"] if has_key else login_hint,
-        "recommended_model": catalog["recommended_model"],
-        "free_tier_models": catalog["free_tier_models"],
-    }
+    return _provider_status(provider, login_hint)
 
 
 def auth_snapshot(workspace: Path | None = None) -> dict[str, Any]:

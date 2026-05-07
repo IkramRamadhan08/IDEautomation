@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from . import settings as settings_mod
+from .preferences import UserPreferencesRecord, get_user_preferences
 from .oauth_runtime import (
     ANTHROPIC_PROVIDER,
     CEREBRAS_PROVIDER,
@@ -48,6 +49,16 @@ _DEFAULT_FRIENDLY_RPM: int = 8
 _DEFAULT_STANDARD_RPM: int = 15
 _DEFAULT_FRIENDLY_CONTEXT_CHARS: int = 48_000
 _DEFAULT_STANDARD_CONTEXT_CHARS: int = 140_000
+_SUPPORTED_AGENT_PROVIDERS = {
+    OPENAI_PROVIDER,
+    ANTHROPIC_PROVIDER,
+    OPENROUTER_PROVIDER,
+    GROQ_PROVIDER,
+    GEMINI_PROVIDER,
+    TOGETHER_PROVIDER,
+    CEREBRAS_PROVIDER,
+    XAI_PROVIDER,
+}
 
 
 def _effective_requests_per_minute(provider: str) -> int:
@@ -314,6 +325,15 @@ def _safe_fetch_reference(ref_url: str) -> str:
 
 
 def _model_for_provider(provider: str) -> str:
+    prefs = _current_user_preferences()
+    if prefs:
+        model = _model_from_preferences(provider, prefs)
+        if model:
+            return model
+    return _model_from_global_settings(provider)
+
+
+def _model_from_global_settings(provider: str) -> str:
     s = settings_mod.settings
     if provider == OPENAI_PROVIDER:
         return s.openai_model
@@ -334,8 +354,44 @@ def _model_for_provider(provider: str) -> str:
     raise RuntimeError(f"Unsupported provider: {provider}")
 
 
+def _model_from_preferences(provider: str, prefs: UserPreferencesRecord) -> str:
+    if provider == OPENAI_PROVIDER:
+        return prefs.openai_model or ""
+    if provider == ANTHROPIC_PROVIDER:
+        return prefs.anthropic_model or ""
+    if provider == OPENROUTER_PROVIDER:
+        return prefs.openrouter_model or ""
+    if provider == GROQ_PROVIDER:
+        return prefs.groq_model or ""
+    if provider == GEMINI_PROVIDER:
+        return prefs.gemini_model or ""
+    if provider == TOGETHER_PROVIDER:
+        return prefs.together_model or ""
+    if provider == CEREBRAS_PROVIDER:
+        return prefs.cerebras_model or ""
+    if provider == XAI_PROVIDER:
+        return prefs.xai_model or ""
+    return ""
+
+
+def _current_user_preferences() -> UserPreferencesRecord | None:
+    profile_id = CURRENT_PROFILE_ID.get()
+    if not profile_id:
+        return None
+    try:
+        return get_user_preferences(profile_id=profile_id)
+    except Exception:
+        return None
+
+
+def _selected_provider() -> str:
+    prefs = _current_user_preferences()
+    provider = str((prefs.llm_provider if prefs else None) or settings_mod.settings.llm_provider or "").strip().lower()
+    return provider if provider in _SUPPORTED_AGENT_PROVIDERS else ""
+
+
 def _provider_and_model() -> tuple[str, str]:
-    provider = (settings_mod.settings.llm_provider or "").strip().lower()
+    provider = _selected_provider()
     if not provider:
         raise RuntimeError("No provider selected yet. Open Settings, choose a provider, then save credentials first.")
     require_provider_connected(provider)
@@ -509,7 +565,7 @@ def _generate_json_once(provider: str, model: str, *, system: str, user: str) ->
 
 
 def _generate_json(*, system: str, user: str) -> tuple[str, str, dict[str, Any]]:
-    selected_provider = (settings_mod.settings.llm_provider or "").strip().lower()
+    selected_provider = _selected_provider()
     if not selected_provider:
         snapshot = auth_snapshot()
         for provider in _fallback_provider_order(OPENROUTER_PROVIDER):
@@ -534,7 +590,8 @@ def _generate_json(*, system: str, user: str) -> tuple[str, str, dict[str, Any]]
             continue
         for model in models:
             attempt_index += 1
-            fallback_attempt = provider != selected_provider or model != _model_for_provider(selected_provider)
+            selected_model = _model_for_provider(selected_provider) if selected_provider else ""
+            fallback_attempt = provider != selected_provider or model != selected_model
             try:
                 require_provider_connected(provider)
                 _throttle_llm_calls(provider, _effective_min_gap_seconds() if attempt_index == 1 else 0.0)
