@@ -26,6 +26,8 @@ import {
   uploadImageAsset,
   listHostedProjects,
   createHostedProject,
+  listCheckpoints,
+  restoreCheckpoint,
   type HostedProject,
   type UserPreferences,
 } from "./api";
@@ -482,6 +484,26 @@ export default function App() {
     }
   };
 
+  const restoreLatestCheckpoint = async () => {
+    try {
+      const res = await listCheckpoints(selectedProject);
+      const latest = res.items[0];
+      if (!latest) {
+        toast.info("Belum ada checkpoint untuk project ini");
+        return;
+      }
+      const restored = await restoreCheckpoint(latest.path);
+      setBuffers({});
+      setActiveFile("");
+      setOpenFiles([]);
+      await refreshExplorer(selectedProject !== "." ? selectedProject : ".");
+      setEditorStatus(`Restored checkpoint: ${latest.name}`);
+      toast.success(`Checkpoint dipulihkan: ${restored.restored} file`);
+    } catch (e) {
+      toast.error("Gagal restore checkpoint: " + errorMessage(e));
+    }
+  };
+
   const openFile = async (path: string) => {
     setActiveFile(path);
     setEditorStatus(`Opening ${path}...`);
@@ -708,6 +730,7 @@ export default function App() {
       agentInput,
       agentStatus,
       buildMode,
+      friendlyFreeTierMode: settings?.friendly_free_tier_mode ?? true,
       previewUrl,
       selectedProject,
       attachedImagePath: attachedImage?.path || null,
@@ -957,9 +980,9 @@ export default function App() {
       previewFrameKey={previewFrameKey}
       recentActions={agentActions}
       agentLiveItems={agentLiveItems}
-      agentAuditTrail={agentAuditTrail}
       onRefreshExplorer={refreshExplorer}
       onSelectProject={selectProject}
+      onRestoreCheckpoint={restoreLatestCheckpoint}
       onToggleDir={toggleTreeDir}
       onOpenFile={openFile}
       onHideExplorer={() => setShowExplorerPane(false)}
@@ -982,7 +1005,6 @@ export default function App() {
       previewFrameKey={previewFrameKey}
       agentStatus={agentStatus}
       workingMsg={workingMsg}
-      agentReply={agentReply}
       agentLog={agentLog}
       agentActions={agentActions}
       agentLiveItems={agentLiveItems}

@@ -178,6 +178,18 @@ def upsert_project_files(*, owner_id: str, project_root: str, files: list[dict[s
     return True
 
 
+def delete_project_file(*, owner_id: str, project_root: str, path: str) -> bool:
+    client = get_supabase_admin()
+    if not client:
+        return False
+    normalized_root = str(project_root or ".").strip() or "."
+    normalized_path = str(path or "").strip().lstrip("/")
+    if not normalized_path or normalized_path in {".", ".."} or ".." in normalized_path.split("/"):
+        return False
+    client.table("project_files").delete().eq("owner_id", owner_id).eq("project_root", normalized_root).eq("path", normalized_path).execute()
+    return True
+
+
 def _classify_agent_memory_chunks_probe_error(exc: Exception) -> str:
     message = str(exc or "").lower()
     if "agent_memory_chunks" in message and (

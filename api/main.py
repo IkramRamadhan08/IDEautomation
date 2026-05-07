@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from api.settings import ROOT, ENV_PATH, load_settings
 from api.supabase_store import (
+    delete_project_file as supabase_delete_project_file,
     get_agent_memory_chunks_summary,
     get_agent_memory_chunks_table_status,
     has_supabase,
@@ -142,6 +143,23 @@ def _persist_hosted_file(rel_path: str, content: str) -> None:
             owner_id=CURRENT_USER_ID.get(),
             project_root=project_root,
             files=[{"path": file_rel, "content": content}],
+        )
+    except Exception:
+        pass
+
+
+def _delete_hosted_file(rel_path: str) -> None:
+    if not _hosted_project_files_enabled():
+        return
+    split = _split_project_path(rel_path)
+    if not split:
+        return
+    project_root, file_rel = split
+    try:
+        supabase_delete_project_file(
+            owner_id=CURRENT_USER_ID.get(),
+            project_root=project_root,
+            path=file_rel,
         )
     except Exception:
         pass
@@ -1056,15 +1074,6 @@ def _provision_managed_workspace() -> tuple[Path, bool]:
     created = not target_dir.exists()
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    readme = target_dir / "README.md"
-    if not readme.exists():
-        readme.write_text(
-            "# Voice IDE Workspace\n\n"
-            f"This workspace was provisioned automatically for the current {mode}.\n"
-            "You can build apps here, and later replace it with a stronger authenticated runtime model.\n",
-            encoding="utf-8",
-        )
-
     profile = _current_user_profile() or {}
     metadata = target_dir / ".voiceide-user.json"
     metadata.write_text(
@@ -1672,6 +1681,69 @@ def fs_apply_many(req: ApplyManyReq):
     return {"ok": True, "count": len(req.ops)}
 
 
+class RestoreCheckpointReq(BaseModel):
+    path: str
+
+
+@app.get("/api/checkpoints")
+def list_checkpoints(project_root: str = "."):
+    root = _ws()
+    base_rel = f"{project_root}/.voiceide/checkpoints" if project_root and project_root != "." else ".voiceide/checkpoints"
+    base = safe_join(root, base_rel)
+    if not base.exists() or not base.is_dir():
+        return {"ok": True, "items": []}
+    items = []
+    for path in sorted(base.glob("*.json"), key=lambda item: item.name, reverse=True)[:50]:
+        try:
+            rel = str(path.relative_to(root))
+            items.append({"path": rel, "name": path.name, "updated_at": int(path.stat().st_mtime)})
+        except Exception:
+            continue
+    return {"ok": True, "items": items}
+
+
+@app.post("/api/checkpoints/restore")
+def restore_checkpoint(req: RestoreCheckpointReq):
+    root = _ws()
+    checkpoint_path = safe_join(root, req.path)
+    if not checkpoint_path.exists() or checkpoint_path.suffix.lower() != ".json":
+        raise HTTPException(404, "Checkpoint not found")
+    try:
+        payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    except Exception:
+        raise HTTPException(400, "Checkpoint is not readable")
+    files = payload.get("files")
+    if not isinstance(files, list):
+        raise HTTPException(400, "Checkpoint has no file list")
+
+    restored = 0
+    skipped = 0
+    for item in files:
+        if not isinstance(item, dict):
+            skipped += 1
+            continue
+        rel = str(item.get("path") or "").strip().lstrip("/")
+        previous = item.get("previous_content")
+        if not rel or ".." in rel.split("/"):
+            skipped += 1
+            continue
+        if previous is None:
+            target = safe_join(root, rel)
+            if target.exists() and target.is_file():
+                target.unlink()
+                _delete_hosted_file(rel)
+                restored += 1
+            continue
+        if not isinstance(previous, str):
+            skipped += 1
+            continue
+        write_text(root, rel, previous)
+        _persist_hosted_file(rel, previous)
+        restored += 1
+
+    return {"ok": True, "restored": restored, "skipped": skipped}
+
+
 class DiffReq(BaseModel):
     path: str
     new_content: str
@@ -1858,6 +1930,8 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
     node_runtime = bool(_resolve_node_binary())
     browser_audit_ready = bool(project_dir.exists() and _browser_preview_audit_ready(project_dir))
     supabase_enabled = has_supabase()
+    friendly_free_tier = bool(getattr(settings_mod.settings, "friendly_free_tier_mode", True))
+    context_budget = int(getattr(settings_mod.settings, "agent_context_char_budget", 48_000 if friendly_free_tier else 140_000) or 48_000)
     supabase_rag_status = get_agent_memory_chunks_table_status() if supabase_enabled else "unconfigured"
     supabase_rag_ready = supabase_rag_status == "ready"
     memory_backend = "supabase-hash-vector-chunks" if supabase_rag_ready else "local-hash-vector-chunks"
@@ -1913,6 +1987,8 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "tool_actions": ["shell", "mcp", "tool"],
             "streaming_transport": True,
             "native_provider_token_streaming": False,
+            "friendly_free_tier_mode": friendly_free_tier,
+            "context_budget_chars": context_budget,
         },
         "boundaries": {
             "project_root": proj_root,
@@ -1920,7 +1996,13 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "custom_skills_dir": [".voiceide/skills", f"{proj_root}/.voiceide/skills" if proj_root != "." else ".voiceide/skills"],
             "mcp_config_candidates": [".voiceide/mcp.json", f"{proj_root}/.voiceide/mcp.json" if proj_root != "." else ".voiceide/mcp.json", f"{proj_root}/mcp.json" if proj_root != "." else "mcp.json"],
             "supabase_rag_table": "agent_memory_chunks" if supabase_enabled else None,
-            "mcp_loop_budget": 2,
+            "mcp_loop_budget": 1 if friendly_free_tier else 2,
+            "free_tier_call_budget": {
+                "conversation": 1,
+                "inspection": 2,
+                "build": 1,
+                "build_after_failed_validation": 2,
+            } if friendly_free_tier else None,
         },
         "memory": {
             "session_entries": memory_overview.session_entries,

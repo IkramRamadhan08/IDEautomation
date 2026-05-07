@@ -53,6 +53,17 @@ export type AgentAuditSnapshot = {
     error?: string | null;
     text?: string;
   }>;
+  plan?: Array<{
+    stage: string;
+    title: string;
+    detail: string;
+    files?: string[];
+  }>;
+  verification?: Array<{
+    name: string;
+    ok: boolean;
+    detail: string;
+  }>;
 };
 export type WorkspaceInfo = { path: string | null; default: string | null };
 export type WorkspaceProvisionInfo = { ok: boolean; path: string; created: boolean; managed: boolean };

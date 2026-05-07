@@ -2,8 +2,8 @@ import React from "react";
 import { FileExplorer } from "../components/explorer/FileExplorer";
 import { MonacoEditor } from "../components/editor/MonacoEditor";
 import { PreviewPane } from "../components/preview/PreviewPane";
-import { AgentAuditTrail } from "../components/agent/AgentAuditTrail";
-import { type AgentAction, type AgentAuditSnapshot, type AgentLiveItem, type ExplorerItem, type FileBuffer } from "../types";
+import { actionDetail, isOperationalLiveItem } from "../agent/liveActions";
+import { type AgentAction, type AgentLiveItem, type ExplorerItem, type FileBuffer } from "../types";
 
 interface HybridWorkspaceProps {
   ws: string | null;
@@ -27,9 +27,9 @@ interface HybridWorkspaceProps {
   previewFrameKey: number;
   recentActions: AgentAction[];
   agentLiveItems: AgentLiveItem[];
-  agentAuditTrail: AgentAuditSnapshot[];
   onRefreshExplorer: () => void | Promise<void>;
   onSelectProject: (project: string) => void;
+  onRestoreCheckpoint: () => void | Promise<void>;
   onToggleDir: (path: string) => void | Promise<void>;
   onOpenFile: (path: string) => void | Promise<void>;
   onHideExplorer: () => void;
@@ -65,9 +65,9 @@ export const HybridWorkspace: React.FC<HybridWorkspaceProps> = ({
   previewFrameKey,
   recentActions,
   agentLiveItems,
-  agentAuditTrail,
   onRefreshExplorer,
   onSelectProject,
+  onRestoreCheckpoint,
   onToggleDir,
   onOpenFile,
   onHideExplorer,
@@ -80,7 +80,8 @@ export const HybridWorkspace: React.FC<HybridWorkspaceProps> = ({
   onStartResizeAssistPane,
   onEnsurePreviewRunning,
 }) => {
-  const toolItems = agentLiveItems.filter((item) => item.role === "tool").slice(-4);
+  const toolItems = agentLiveItems.filter(isOperationalLiveItem).slice(-4);
+  const hasInteractionItems = recentActions.length > 0 || toolItems.length > 0;
 
   return (
     <div className="hybridLayout hybridWorkspaceShell">
@@ -95,6 +96,7 @@ export const HybridWorkspace: React.FC<HybridWorkspaceProps> = ({
           activeFile={activeFile}
           onRefresh={onRefreshExplorer}
           onSelectProject={onSelectProject}
+          onRestoreCheckpoint={onRestoreCheckpoint}
           onToggleDir={onToggleDir}
           onOpenFile={onOpenFile}
           onHide={onHideExplorer}
@@ -130,11 +132,11 @@ export const HybridWorkspace: React.FC<HybridWorkspaceProps> = ({
             aria-label="Resize assist panel"
           />
           <aside className="hybridSidePane hybridAssistRail" style={{ width: assistPaneWidth }}>
-            {recentActions.length > 0 || toolItems.length > 0 || agentAuditTrail.length > 0 ? (
+            {hasInteractionItems ? (
               <div className="missionCard hybridInteractionCard">
                 <div className="missionCardHeader">
                   <div>
-                    <div className="missionCardEyebrow">Interaction module</div>
+                    <div className="missionCardEyebrow">Live interaction</div>
                     <div className="missionCardTitle">Aksi agent</div>
                   </div>
                 </div>
@@ -143,7 +145,7 @@ export const HybridWorkspace: React.FC<HybridWorkspaceProps> = ({
                     <div key={`${String(action.type)}-${index}`} className="missionCompactItem static">
                       <div>
                         <div className="missionCompactPrimary">{String(action.type)}</div>
-                        <div className="missionCompactMeta">{String(action.command || action.path || "No extra detail")}</div>
+                        <div className="missionCompactMeta">{actionDetail(action)}</div>
                       </div>
                     </div>
                   ))}
@@ -156,7 +158,6 @@ export const HybridWorkspace: React.FC<HybridWorkspaceProps> = ({
                     </div>
                   ))}
                 </div>
-                {agentAuditTrail.length > 0 ? <AgentAuditTrail snapshots={agentAuditTrail.slice(-1)} compact /> : null}
               </div>
             ) : null}
             <PreviewPane ws={ws} previewUrl={previewUrl} previewFrameKey={previewFrameKey} onEnsurePreviewRunning={onEnsurePreviewRunning} isSmall />

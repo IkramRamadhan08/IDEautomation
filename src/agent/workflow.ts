@@ -3,6 +3,7 @@ import {
   applyMany,
   auditPreview,
   fetchAgentCapabilities,
+  readFile,
   streamAgent,
   terminalRun,
   validateProject,
@@ -29,6 +30,7 @@ type WorkflowArgs = {
   agentInput: string;
   agentStatus: AgentStatus;
   buildMode: BuildMode;
+  friendlyFreeTierMode: boolean;
   previewUrl: string;
   selectedProject: string;
   attachedImagePath?: string | null;
@@ -63,10 +65,12 @@ const PHASE_LABELS: Record<string, string> = {
   memory: "Ngambil memory yang relevan…",
   skills: "Milih skill yang paling kepake…",
   mcp: "Ngecek integrasi MCP yang tersedia…",
+  planning: "Nyusun rencana kerja…",
   context_ready: "Konteks siap, mulai ngerjain…",
   drafting: "Lagi nyusun respons…",
   tooling: "Lagi jalanin tool agent…",
   refining: "Lagi merapikan hasil…",
+  verifying: "Ngecek hasil agent…",
   diffing: "Lagi nyusun patch yang rapi…",
 };
 
@@ -82,6 +86,11 @@ function mergeBuffersWithChanges(currentBuffers: Record<string, FileBuffer>, cha
   }
 
   return mutated ? next : currentBuffers;
+}
+
+function checkpointPathForRun(selectedProject: string) {
+  const suffix = `.voiceide/checkpoints/${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+  return selectedProject !== "." ? `${selectedProject}/${suffix}` : suffix;
 }
 
 function formatValidationReport(validation: ProjectValidationRun, maxChars = 8000) {
@@ -165,6 +174,8 @@ function toAuditSnapshot(label: string, trace: AgentRunTrace, makeId: () => stri
       error: tool.error,
       text: tool.text,
     })),
+    plan: trace.plan || [],
+    verification: trace.verification || [],
   };
 }
 
@@ -175,11 +186,13 @@ function pushRunTrace(pushAgentLiveItem: WorkflowArgs["pushAgentLiveItem"], trac
   const skillCount = trace.skills.length;
   const mcpUsedCount = trace.mcp_tools_used.length;
   const mcpSeenCount = trace.mcp_servers.length;
+  const planCount = trace.plan?.length || 0;
+  const verificationCount = trace.verification?.length || 0;
 
   pushAgentLiveItem({
     role: "tool",
     tone: "default",
-    text: `Run trace: memory ${memoryCount}, skill ${skillCount}, MCP used ${mcpUsedCount}.`,
+    text: `Run trace: plan ${planCount}, verify ${verificationCount}, memory ${memoryCount}, skill ${skillCount}, MCP used ${mcpUsedCount}.`,
     meta: [`passes=${trace.passes}`, mcpSeenCount > 0 ? `mcp available=${mcpSeenCount}` : null].filter(Boolean).join(" • ") || null,
   });
 
@@ -224,6 +237,7 @@ export async function runAgentWorkflow({
   agentInput,
   agentStatus,
   buildMode,
+  friendlyFreeTierMode,
   previewUrl,
   selectedProject,
   attachedImagePath,
@@ -329,13 +343,34 @@ export async function runAgentWorkflow({
     if (changes.length === 0) return;
     setWorkingMsg(`Menerapkan ${changes.length} perubahan…`);
     setEditorStatus(`${statusLabel} ${changes.length} file changes...`);
+    const checkpointFiles = await Promise.all(changes.map(async (change) => {
+      const openBuffer = workingBuffers[change.path]?.content;
+      if (typeof openBuffer === "string") {
+        return { path: change.path, previous_content: openBuffer };
+      }
+      try {
+        const current = await readFile(change.path);
+        return { path: change.path, previous_content: current.content };
+      } catch {
+        return { path: change.path, previous_content: null };
+      }
+    }));
+    const checkpoint = {
+      created_at: new Date().toISOString(),
+      project_root: selectedProject,
+      files: checkpointFiles,
+    };
+    const checkpointPath = checkpointPathForRun(selectedProject);
     pushAgentLiveItem({
       role: "tool",
       tone: "success",
       text: `Aku terapin ${changes.length} file ke project dulu.`,
-      meta: changes.slice(0, 3).map((change) => change.path).join(" • ") || null,
+      meta: `checkpoint ${checkpointPath}`,
     });
-    await applyMany(changes.map((change) => ({ path: change.path, content: change.new_content })), true);
+    await applyMany([
+      { path: checkpointPath, content: JSON.stringify(checkpoint, null, 2) + "\n" },
+      ...changes.map((change) => ({ path: change.path, content: change.new_content })),
+    ], true);
     syncBuffers(changes);
     await refreshExplorer();
   };
@@ -432,6 +467,14 @@ export async function runAgentWorkflow({
     text: `Intent kebaca sebagai ${intentSummary(inputIntent)}.`,
     meta: inputIntent.rationale,
   });
+  if (friendlyFreeTierMode) {
+    pushAgentLiveItem({
+      role: "tool",
+      tone: "default",
+      text: "Free-tier guard aktif: agent hemat panggilan model dan context supaya limit provider nggak cepat mentok.",
+      meta: "1 call untuk build normal, repair hanya kalau validasi gagal",
+    });
+  }
 
   void fetchAgentCapabilities(selectedProject, false)
     .then((caps) => {
@@ -533,7 +576,7 @@ export async function runAgentWorkflow({
 
     if ((resolvedIntent.kind === "conversation" || resolvedIntent.kind === "inspection") && changes.length === 0 && actions.length === 0) {
       // pure read-only run, nothing else to do
-    } else if ((hasValidationIssues || hasPreviewIssues) && changes.length > 0) {
+    } else if ((hasValidationIssues || (!friendlyFreeTierMode && hasPreviewIssues)) && changes.length > 0) {
       setWorkingMsg("Memperbaiki hasil audit…");
       setEditorStatus("Fixing preview and validation issues...");
 

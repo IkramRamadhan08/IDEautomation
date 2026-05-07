@@ -429,6 +429,24 @@ export async function applyMany(
   return r.json();
 }
 
+export type CheckpointItem = { path: string; name: string; updated_at: number };
+
+export async function listCheckpoints(projectRoot = "."): Promise<{ ok: boolean; items: CheckpointItem[] }> {
+  const r = await apiFetch(`/api/checkpoints?project_root=${encodeURIComponent(projectRoot)}`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function restoreCheckpoint(path: string): Promise<{ ok: boolean; restored: number; skipped: number }> {
+  const r = await apiFetch(`/api/checkpoints/restore`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
 export async function detectProjects(): Promise<{ ok: boolean; projects: Array<{ root: string; name: string; has_dev: boolean }> }> {
   const r = await apiFetch(`/api/run/detect`);
   if (!r.ok) throw new Error(await r.text());
@@ -588,6 +606,17 @@ export type AgentRunTrace = {
     error?: string | null;
     arguments?: Record<string, unknown>;
     text?: string;
+  }>;
+  plan?: Array<{
+    stage: string;
+    title: string;
+    detail: string;
+    files?: string[];
+  }>;
+  verification?: Array<{
+    name: string;
+    ok: boolean;
+    detail: string;
   }>;
   warnings?: Array<{
     phase: string;

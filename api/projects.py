@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from api.settings import ROOT
 from api.supabase_store import archive_project as supabase_archive_project
@@ -23,6 +24,23 @@ class ProjectRecord(BaseModel):
     created_at: int
     updated_at: int
     archived: bool = False
+
+    @field_validator("created_at", "updated_at", mode="before")
+    @classmethod
+    def _parse_supabase_timestamp(cls, value: Any) -> int:
+        if isinstance(value, (int, float)):
+            return int(value)
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return int(time.time())
+            if raw.isdigit():
+                return int(raw)
+            try:
+                return int(datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp())
+            except ValueError:
+                return int(time.time())
+        return int(time.time())
 
 
 class ProjectCreateReq(BaseModel):

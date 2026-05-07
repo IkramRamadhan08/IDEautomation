@@ -35,6 +35,7 @@ class Settings(BaseModel):
     agent_refinement_mode: Literal["auto", "off", "always"] = "auto"
     agent_min_gap_seconds: float = 4.0
     agent_requests_per_minute: int = 8
+    agent_context_char_budget: int = 48_000
     openai_requests_per_minute: int | None = None
     anthropic_requests_per_minute: int | None = None
     openrouter_requests_per_minute: int | None = None
@@ -100,7 +101,9 @@ def load_settings() -> Settings:
     if agent_min_gap_seconds < 0.0:
         agent_min_gap_seconds = 0.0
 
-    default_agent_rpm = 8 if raw_friendly_mode not in {"0", "false", "no", "off"} else 15
+    friendly_free_tier = raw_friendly_mode not in {"0", "false", "no", "off"}
+    default_agent_rpm = 8 if friendly_free_tier else 15
+    default_context_budget = 48_000 if friendly_free_tier else 140_000
 
     def parse_optional_int(key: str, default: int | None = None) -> int | None:
         raw = str(g(key, "") or "").strip()
@@ -141,6 +144,7 @@ def load_settings() -> Settings:
         agent_refinement_mode=raw_refinement_mode,  # type: ignore[arg-type]
         agent_min_gap_seconds=agent_min_gap_seconds,
         agent_requests_per_minute=parse_optional_int("AGENT_REQUESTS_PER_MINUTE", default_agent_rpm) or default_agent_rpm,
+        agent_context_char_budget=parse_optional_int("AGENT_CONTEXT_CHAR_BUDGET", default_context_budget) or default_context_budget,
         openai_requests_per_minute=parse_optional_int("OPENAI_REQUESTS_PER_MINUTE"),
         anthropic_requests_per_minute=parse_optional_int("ANTHROPIC_REQUESTS_PER_MINUTE"),
         openrouter_requests_per_minute=parse_optional_int("OPENROUTER_REQUESTS_PER_MINUTE"),

@@ -1,6 +1,6 @@
 import React from "react";
 import { type ExplorerItem } from "../../types";
-import { Folder, FolderOpen as FolderOpenIcon, File, Plus, RefreshCw } from "lucide-react";
+import { Folder, FolderOpen as FolderOpenIcon, File, Plus, RefreshCw, RotateCcw } from "lucide-react";
 
 interface FileExplorerProps {
   selectedProject: string;
@@ -12,6 +12,7 @@ interface FileExplorerProps {
   activeFile: string;
   onRefresh: () => void | Promise<void>;
   onSelectProject: (project: string) => void;
+  onRestoreCheckpoint: () => void | Promise<void>;
   onToggleDir: (path: string) => void;
   onOpenFile: (path: string) => void;
   onHide: () => void;
@@ -28,6 +29,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
   activeFile,
   onRefresh,
   onSelectProject,
+  onRestoreCheckpoint,
   onToggleDir,
   onOpenFile,
   onHide,
@@ -124,6 +126,10 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
           <button className="btn subtleBtn" onClick={onNewFile}>
             <Plus size={14} />
             <span>New file</span>
+          </button>
+          <button className="btn subtleBtn" onClick={() => void onRestoreCheckpoint()}>
+            <RotateCcw size={14} />
+            <span>Restore</span>
           </button>
         </div>
 

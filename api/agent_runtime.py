@@ -53,6 +53,24 @@ Shared rules:
 - Output ONLY JSON, with no markdown fences or extra commentary.
 """
 
+_CODEX_STYLE_WORKFLOW = """WORKFLOW BEHAVIOR:
+- Behave like a pragmatic coding agent sharing one workspace with the user.
+- Read the existing project shape before making assumptions; prefer local project patterns over invented abstractions.
+- Keep normal chat conversational and read-only. Do not turn greetings, status checks, or questions into file edits.
+- When the user asks you to work, carry the task through: inspect, plan briefly, edit, request tools/commands when needed, validate, and leave a clear result.
+- Protect the user's work. Do not overwrite unrelated files, do not revert changes you did not make, and keep edits scoped to the request.
+- Prefer small, coherent file sets over scattered churn. Add abstractions only when they remove real complexity or match existing patterns.
+- For frontend work, build the actual usable app surface, not a marketing placeholder. Include responsive layout, empty/loading/error states, and accessible controls when relevant.
+- For hosted Vercel + Supabase, assume local filesystem state is transient and durable project files/settings live through the app APIs/Supabase.
+- If validation would materially improve confidence, request shell actions; otherwise self-review imports, paths, state wiring, and UX consistency before final JSON.
+- Explain outcomes in `spoken` with plain, concise language. Put operational details in actions/changes, not long narration.
+
+INTERACTION SEPARATION:
+- `spoken` is the conversational answer streamed in the orb.
+- `actions` and tool traces are operational activity for the interaction module.
+- Do not put conversational filler in shell/tool actions.
+"""
+
 _FRONTEND_EXTS = {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".css", ".scss", ".sass", ".less", ".html"}
 _RELATIVE_IMPORT_RE = re.compile(r'(?:import\s+(?:[^\"\']+?\s+from\s+)?|export\s+[^\"\']*?\s+from\s+|import\()\s*["\']([^"\']+)["\']')
 
@@ -98,6 +116,8 @@ When the request is UI/UX/product polish:
 - improve hierarchy, spacing, consistency, copy clarity, visual rhythm, responsiveness, empty/loading/error/success states, and accessibility.
 
 """
+            + _CODEX_STYLE_WORKFLOW
+            + "\n"
             + _RESPONSE_CONTRACT
         ),
         instruction_prefix="""FULL AGENT MODE, CLARA:
@@ -151,6 +171,8 @@ When the request is UI/UX/product polish:
 - keep fixes local, intentional, and easy for the user to continue from.
 
 """
+            + _CODEX_STYLE_WORKFLOW
+            + "\n"
             + _RESPONSE_CONTRACT
         ),
         instruction_prefix="""HYBRID MODE, RAKA:
@@ -209,6 +231,8 @@ class PreparedAgentContext:
     trace_mcp_servers: list[dict[str, Any]]
     trace_mcp_tools_used: list[dict[str, Any]]
     trace_local_tools_used: list[dict[str, Any]]
+    trace_plan: list[dict[str, Any]]
+    trace_verification: list[dict[str, Any]]
     trace_warnings: list[dict[str, str]]
     suggested_mcp_actions: list[dict[str, Any]]
 
@@ -230,6 +254,7 @@ class AgentRuntimeState(TypedDict, total=False):
     tool_iterations: int
     mcp_call_count: int
     intent: dict[str, Any]
+    plan: list[dict[str, Any]]
     emit: EventEmitter | None
 
 
@@ -338,6 +363,18 @@ _MAX_MCP_TOOL_LOOPS = 2
 _MAX_MCP_ACTIONS_PER_LOOP = 2
 
 
+def _friendly_free_tier_mode() -> bool:
+    return bool(getattr(settings_mod.settings, "friendly_free_tier_mode", True))
+
+
+def _max_tool_loops_for_run(ctx: PreparedAgentContext) -> int:
+    if not _friendly_free_tier_mode():
+        return _MAX_MCP_TOOL_LOOPS
+    if ctx.intent.kind == "inspection":
+        return 1
+    return 0
+
+
 def _normalize_mcp_action(item: Any) -> dict[str, Any] | None:
     if not isinstance(item, dict):
         return None
@@ -391,7 +428,7 @@ def _should_run_refinement(*, build_mode: str, instruction: str, active_rel: str
     if refinement_mode == "always":
         return True
 
-    friendly_mode = bool(getattr(settings_mod.settings, "friendly_free_tier_mode", True))
+    friendly_mode = _friendly_free_tier_mode()
     if build_mode == "full-agent":
         return not friendly_mode
     if preview_url or attached_assets:
@@ -405,9 +442,9 @@ def _should_run_refinement(*, build_mode: str, instruction: str, active_rel: str
     bugfix_keywords = ("fix", "bug", "error", "broken", "crash")
 
     if any(word in hint for word in strong_refine_keywords):
-        return True
+        return not friendly_mode
     if any(word in hint for word in bugfix_keywords) and active_rel.endswith((".tsx", ".ts", ".jsx", ".js", ".css", ".html")):
-        return True
+        return not friendly_mode
     return False
 
 
@@ -610,6 +647,8 @@ def prepare_agent_context(req: Any, ws_root: Path) -> PreparedAgentContext:
         trace_mcp_servers=[],
         trace_mcp_tools_used=[],
         trace_local_tools_used=[],
+        trace_plan=[],
+        trace_verification=[],
         trace_warnings=list(prep_warnings),
         suggested_mcp_actions=[],
     )
@@ -738,6 +777,96 @@ def _inspect_mcp_node(state: AgentRuntimeState) -> AgentRuntimeState:
     return {"context": ctx}
 
 
+def _build_execution_plan(ctx: PreparedAgentContext, user_input: str) -> list[dict[str, Any]]:
+    plan: list[dict[str, Any]] = []
+
+    def add(stage: str, title: str, detail: str, files: list[str] | None = None) -> None:
+        plan.append({
+            "stage": stage,
+            "title": title,
+            "detail": detail[:260],
+            "files": list(files or [])[:8],
+        })
+
+    context_files = [ctx.active_rel, *ctx.open_files]
+    context_files = [item for index, item in enumerate(context_files) if item and item not in context_files[:index]]
+    task_kind = ctx.intent.kind
+
+    add(
+        "scope",
+        "Define task boundary",
+        (
+            f"Treat this as {task_kind}. "
+            "Keep normal conversation read-only, keep hybrid changes surgical, and let full-agent mode cover broader app flow when requested."
+        ),
+        context_files,
+    )
+
+    if ctx.memory_prompt:
+        add("memory", "Use project memory", "Fold relevant same-project memory and long-term docs into decisions before changing files.")
+
+    if ctx.resolved_skill_ids:
+        add("skills", "Apply matched skills", f"Use skill guidance: {', '.join(ctx.resolved_skill_ids[:6])}.")
+
+    if ctx.intent.should_run_tools:
+        add(
+            "inspect",
+            "Inspect before writing",
+            "Prefer local repo tools or MCP read-only calls first when the request needs broader context than currently loaded files.",
+        )
+
+    if ctx.intent.should_write_files:
+        add(
+            "implement",
+            "Implement scoped changes",
+            "Produce complete file contents, keep imports/styles/states consistent, and preserve existing architecture unless full-agent mode demands a broader build.",
+            context_files,
+        )
+        add(
+            "verify",
+            "Plan validation",
+            "Return shell actions only when install/build/lint/test commands materially improve confidence; otherwise leave a clear self-review trail.",
+        )
+    else:
+        add("answer", "Respond without file writes", "Explain findings or conversation answer without generating changes/actions.")
+
+    if ctx.attached_assets:
+        add("assets", "Use attached assets", f"Consider uploaded assets when relevant: {', '.join(ctx.attached_assets[:4])}.")
+
+    if "large" in user_input.lower() or "gede" in user_input.lower() or ctx.is_full_agent:
+        add(
+            "scale",
+            "Keep app-scale structure",
+            "Prefer clear module boundaries, reusable components, durable state shape, empty/loading/error states, and validation hooks for larger apps.",
+        )
+
+    return plan
+
+
+def _format_plan_prompt(plan: list[dict[str, Any]]) -> str:
+    if not plan:
+        return ""
+    lines = ["EXECUTION PLAN:"]
+    for index, item in enumerate(plan, start=1):
+        files = item.get("files")
+        file_note = f" files={', '.join(files)}" if isinstance(files, list) and files else ""
+        lines.append(f"{index}. {item.get('title')}: {item.get('detail')}{file_note}")
+    lines.append("Follow this plan unless fresh tool results show a better route.")
+    return "\n".join(lines)
+
+
+def _plan_node(state: AgentRuntimeState) -> AgentRuntimeState:
+    ctx = state["context"]
+    _emit(state, "status", {"phase": "planning", "message": "Nyusun rencana kerja biar agent nggak asal nembak..."})
+    plan = _build_execution_plan(ctx, state["input"])
+    ctx.trace_plan = plan
+    plan_prompt = _format_plan_prompt(plan)
+    if plan_prompt:
+        ctx.extra_context = f"{ctx.extra_context}\n\n{plan_prompt}".strip()
+    _emit(state, "delta", {"message": f"Plan siap: {len(plan)} tahap.", "plan": plan})
+    return {"context": ctx, "plan": plan}
+
+
 def _draft_node(state: AgentRuntimeState) -> AgentRuntimeState:
     ctx = state["context"]
     _emit(state, "status", {"phase": "context_ready", "message": "Konteks siap, agent mulai mikir..."})
@@ -817,7 +946,7 @@ def _route_after_draft(state: AgentRuntimeState) -> str:
         return "finalize"
 
     mcp_actions, tool_actions, _other_actions = _split_runtime_actions(list(state.get("actions") or []))
-    if ctx.intent.should_run_tools and int(state.get("tool_iterations") or 0) < _MAX_MCP_TOOL_LOOPS:
+    if ctx.intent.should_run_tools and int(state.get("tool_iterations") or 0) < _max_tool_loops_for_run(ctx):
         if tool_actions or mcp_actions or (not state.get("actions") and ctx.suggested_mcp_actions):
             return "tooling"
 
@@ -980,6 +1109,60 @@ def _refine_node(state: AgentRuntimeState) -> AgentRuntimeState:
         return {"refine_skipped": True}
 
 
+def _verify_node(state: AgentRuntimeState) -> AgentRuntimeState:
+    ctx = state["context"]
+    _emit(state, "status", {"phase": "verifying", "message": "Ngecek hasil draft sebelum final..."})
+    changes = list(state.get("changes") or [])
+    actions = list(state.get("actions") or [])
+    checks: list[dict[str, Any]] = []
+
+    def add(name: str, ok: bool, detail: str) -> None:
+        checks.append({"name": name, "ok": ok, "detail": detail[:240]})
+        if not ok:
+            ctx.trace_warnings.append({"phase": "verify", "message": f"{name}: {detail}"[:240]})
+
+    if ctx.intent.should_write_files:
+        add(
+            "has-work-output",
+            bool(changes or actions),
+            "Build request produced file changes or runtime actions." if changes or actions else "Build request produced no file changes/actions.",
+        )
+    else:
+        add(
+            "read-only-boundary",
+            not changes and not actions,
+            "Read-only/conversation request did not produce writes." if not changes and not actions else "Read-only/conversation request produced writes and will be stripped at finalize.",
+        )
+
+    invalid_paths = [
+        str(item.get("path") or "")
+        for item in changes
+        if not str(item.get("path") or "").strip() or ".." in str(item.get("path") or "").split("/")
+    ]
+    add("valid-change-paths", not invalid_paths, "All change paths look project-relative." if not invalid_paths else f"Invalid paths: {', '.join(invalid_paths[:5])}")
+
+    empty_files = [
+        str(item.get("path") or "")
+        for item in changes
+        if isinstance(item.get("new_content"), str) and not item.get("new_content")
+    ]
+    add("non-empty-file-content", not empty_files, "Changed files have content." if not empty_files else f"Empty outputs: {', '.join(empty_files[:5])}")
+
+    shell_actions = [item for item in actions if str(item.get("type") or "").lower() == "shell"]
+    invalid_shell = [item for item in shell_actions if not isinstance(item.get("command"), str) or not str(item.get("command") or "").strip()]
+    add("valid-shell-actions", not invalid_shell, "Shell actions have commands." if not invalid_shell else f"{len(invalid_shell)} shell action(s) missing command.")
+
+    if ctx.is_full_agent and ctx.intent.should_write_files:
+        add(
+            "full-agent-coverage",
+            len(changes) >= 2 or bool(actions),
+            "Full-agent output touches multiple files or uses project tooling." if len(changes) >= 2 or actions else "Full-agent output may be too small for an app-level task.",
+        )
+
+    ctx.trace_verification = checks
+    return {"context": ctx}
+
+
 def _finalize_node(state: AgentRuntimeState) -> AgentRuntimeState:
     ctx = state["context"]
     normalized_changes = list(state.get("changes") or [])
@@ -1050,6 +1233,8 @@ def _finalize_node(state: AgentRuntimeState) -> AgentRuntimeState:
         "mcp_servers": list(ctx.trace_mcp_servers),
         "mcp_tools_used": list(ctx.trace_mcp_tools_used),
         "local_tools_used": list(ctx.trace_local_tools_used),
+        "plan": list(ctx.trace_plan),
+        "verification": list(ctx.trace_verification),
         "warnings": list(ctx.trace_warnings),
     }
 
@@ -1068,18 +1253,22 @@ _AGENT_GRAPH_BUILDER.add_node("intent", _classify_intent_node)
 _AGENT_GRAPH_BUILDER.add_node("memory", _hydrate_memory_node)
 _AGENT_GRAPH_BUILDER.add_node("skills", _resolve_skills_node)
 _AGENT_GRAPH_BUILDER.add_node("mcp", _inspect_mcp_node)
+_AGENT_GRAPH_BUILDER.add_node("plan", _plan_node)
 _AGENT_GRAPH_BUILDER.add_node("draft", _draft_node)
 _AGENT_GRAPH_BUILDER.add_node("tooling", _execute_tooling_node)
 _AGENT_GRAPH_BUILDER.add_node("refine", _refine_node)
+_AGENT_GRAPH_BUILDER.add_node("verify", _verify_node)
 _AGENT_GRAPH_BUILDER.add_node("finalize", _finalize_node)
 _AGENT_GRAPH_BUILDER.set_entry_point("intent")
 _AGENT_GRAPH_BUILDER.add_edge("intent", "memory")
 _AGENT_GRAPH_BUILDER.add_edge("memory", "skills")
 _AGENT_GRAPH_BUILDER.add_edge("skills", "mcp")
-_AGENT_GRAPH_BUILDER.add_edge("mcp", "draft")
-_AGENT_GRAPH_BUILDER.add_conditional_edges("draft", _route_after_draft, {"tooling": "tooling", "refine": "refine", "finalize": "finalize"})
+_AGENT_GRAPH_BUILDER.add_edge("mcp", "plan")
+_AGENT_GRAPH_BUILDER.add_edge("plan", "draft")
+_AGENT_GRAPH_BUILDER.add_conditional_edges("draft", _route_after_draft, {"tooling": "tooling", "refine": "refine", "finalize": "verify"})
 _AGENT_GRAPH_BUILDER.add_edge("tooling", "draft")
-_AGENT_GRAPH_BUILDER.add_edge("refine", "finalize")
+_AGENT_GRAPH_BUILDER.add_edge("refine", "verify")
+_AGENT_GRAPH_BUILDER.add_edge("verify", "finalize")
 _AGENT_GRAPH_BUILDER.add_edge("finalize", END)
 _AGENT_GRAPH = _AGENT_GRAPH_BUILDER.compile()
 
@@ -1116,6 +1305,8 @@ def run_agent_pipeline(req: Any, *, ws_root: Path, emit: EventEmitter | None = N
             "mcp_servers": list(ctx.trace_mcp_servers),
             "mcp_tools_used": list(ctx.trace_mcp_tools_used),
             "local_tools_used": list(ctx.trace_local_tools_used),
+            "plan": list(ctx.trace_plan),
+            "verification": list(ctx.trace_verification),
             "warnings": list(ctx.trace_warnings),
         }),
     }

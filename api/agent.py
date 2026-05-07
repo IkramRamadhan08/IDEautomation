@@ -43,6 +43,8 @@ _LLM_CALL_HISTORY: dict[str, deque[float]] = {}
 _DEFAULT_MIN_LLM_GAP_SECONDS: float = 4.0
 _DEFAULT_FRIENDLY_RPM: int = 8
 _DEFAULT_STANDARD_RPM: int = 15
+_DEFAULT_FRIENDLY_CONTEXT_CHARS: int = 48_000
+_DEFAULT_STANDARD_CONTEXT_CHARS: int = 140_000
 
 
 def _effective_requests_per_minute(provider: str) -> int:
@@ -102,6 +104,46 @@ def _effective_min_gap_seconds() -> float:
     return max(0.0, value)
 
 
+def _friendly_free_tier_mode() -> bool:
+    return bool(getattr(settings_mod.settings, "friendly_free_tier_mode", True))
+
+
+def _effective_context_char_budget() -> int:
+    default_budget = _DEFAULT_FRIENDLY_CONTEXT_CHARS if _friendly_free_tier_mode() else _DEFAULT_STANDARD_CONTEXT_CHARS
+    try:
+        value = int(getattr(settings_mod.settings, "agent_context_char_budget", default_budget) or default_budget)
+    except Exception:
+        value = default_budget
+    return max(12_000, min(value, 260_000))
+
+
+def _rough_token_estimate(text: str) -> int:
+    return max(1, int(len(text or "") / 4))
+
+
+def _bounded_relevant_files(relevant_files: dict[str, str], *, active_path: str, budget_chars: int) -> tuple[dict[str, str], int]:
+    budget = max(4_000, budget_chars)
+    used = 0
+    skipped = 0
+    out: dict[str, str] = {}
+    for rel, txt in relevant_files.items():
+        if rel == active_path:
+            skipped += 1
+            continue
+        header_cost = len(rel) + 16
+        remaining = budget - used - header_cost
+        if remaining <= 0:
+            skipped += 1
+            continue
+        clean = str(txt or "")
+        clipped = clean[:remaining]
+        out[rel] = clipped
+        used += header_cost + len(clipped)
+        if len(clipped) < len(clean):
+            skipped += 1
+    return out, skipped
+
+
 @dataclass
 class AgentSuggestion:
     spoken: str
@@ -156,6 +198,9 @@ Rules:
 - Reuse the existing stack and patterns unless there is a clear reason not to.
 - Avoid placeholder work, toy UIs, or generic scaffolding unless the user explicitly wants that.
 - Before finalizing, self-review for broken imports, missing styles, mismatched names, and incomplete supporting edits.
+- Behave like a pragmatic coding agent in a shared workspace: inspect first, preserve user work, keep unrelated files untouched, validate when useful, and finish the task instead of stopping at advice.
+- Keep chat read-only. Only edit files when the user clearly asks you to build, fix, update, or run project work.
+- `spoken` is for the orb conversation. Operational activity belongs in `actions` and file `changes`.
 - Output ONLY JSON, with no markdown fences or extra commentary.
 """
 
@@ -367,17 +412,26 @@ def suggest(
 ) -> AgentSuggestion:
     file_tree = file_tree or []
     relevant_files = relevant_files or {}
+    context_budget = _effective_context_char_budget()
+    active_content_budget = 28_000 if _friendly_free_tier_mode() else 60_000
+    bounded_relevant, skipped_context = _bounded_relevant_files(
+        relevant_files,
+        active_path=path,
+        budget_chars=context_budget,
+    )
 
     relevant_blob = "\n\n".join(
-        f"FILE: {rel}\n{txt}" for rel, txt in relevant_files.items()
+        f"FILE: {rel}\n{txt}" for rel, txt in bounded_relevant.items()
     )
     context_block = f"Context:\n{extra_context}\n\n" if extra_context else ""
+    current_content = str(content or "")[:active_content_budget]
+    tree_limit = 300 if _friendly_free_tier_mode() else 600
     user = (
         f"Active file: {path}\n\n"
         f"Instruction:\n{instruction}\n\n"
         f"{context_block}"
-        f"Current content:\n{content}\n\n"
-        f"File tree:\n" + "\n".join(file_tree[:600]) + "\n\n"
+        f"Current content:\n{current_content}\n\n"
+        f"File tree:\n" + "\n".join(file_tree[:tree_limit]) + "\n\n"
         f"Relevant files:\n{relevant_blob}"
     )
 
@@ -403,7 +457,10 @@ def suggest(
         actions = []
 
     spoken = str(data.get("spoken") or ("I prepared the requested changes." if out_changes else "I reviewed the request but did not propose any file edits."))
-    log = f"provider={provider} model={model} files={len(out_changes)} actions={len(actions)}"
+    log = (
+        f"provider={provider} model={model} files={len(out_changes)} actions={len(actions)} "
+        f"prompt_chars={len(user)} prompt_tokens_est={_rough_token_estimate(user)} context_budget={context_budget} context_skipped={skipped_context}"
+    )
     return AgentSuggestion(spoken=spoken, log=log, changes=out_changes, actions=actions)
 
 

@@ -27,10 +27,27 @@ export const AgentAuditTrail: React.FC<AgentAuditTrailProps> = ({ snapshots, com
             <div>
               <div className="agentAuditStageTitle">{snapshot.label}</div>
               <div className="agentAuditStageMeta">
-                {`passes=${snapshot.passes}`} • {`memory=${snapshot.memoryHits.length}`} • {`skills=${snapshot.skills.length}`} • {`mcp used=${snapshot.mcpToolsUsed.length}`}
+                {`passes=${snapshot.passes}`} • {`plan=${snapshot.plan?.length || 0}`} • {`verify=${snapshot.verification?.length || 0}`} • {`memory=${snapshot.memoryHits.length}`} • {`skills=${snapshot.skills.length}`} • {`mcp used=${snapshot.mcpToolsUsed.length}`}
               </div>
             </div>
           </div>
+
+          {snapshot.plan && snapshot.plan.length > 0 ? (
+            <div className="agentAuditSection">
+              <div className="agentAuditSectionTitle">Execution plan</div>
+              <div className="agentAuditList">
+                {snapshot.plan.slice(0, compact ? 3 : 6).map((item, index) => (
+                  <div key={`${snapshot.id}-plan-${index}`} className="agentAuditRow">
+                    <div className="agentAuditPrimary">{item.title}</div>
+                    <div className="agentAuditSecondary">{item.stage} • {shortText(item.detail, compact ? 120 : 180)}</div>
+                    {!compact && item.files && item.files.length > 0 ? (
+                      <div className="agentAuditSecondary">files: {item.files.join(", ")}</div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           {snapshot.memoryHits.length > 0 ? (
             <div className="agentAuditSection">
@@ -41,6 +58,20 @@ export const AgentAuditTrail: React.FC<AgentAuditTrailProps> = ({ snapshots, com
                     <div className="agentAuditPrimary">{hit.title}</div>
                     <div className="agentAuditSecondary">{hit.kind} • {hit.source}</div>
                     {!compact && hit.text ? <div className="agentAuditSecondary">{shortText(hit.text)}</div> : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {snapshot.verification && snapshot.verification.length > 0 ? (
+            <div className="agentAuditSection">
+              <div className="agentAuditSectionTitle">Verifier checks</div>
+              <div className="agentAuditList">
+                {snapshot.verification.map((check, index) => (
+                  <div key={`${snapshot.id}-verify-${index}`} className={`agentAuditRow ${check.ok ? "ok" : "error"}`}>
+                    <div className="agentAuditPrimary">{check.name}</div>
+                    <div className="agentAuditSecondary">{check.ok ? "ok" : "warn"} • {shortText(check.detail, compact ? 120 : 180)}</div>
                   </div>
                 ))}
               </div>
