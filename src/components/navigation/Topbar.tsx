@@ -41,7 +41,7 @@ export const Topbar: React.FC<TopbarProps> = ({
           <Command size={15} />
         </div>
         <div className="brandStack">
-          <div className="brand">Voice IDE</div>
+          <div className="brand">Appora</div>
         </div>
       </div>
 

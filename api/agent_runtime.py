@@ -29,7 +29,7 @@ _RESPONSE_CONTRACT = """Return ONLY valid JSON with this exact shape:
   \"actions\": [
     {\"type\": \"shell\", \"command\": \"npm install ...\"},
     {\"type\": \"tool\", \"tool\": \"repo_search\", \"arguments\": {\"query\": \"supabase\"}},
-    {\"type\": \"mcp\", \"server\": \"github\", \"tool\": \"search_repos\", \"arguments\": {\"query\": \"voice ide\"}}
+    {\"type\": \"mcp\", \"server\": \"github\", \"tool\": \"search_repos\", \"arguments\": {\"query\": \"appora\"}}
   ]
 }
 

@@ -1,7 +1,7 @@
 [project]
-name = "voice-ide-api"
+name = "appora-api"
 version = "0.1.0"
-description = "Local API service for Voice IDE (files/tools/agent/voice)"
+description = "Local API service for Appora (files/tools/agent/voice)"
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.110",

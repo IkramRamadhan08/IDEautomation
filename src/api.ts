@@ -195,8 +195,12 @@ export function resetClientIdentity() {
 
 async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers ?? {});
-  headers.set("X-VoiceIDE-Session", getSessionId());
-  headers.set("X-VoiceIDE-User", getUserId());
+  const sessionId = getSessionId();
+  const userId = getUserId();
+  headers.set("X-Appora-Session", sessionId);
+  headers.set("X-Appora-User", userId);
+  headers.set("X-VoiceIDE-Session", sessionId);
+  headers.set("X-VoiceIDE-User", userId);
 
   try {
     const { data } = await supabase.auth.getSession();

@@ -47,7 +47,7 @@ from api.agent_skills import detect_project_stack
 from api.agent_tools import list_local_tools
 
 
-app = FastAPI(title="Voice IDE Backend", version="0.1.0")
+app = FastAPI(title="Appora Backend", version="0.1.0")
 
 
 def _sha256_text(value: str) -> str:
@@ -471,10 +471,10 @@ def _session_state() -> dict:
 
 @app.middleware("http")
 async def bind_voiceide_session(request: Request, call_next):
-    session_token = CURRENT_SESSION_ID.set(_sanitize_session_id(request.headers.get("X-VoiceIDE-Session")))
+    session_token = CURRENT_SESSION_ID.set(_sanitize_session_id(request.headers.get("X-Appora-Session") or request.headers.get("X-VoiceIDE-Session")))
     resolved_user = resolve_request_user(
         authorization=request.headers.get("Authorization"),
-        x_voiceide_user=request.headers.get("X-VoiceIDE-User"),
+        x_voiceide_user=request.headers.get("X-Appora-User") or request.headers.get("X-VoiceIDE-User"),
     )
     user_token = CURRENT_USER_ID.set(resolved_user.user_id)
     profile_token = CURRENT_PROFILE_ID.set(resolved_user.user_id)
@@ -499,7 +499,7 @@ async def bind_voiceide_session(request: Request, call_next):
             elif email:
                 CURRENT_USER_ID.set(sanitize_user_id(f"google-{email}"))
         response = await call_next(request)
-        response.headers["X-VoiceIDE-Auth-Source"] = resolved_user.auth_source
+        response.headers["X-Appora-Auth-Source"] = resolved_user.auth_source
         return response
     finally:
         CURRENT_PROFILE_ID.reset(profile_token)
@@ -511,7 +511,7 @@ async def bind_voiceide_session(request: Request, call_next):
 def healthz():
     return {
         "ok": True,
-        "service": "voice-ide-api",
+        "service": "appora-api",
         "session": CURRENT_SESSION_ID.get(),
         "user": CURRENT_USER_ID.get(),
     }
@@ -891,7 +891,7 @@ def _fetch_preview_html(preview_url: str, attempts: int = 3) -> str:
             req = URLRequest(
                 preview_url,
                 headers={
-                    "User-Agent": "VoiceIDE/0.1 (+preview-audit)",
+                    "User-Agent": "Appora/0.1 (+preview-audit)",
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 },
                 method="GET",

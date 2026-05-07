@@ -1,6 +1,6 @@
 # Agent Architecture
 
-Voice IDE agent is being reset around explicit boundaries instead of procedural orchestration.
+Appora agent is being reset around explicit boundaries instead of procedural orchestration.
 
 ## Runtime boundaries
 
@@ -45,7 +45,7 @@ Make the agent a trustworthy app-builder, not just a code chatbot.
 
 ### North star
 
-Voice IDE agent should:
+Appora agent should:
 - distinguish chat from build work
 - operate inside bounded runtime/tool limits
 - understand the project's existing stack

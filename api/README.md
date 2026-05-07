@@ -1,6 +1,6 @@
-# Voice IDE API
+# Appora API
 
-FastAPI API service for Voice IDE:
+FastAPI API service for Appora:
 - File tree / read / write
 - Diff preview
 - Agent planning via local OAuth-backed runtimes

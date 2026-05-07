@@ -2033,8 +2033,41 @@ a {
   flex: none;
 }
 
+.authHeroSignalGrid {
+  margin-top: 26px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  max-width: 560px;
+}
+
+.authHeroSignalGrid div {
+  min-height: 82px;
+  display: grid;
+  align-content: center;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(229, 231, 235, 0.1);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.authHeroSignalGrid span {
+  color: #7dd3fc;
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.authHeroSignalGrid strong {
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
 .authMetricRow {
-  margin-top: 44px;
+  margin-top: 30px;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 120px));
   gap: 18px;
@@ -2251,6 +2284,37 @@ a {
   font-size: 13px;
 }
 
+.authDocsGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.authDocsGrid div {
+  min-height: 180px;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 18px;
+  border-radius: 10px;
+  border: 1px solid rgba(229, 231, 235, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.authDocsGrid strong,
+.authFaqList strong {
+  color: var(--text);
+  font-size: 15px;
+}
+
+.authDocsGrid p,
+.authFaqList p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
 .authTemplateList,
 .authProviderList {
   display: flex;
@@ -2270,6 +2334,18 @@ a {
   background: rgba(255, 255, 255, 0.035);
   font-size: 13px;
   font-weight: 750;
+}
+
+.authFaqList {
+  display: grid;
+  gap: 10px;
+}
+
+.authFaqList div {
+  display: grid;
+  gap: 8px;
+  padding: 18px 0;
+  border-top: 1px solid rgba(229, 231, 235, 0.09);
 }
 
 .workspaceGateCard {
@@ -3258,6 +3334,10 @@ a {
     grid-template-columns: 1fr;
   }
 
+  .authDocsGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .authProductPreview {
     min-height: 480px;
   }
@@ -3369,6 +3449,11 @@ a {
 
   .authMetricRow {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .authHeroSignalGrid,
+  .authDocsGrid {
+    grid-template-columns: 1fr;
   }
 
   .authPreviewGrid {

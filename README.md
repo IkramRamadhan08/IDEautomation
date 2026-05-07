@@ -1,12 +1,12 @@
-# Voice IDE
+# Appora
 
-Voice IDE is an agentic web/app builder for non-coders and fast-moving builders. It combines a hosted browser IDE, Supabase-backed project persistence, BYOK model providers, and two coding agents designed to help users move from rough intent to a working web application.
+Appora is an agentic web/app builder for non-coders and fast-moving builders. It combines a hosted browser IDE, Supabase-backed project persistence, BYOK model providers, and two coding agents designed to help users move from rough intent to a working web application.
 
 The target runtime is **Vercel serverless + Supabase**. The product is not positioned as a local-only experiment or short-lived showcase; the architecture is meant for a hosted experience where users sign in, paste their own model API keys, create projects, and ask an agent to build or improve apps.
 
 ## Product Direction
 
-Voice IDE is built around two agents:
+Appora is built around two agents:
 
 - **Clara**: full-agent mode. Clara is the autonomous product builder that can take a rough brief, inspect the repo, plan the implementation, edit files, validate, repair, and push toward a coherent preview-ready result.
 - **Raka**: hybrid mode. Raka is the IDE copilot that stays close to the active file, editor state, and current project context for precise assisted coding.
@@ -216,7 +216,7 @@ For hosted public usage, prefer per-user BYOK through Settings instead of sharin
 
 ## BYOK Provider Model
 
-Voice IDE is designed for bring-your-own-key usage. Users can paste provider API keys in Settings. Keys are stored per account in Supabase and encrypted using `VOICEIDE_SECRET_KEY`.
+Appora is designed for bring-your-own-key usage. Users can paste provider API keys in Settings. Keys are stored per account in Supabase and encrypted using `VOICEIDE_SECRET_KEY`.
 
 OpenRouter is a good default provider for public hosted deployments because it gives users one router key and access to free or lower-cost models. Groq, Gemini, and Cerebras are useful for users who want free/dev-tier experimentation with stricter limits. OpenAI remains available because it is familiar, but OpenAI API usage is credit/billing based rather than unlimited free tier.
 
@@ -238,7 +238,7 @@ api/.venv/bin/python -m unittest api.tests.test_agent_regressions.AgentToolsRegr
 
 ## Current Engineering Boundaries
 
-Voice IDE is built for a hosted serverless app-builder workflow. The current architecture is intentionally not a heavy self-hosted container platform.
+Appora is built for a hosted serverless app-builder workflow. The current architecture is intentionally not a heavy self-hosted container platform.
 
 Known boundaries:
 

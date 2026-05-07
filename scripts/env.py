@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Simple .env manager for Voice IDE.
+"""Simple .env manager for Appora.
 
-OAuth credentials are managed externally by Voice IDE.
+OAuth credentials are managed externally by Appora.
 This helper only persists lightweight local app settings such as provider choice,
 preferred model, and default workspace.
 
@@ -28,7 +28,7 @@ KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 LINE_RE = re.compile(r"^(?P<key>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>.*)$")
 
 
-DEFAULT_ENV = """# Voice IDE local settings
+DEFAULT_ENV = """# Appora local settings
 # OAuth auth itself is managed outside this file.
 LLM_PROVIDER=openai
 BUILD_MODE=hybrid
@@ -135,7 +135,7 @@ def prompt(label: str, default: str | None = None) -> str:
 
 
 def wizard() -> None:
-    print("Voice IDE OAuth settings wizard")
+    print("Appora OAuth settings wizard")
     ensure_env_exists()
 
     provider = prompt("LLM_PROVIDER", default="openai")
@@ -155,7 +155,7 @@ def wizard() -> None:
     if default_workspace:
         set_key("DEFAULT_WORKSPACE", default_workspace)
 
-    print("Done. OAuth login itself is managed externally by Voice IDE.")
+    print("Done. OAuth login itself is managed externally by Appora.")
 
 
 def main(argv: list[str]) -> None:

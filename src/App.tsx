@@ -791,22 +791,22 @@ export default function App() {
     <div className="authLanding">
       <header className="authLandingNav">
         <div className="authBrand">
-          <span className="authBrandMark">V</span>
-          <span>Voice IDE</span>
+          <span className="authBrandMark">A</span>
+          <span>Appora</span>
         </div>
         <nav className="authNavLinks" aria-label="Landing navigation">
-          <a href="#workflow">Workflow</a>
+          <a href="#faq">FAQ</a>
+          <a href="#docs">Docs</a>
+          <a href="#tutorial">Tutorial</a>
           <a href="#templates">Templates</a>
-          <a href="#providers">Providers</a>
         </nav>
-        <button className="btn subtleBtn" onClick={startGoogleLogin}>Sign in</button>
       </header>
 
       <main className="authLandingMain">
         <section className="authHeroSection">
           <div className="authHeroCopy">
           <div className="workspaceGateKicker">Agentic web builder for everyone</div>
-          <h1 className="authHeroTitle">Voice IDE</h1>
+          <h1 className="authHeroTitle">Appora</h1>
           <p className="authHeroSubtitle">
             Create web apps by talking to Clara, then refine the result in a browser IDE with files, terminal actions, preview checks, project memory, and provider fallback.
           </p>
@@ -818,6 +818,24 @@ export default function App() {
             <span>Start from production-ready templates</span>
             <span>Let the agent run, inspect, repair, and remember</span>
             <span>Use OpenRouter, Gemini, Groq, OpenAI, and more</span>
+          </div>
+          <div className="authHeroSignalGrid" aria-label="Appora capabilities">
+            <div>
+              <span>Template first</span>
+              <strong>SaaS, landing, admin, AI tool</strong>
+            </div>
+            <div>
+              <span>Agent loop</span>
+              <strong>plan, patch, run, repair</strong>
+            </div>
+            <div>
+              <span>Hosting target</span>
+              <strong>Vercel + Supabase</strong>
+            </div>
+            <div>
+              <span>Model routing</span>
+              <strong>free-tier friendly BYOK</strong>
+            </div>
           </div>
           <div className="authMetricRow">
             <div>
@@ -835,19 +853,19 @@ export default function App() {
           </div>
           </div>
 
-        <section className="authProductPreview" aria-label="Voice IDE workspace preview">
+        <section className="authProductPreview" aria-label="Appora workspace preview">
           <div className="authPreviewChrome">
             <span />
             <span />
             <span />
-            <div>voice-ide.app/workspace</div>
+            <div>appora.app/workspace</div>
           </div>
           <div className="authPreviewGrid">
             <div className="authPreviewRail">
               <div className="authPreviewRailTitle">Files</div>
               <div className="authPreviewFile active">src/App.tsx</div>
               <div className="authPreviewFile">src/app.css</div>
-              <div className="authPreviewFile">.voiceide/memory</div>
+              <div className="authPreviewFile">project memory</div>
               <div className="authPreviewFile">package.json</div>
             </div>
             <div className="authPreviewEditor">
@@ -871,9 +889,9 @@ export default function App() {
         </section>
         </section>
 
-        <section id="workflow" className="authInfoBand" aria-label="Workflow">
+        <section id="tutorial" className="authInfoBand" aria-label="Tutorial">
           <div className="authSectionHeader">
-            <span>How it works</span>
+            <span>Tutorial</span>
             <h2>From blank idea to working app without setting up a repo.</h2>
           </div>
           <div className="authFeatureGrid">
@@ -905,15 +923,61 @@ export default function App() {
           </div>
         </section>
 
+        <section id="docs" className="authInfoBand" aria-label="Docs">
+          <div className="authSectionHeader">
+            <span>Docs</span>
+            <h2>Built around hosted projects, provider keys, agent memory, and preview checks.</h2>
+          </div>
+          <div className="authDocsGrid">
+            <div>
+              <strong>Hosted setup</strong>
+              <p>Projects persist through Supabase, while serverless API routes handle auth, settings, files, and agent runs.</p>
+            </div>
+            <div>
+              <strong>Agent tools</strong>
+              <p>Clara can inspect project files, request terminal actions, use MCP tools, remember project context, and repair failed builds.</p>
+            </div>
+            <div>
+              <strong>Provider routing</strong>
+              <p>Users paste their own keys and Appora picks connected models with fallback paths for rate limits.</p>
+            </div>
+            <div>
+              <strong>Preview confidence</strong>
+              <p>Browser inspection catches blank pages, runtime errors, layout overflow, missing assets, and mobile breakage.</p>
+            </div>
+          </div>
+        </section>
+
         <section id="providers" className="authInfoBand authProviderBand" aria-label="Providers">
           <div className="authSectionHeader">
             <span>BYOK model routing</span>
-            <h2>Paste the key you already have. Voice IDE can route and fallback when limits hit.</h2>
+            <h2>Paste the key you already have. Appora can route and fallback when limits hit.</h2>
           </div>
           <div className="authProviderList">
             {["OpenRouter", "Gemini", "Groq", "OpenAI", "Anthropic", "Together", "Cerebras", "xAI"].map((provider) => (
               <span key={provider}>{provider}</span>
             ))}
+          </div>
+        </section>
+
+        <section id="faq" className="authInfoBand" aria-label="FAQ">
+          <div className="authSectionHeader">
+            <span>FAQ</span>
+            <h2>For users who want to build, not configure a local dev machine.</h2>
+          </div>
+          <div className="authFaqList">
+            <div>
+              <strong>Do I need to code?</strong>
+              <p>No. Start with a template, describe the app, and use the IDE only when you want more control.</p>
+            </div>
+            <div>
+              <strong>Do I need paid AI credits?</strong>
+              <p>You bring your own provider keys. Free and trial tiers can work, but limits depend on each provider.</p>
+            </div>
+            <div>
+              <strong>Where are projects stored?</strong>
+              <p>Hosted projects are designed to persist through Supabase, with Vercel serving the app experience.</p>
+            </div>
           </div>
         </section>
       </main>

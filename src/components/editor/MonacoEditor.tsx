@@ -257,7 +257,7 @@ export const MonacoEditor: React.FC<MonacoEditorProps> = ({
 
             {activePanel === "output" ? (
               <div className="terminalLines">
-                <div className="terminalLine muted">[voice-ide] {editorStatus || "Ready"}</div>
+                <div className="terminalLine muted">[appora] {editorStatus || "Ready"}</div>
                 <div className="terminalLine muted">[editor] {activeFile ? `Active file: ${activeFile}` : "No active file"}</div>
                 <div className="terminalLine muted">[workspace] {openFiles.length} open tab{openFiles.length === 1 ? "" : "s"}</div>
               </div>

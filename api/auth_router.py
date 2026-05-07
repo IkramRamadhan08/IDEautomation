@@ -148,7 +148,7 @@ def build_auth_router(*, session_state, sanitize_session_id, sanitize_user_id, u
                 CURRENT_USER_ID.reset(current_user_token)
                 CURRENT_SESSION_ID.reset(current_session_token)
 
-            return HTMLResponse("<html><body><h1>Google login successful</h1><p>Google user ID is now your Voice IDE user ID. You can close this tab and return to the app.</p><script>window.close()</script></body></html>")
+            return HTMLResponse("<html><body><h1>Google login successful</h1><p>Google user ID is now your Appora user ID. You can close this tab and return to the app.</p><script>window.close()</script></body></html>")
         except Exception as exc:
             pending["phase"] = "error"
             return HTMLResponse(f"<html><body><h1>Google login failed</h1><pre>{str(exc)}</pre></body></html>", status_code=400)

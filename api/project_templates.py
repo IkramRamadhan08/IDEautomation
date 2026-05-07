@@ -127,7 +127,7 @@ def _apply_template_polish(files: dict[str, str], *, template: ProjectTemplate, 
 def _template_readme(*, template: ProjectTemplate, project_name: str) -> str:
     return f"""# {project_name}
 
-Started from the **{template.name}** Voice IDE template.
+Started from the **{template.name}** Appora template.
 
 ## Template Intent
 

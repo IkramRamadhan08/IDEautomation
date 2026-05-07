@@ -296,7 +296,7 @@ def _safe_fetch_reference(ref_url: str) -> str:
     req = urllib.request.Request(
         ref_url,
         headers={
-            "User-Agent": "VoiceIDE/0.1 (+local)",
+            "User-Agent": "Appora/0.1 (+local)",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         },
         method="GET",

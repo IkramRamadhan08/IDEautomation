@@ -1,4 +1,4 @@
--- Voice IDE hosted-product trial schema
+-- Appora hosted-product trial schema
 -- Target: Vercel + serverless API + Supabase as system of record
 -- Notes:
 -- - Keep runtime/terminal state out of Postgres for now unless it is metadata only.

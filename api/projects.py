@@ -186,7 +186,7 @@ def create_project(*, workspace_root: Path, owner_id: str, req: ProjectCreateReq
     else:
         readme = root / "README.md"
         if not readme.exists():
-            readme.write_text(f"# {name}\n\nCreated by Voice IDE project setup.\n", encoding="utf-8")
+            readme.write_text(f"# {name}\n\nCreated by Appora project setup.\n", encoding="utf-8")
         template_files = {"README.md": readme.read_text(encoding="utf-8")}
 
     if has_supabase():
