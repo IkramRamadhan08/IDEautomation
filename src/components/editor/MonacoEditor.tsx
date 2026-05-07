@@ -14,6 +14,7 @@ interface MonacoEditorProps {
   recentActions: AgentAction[];
   agentLiveItems: AgentLiveItem[];
   selectedProject: string;
+  appTheme: "light" | "dark";
   onSetActiveFile: (path: string) => void;
   onCloseFile: (path: string) => void;
   onRunInlineHelp: () => void;
@@ -34,6 +35,7 @@ export const MonacoEditor: React.FC<MonacoEditorProps> = ({
   recentActions,
   agentLiveItems,
   selectedProject,
+  appTheme,
   onSetActiveFile,
   onCloseFile,
   onRunInlineHelp,
@@ -196,7 +198,7 @@ export const MonacoEditor: React.FC<MonacoEditorProps> = ({
                     value={activeBuffer?.content || ""}
                     onMount={handleEditorMount}
                     onChange={(next) => onBufferChange(activeFile, next ?? "")}
-                    theme="vs-dark"
+                    theme={appTheme === "dark" ? "vs-dark" : "light"}
                     options={{
                       automaticLayout: true,
                       minimap: { enabled: false },

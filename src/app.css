@@ -28,6 +28,31 @@
   --radius-sm: 6px;
 }
 
+:root[data-app-theme="light"] {
+  color-scheme: light;
+  --bg: #f8f5ec;
+  --bg-2: #eee8dc;
+  --panel: rgba(255, 255, 255, 0.78);
+  --panel-strong: rgba(255, 255, 255, 0.94);
+  --panel-soft: rgba(23, 23, 23, 0.045);
+  --surface: rgba(23, 23, 23, 0.045);
+  --surface-strong: rgba(23, 23, 23, 0.075);
+  --border: rgba(23, 23, 23, 0.12);
+  --border-strong: rgba(23, 23, 23, 0.22);
+  --text: #171717;
+  --text-soft: rgba(23, 23, 23, 0.72);
+  --muted: rgba(23, 23, 23, 0.52);
+  --brand: #171717;
+  --brand-strong: #171717;
+  --brand-soft: rgba(182, 255, 107, 0.32);
+  --success: #0f8b5f;
+  --danger: #c24155;
+  --warning: #9a6a08;
+  --shadow-xl: 0 28px 70px rgba(36, 30, 17, 0.16);
+  --shadow-lg: 0 18px 44px rgba(36, 30, 17, 0.12);
+  --shadow-md: 0 10px 22px rgba(36, 30, 17, 0.09);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -44,8 +69,7 @@ body {
   overflow: hidden;
   color: var(--text);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background:
-    linear-gradient(180deg, #101115 0%, #08090b 100%);
+  background: var(--bg);
 }
 
 a,
@@ -102,6 +126,25 @@ a {
   position: relative;
   z-index: 10;
   flex-wrap: wrap;
+}
+
+:root[data-app-theme="light"] .shell {
+  background:
+    radial-gradient(circle at top left, rgba(182, 255, 107, 0.22), transparent 34%),
+    linear-gradient(180deg, #faf7ef 0%, #f2eddf 100%);
+}
+
+:root[data-app-theme="light"] .topbar {
+  border-bottom-color: rgba(23, 23, 23, 0.1);
+  background: rgba(255, 255, 255, 0.76);
+  box-shadow: 0 18px 48px rgba(36, 30, 17, 0.08);
+}
+
+:root[data-app-theme="light"] .brandMark {
+  color: #171717;
+  background: #b6ff6b;
+  border-color: rgba(23, 23, 23, 0.14);
+  box-shadow: inset -4px -4px 0 rgba(23, 23, 23, 0.08);
 }
 
 .brandBlock {
@@ -176,6 +219,29 @@ a {
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.04);
   color: var(--text-soft);
+}
+
+:root[data-app-theme="light"] .topbarPill,
+:root[data-app-theme="light"] .topbarPath,
+:root[data-app-theme="light"] .agentStatusPill,
+:root[data-app-theme="light"] .tag,
+:root[data-app-theme="light"] .assistStatusPill,
+:root[data-app-theme="light"] .assistHintPill,
+:root[data-app-theme="light"] .providerStatusChip,
+:root[data-app-theme="light"] .previewStatusPill,
+:root[data-app-theme="light"] .pathCrumb,
+:root[data-app-theme="light"] .topbarUserBadge,
+:root[data-app-theme="light"] .topbarModeSwitch,
+:root[data-app-theme="light"] .segmentedControl,
+:root[data-app-theme="light"] .commandBarButton,
+:root[data-app-theme="light"] .btn,
+:root[data-app-theme="light"] .topbarSelect,
+:root[data-app-theme="light"] .settingsInput,
+:root[data-app-theme="light"] .settingsSelect,
+:root[data-app-theme="light"] .textarea.promptBox {
+  background: rgba(255, 255, 255, 0.72);
+  border-color: rgba(23, 23, 23, 0.11);
+  color: var(--text);
 }
 
 .topbarPill {
@@ -311,6 +377,24 @@ a {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
+:root[data-app-theme="light"] .btn.primary {
+  border-color: rgba(23, 23, 23, 0.12);
+  background: #171717;
+  color: #ffffff;
+}
+
+:root[data-app-theme="light"] .btn.primary:hover:not(:disabled) {
+  background: #2b2b2b;
+}
+
+:root[data-app-theme="light"] .topbarPill.success,
+:root[data-app-theme="light"] .previewStatusPill.live,
+:root[data-app-theme="light"] .providerStatusChip.connected {
+  color: #0f513a;
+  border-color: rgba(15, 139, 95, 0.24);
+  background: rgba(15, 139, 95, 0.11);
+}
+
 .btn.primary:hover:not(:disabled) {
   background: linear-gradient(135deg, rgba(124, 140, 255, 0.4), rgba(124, 140, 255, 0.22));
 }
@@ -405,6 +489,44 @@ a {
   box-shadow: none;
   min-height: 0;
   backdrop-filter: blur(14px);
+}
+
+:root[data-app-theme="light"] .pane {
+  background: rgba(255, 255, 255, 0.82);
+  border-color: rgba(23, 23, 23, 0.1);
+  box-shadow: 0 18px 46px rgba(36, 30, 17, 0.08);
+}
+
+:root[data-app-theme="light"] .hybridEditorPane,
+:root[data-app-theme="light"] .hybridExplorerPane,
+:root[data-app-theme="light"] .fullAgentRail,
+:root[data-app-theme="light"] .fullAgentCenterStage,
+:root[data-app-theme="light"] .fullAgentPreview,
+:root[data-app-theme="light"] .hybridSidePane {
+  background: rgba(255, 255, 255, 0.62);
+}
+
+:root[data-app-theme="light"] .hybridExplorerPane {
+  border-right-color: rgba(23, 23, 23, 0.1);
+}
+
+:root[data-app-theme="light"] .codeEditorShell {
+  background: #ffffff;
+  border-color: rgba(23, 23, 23, 0.1);
+}
+
+:root[data-app-theme="light"] .hybridTerminalPanel {
+  background: #171717;
+  border-top-color: rgba(23, 23, 23, 0.12);
+}
+
+:root[data-app-theme="light"] .terminalTabs {
+  border-bottom-color: rgba(255, 255, 255, 0.1);
+}
+
+:root[data-app-theme="light"] .topbarUserAvatar {
+  background: #b6ff6b;
+  color: #171717;
 }
 
 .hybridLayout,
@@ -2884,6 +3006,31 @@ a {
   transition: transform 180ms ease, box-shadow 180ms ease;
 }
 
+.splineNavActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.splineThemeToggle {
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(23, 23, 23, 0.11);
+  border-radius: 999px;
+  background: white;
+  color: #171717;
+  cursor: pointer;
+  box-shadow: 0 14px 32px rgba(36, 30, 17, 0.08);
+  transition: transform 180ms ease, background 180ms ease, color 180ms ease;
+}
+
+.splineThemeToggle:hover {
+  transform: translateY(-2px);
+}
+
 .splineNavCta:hover,
 .splinePrimaryButton:hover,
 .splineSecondaryButton:hover {
@@ -3427,6 +3574,83 @@ a {
   color: #171717;
 }
 
+:root[data-app-theme="dark"] .splineLanding {
+  color: #f4f1ea;
+  background:
+    radial-gradient(circle at 16% 6%, rgba(132, 230, 255, 0.14), transparent 30%),
+    radial-gradient(circle at 86% 18%, rgba(255, 154, 213, 0.13), transparent 28%),
+    linear-gradient(180deg, #111111 0%, #171717 48%, #0d0d0d 100%);
+}
+
+:root[data-app-theme="dark"] .splineNav {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(23, 23, 23, 0.72);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.28);
+}
+
+:root[data-app-theme="dark"] .splineBrandButton,
+:root[data-app-theme="dark"] .splineHeroCopy h1,
+:root[data-app-theme="dark"] .splineSectionHeader h2,
+:root[data-app-theme="dark"] .splineGalleryCard h3,
+:root[data-app-theme="dark"] .splineAgentPanels h3,
+:root[data-app-theme="dark"] .splineTemplateTile strong,
+:root[data-app-theme="dark"] .splineWorkflowRail strong,
+:root[data-app-theme="dark"] .splineResourceGrid strong,
+:root[data-app-theme="dark"] .splineFaqList summary,
+:root[data-app-theme="dark"] .splineFooter .authFooterGrid strong {
+  color: #f4f1ea;
+}
+
+:root[data-app-theme="dark"] .splineHeroCopy p,
+:root[data-app-theme="dark"] .splineGalleryCard p,
+:root[data-app-theme="dark"] .splineAgentPanels p,
+:root[data-app-theme="dark"] .splineTemplateTile span,
+:root[data-app-theme="dark"] .splineWorkflowRail p,
+:root[data-app-theme="dark"] .splineResourceGrid p,
+:root[data-app-theme="dark"] .splineFaqList p,
+:root[data-app-theme="dark"] .splineFooter .authFooterBrand p,
+:root[data-app-theme="dark"] .splineFooter .authFooterBottom,
+:root[data-app-theme="dark"] .splineFooter .authFooterGrid a,
+:root[data-app-theme="dark"] .splineFooter .authFooterGrid span {
+  color: rgba(244, 241, 234, 0.66);
+}
+
+:root[data-app-theme="dark"] .splineLanding .authNavLinks {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+:root[data-app-theme="dark"] .splineLanding .authNavLinks a {
+  color: rgba(244, 241, 234, 0.68);
+}
+
+:root[data-app-theme="dark"] .splineLanding .authNavLinks a:hover,
+:root[data-app-theme="dark"] .splineThemeToggle,
+:root[data-app-theme="dark"] .splineSecondaryButton,
+:root[data-app-theme="dark"] .splineAgentPanels article,
+:root[data-app-theme="dark"] .splineTemplateTile,
+:root[data-app-theme="dark"] .splineWorkflowRail div,
+:root[data-app-theme="dark"] .splineResourceGrid article,
+:root[data-app-theme="dark"] .splineFaqList details,
+:root[data-app-theme="dark"] .splineLanding .authProviderLogoChip {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #f4f1ea;
+}
+
+:root[data-app-theme="dark"] .splineThemeToggle {
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.22);
+}
+
+:root[data-app-theme="dark"] .splinePrimaryButton,
+:root[data-app-theme="dark"] .splineNavCta {
+  background: #b6ff6b;
+  color: #171717;
+}
+
+:root[data-app-theme="dark"] .splineFooter {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
 @keyframes splineFloat {
   0%, 100% {
     translate: 0 0;
@@ -3471,6 +3695,10 @@ a {
   .splineLanding .authNavLinks,
   .splineNavCta {
     display: none;
+  }
+
+  .splineNavActions {
+    margin-left: auto;
   }
 
   .splineLandingMain {
@@ -4819,4 +5047,59 @@ a {
   .authSectionHeader h2 {
     font-size: 30px;
   }
+}
+
+:root[data-app-theme="light"] .topbar,
+:root[data-app-theme="light"] .pane,
+:root[data-app-theme="light"] .missionCard,
+:root[data-app-theme="light"] .previewMiniShell,
+:root[data-app-theme="light"] .previewViewport,
+:root[data-app-theme="light"] .previewBody,
+:root[data-app-theme="light"] .sidebarBody {
+  border-color: rgba(23, 23, 23, 0.1);
+}
+
+:root[data-app-theme="light"] .hybridEditorPane,
+:root[data-app-theme="light"] .hybridExplorerPane,
+:root[data-app-theme="light"] .fullAgentRail,
+:root[data-app-theme="light"] .fullAgentCenterStage,
+:root[data-app-theme="light"] .fullAgentPreview,
+:root[data-app-theme="light"] .hybridSidePane {
+  background: rgba(255, 255, 255, 0.62);
+}
+
+:root[data-app-theme="light"] .pane,
+:root[data-app-theme="light"] .missionCard,
+:root[data-app-theme="light"] .newProjectModal {
+  background: rgba(255, 255, 255, 0.82);
+}
+
+:root[data-app-theme="light"] .codeEditorShell,
+:root[data-app-theme="light"] .emptyEditor {
+  background: #ffffff;
+  border-color: rgba(23, 23, 23, 0.1);
+}
+
+:root[data-app-theme="light"] .hybridTerminalPanel,
+:root[data-app-theme="light"] .terminalViewport {
+  background: #171717;
+  color: rgba(255, 255, 255, 0.88);
+}
+
+:root[data-app-theme="light"] .terminalTabs {
+  background: #171717;
+  border-bottom-color: rgba(255, 255, 255, 0.1);
+}
+
+:root[data-app-theme="light"] .terminalTab,
+:root[data-app-theme="light"] .terminalStatusText,
+:root[data-app-theme="light"] .terminalLine,
+:root[data-app-theme="light"] .terminalInputLine,
+:root[data-app-theme="light"] .terminalCommandInput {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+:root[data-app-theme="light"] .terminalCommandInput {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
 }

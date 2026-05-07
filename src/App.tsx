@@ -53,7 +53,7 @@ import {
 
 import { Topbar } from "./components/navigation/Topbar";
 import { AgentOrb } from "./components/agent/AgentOrb";
-import { ArrowRight, Bot, BookOpen, Boxes, PanelsTopLeft, Rocket, Sparkles, Workflow } from "lucide-react";
+import { ArrowRight, Bot, BookOpen, Boxes, Moon, PanelsTopLeft, Rocket, Sparkles, Sun, Workflow } from "lucide-react";
 import { runAgentWorkflow } from "./agent/workflow";
 import { errorMessage, notifyToast } from "./app/feedback";
 import { ensurePreviewRunningFlow, isHostedBrowser } from "./preview/runtime";
@@ -63,6 +63,7 @@ const HybridWorkspace = lazy(() => import("./modes/HybridWorkspace").then((modul
 const FullAgentWorkspace = lazy(() => import("./modes/FullAgentWorkspace").then((module) => ({ default: module.FullAgentWorkspace })));
 
 const MODEL_PROVIDERS = ["OpenRouter", "Gemini", "Groq", "OpenAI", "Anthropic", "Together", "Cerebras", "xAI"];
+type AppTheme = "light" | "dark";
 
 function getDefaultAssistPaneWidth() {
   if (typeof window === "undefined") return 280;
@@ -101,6 +102,11 @@ export default function App() {
   const [agentRunViewPinned, setAgentRunViewPinned] = useState(false);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [appTheme, setAppTheme] = useState<AppTheme>(() => {
+    if (typeof window === "undefined") return "light";
+    const saved = window.localStorage.getItem("appora-theme");
+    return saved === "dark" || saved === "light" ? saved : "light";
+  });
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [projectTemplates, setProjectTemplates] = useState<ProjectTemplate[]>([]);
@@ -148,6 +154,11 @@ export default function App() {
     if (provider === "xai") return source.xai_model || "";
     return "";
   };
+
+  useEffect(() => {
+    document.documentElement.dataset.appTheme = appTheme;
+    window.localStorage.setItem("appora-theme", appTheme);
+  }, [appTheme]);
 
   const modelFromPreferences = (provider: ProviderChoice, prefs: UserPreferences | null): string => {
     if (!prefs) return "";
@@ -816,10 +827,15 @@ export default function App() {
           <a href="#tutorial" onClick={(event) => scrollLandingTo(event, "tutorial")}>Workflow</a>
           <a href="#docs" onClick={(event) => scrollLandingTo(event, "docs")}>Resources</a>
         </nav>
-        <button className="splineNavCta" onClick={startGoogleLogin}>
-          Start building
-          <ArrowRight size={16} />
-        </button>
+        <div className="splineNavActions">
+          <button className="splineThemeToggle" type="button" onClick={() => setAppTheme((theme) => theme === "dark" ? "light" : "dark")} title={`Switch to ${appTheme === "dark" ? "light" : "dark"} mode`} aria-label={`Switch to ${appTheme === "dark" ? "light" : "dark"} mode`}>
+            {appTheme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
+          </button>
+          <button className="splineNavCta" onClick={startGoogleLogin}>
+            Start building
+            <ArrowRight size={16} />
+          </button>
+        </div>
       </header>
 
       <main className="splineLandingMain">
@@ -1226,6 +1242,7 @@ export default function App() {
       onBufferChange={(path, content) => setBuffers((p) => ({ ...p, [path]: { content, dirty: true } }))}
       onStartResizeAssistPane={() => setIsResizingAssistPane(true)}
       onEnsurePreviewRunning={ensurePreviewRunning}
+      appTheme={appTheme}
     />
   );
 
@@ -1247,7 +1264,7 @@ export default function App() {
   );
 
   return (
-    <div className="shell">
+    <div className={`shell appTheme-${appTheme}`}>
       <Toaster position="top-right" richColors />
       {hostedProjects.length > 0 ? null : null}
       <input ref={folderInputRef} type="file" multiple style={{ display: "none" }} onChange={e => importPickedFolder(e.target.files)} />
@@ -1301,9 +1318,11 @@ export default function App() {
         identity={identity}
         previewUrl={previewUrl}
         buildMode={buildMode}
+        appTheme={appTheme}
         showExplorerPane={showExplorerPane}
         showAssistPane={showAssistPane}
         onQuickSwitchBuildMode={quickSwitchBuildMode}
+        onToggleTheme={() => setAppTheme((theme) => theme === "dark" ? "light" : "dark")}
         onOpenSettings={openSettings}
         onEnsurePreviewRunning={ensurePreviewRunning}
         onToggleExplorerPane={() => setShowExplorerPane((v) => !v)}

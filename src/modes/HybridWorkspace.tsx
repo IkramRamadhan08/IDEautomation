@@ -41,6 +41,7 @@ interface HybridWorkspaceProps {
   onBufferChange: (path: string, content: string) => void;
   onStartResizeAssistPane: () => void;
   onEnsurePreviewRunning: () => void | Promise<string | void>;
+  appTheme: "light" | "dark";
 }
 
 export const HybridWorkspace: React.FC<HybridWorkspaceProps> = ({
@@ -79,6 +80,7 @@ export const HybridWorkspace: React.FC<HybridWorkspaceProps> = ({
   onBufferChange,
   onStartResizeAssistPane,
   onEnsurePreviewRunning,
+  appTheme,
 }) => {
   const toolItems = agentLiveItems.filter(isOperationalLiveItem).slice(-4);
   const hasInteractionItems = recentActions.length > 0 || toolItems.length > 0;
@@ -120,6 +122,7 @@ export const HybridWorkspace: React.FC<HybridWorkspaceProps> = ({
         onSaveFile={onSaveFile}
         onOpenFile={onOpenFile}
         onBufferChange={onBufferChange}
+        appTheme={appTheme}
       />
 
       {showAssistPane && (

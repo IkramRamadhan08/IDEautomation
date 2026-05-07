@@ -1,15 +1,17 @@
 import React from "react";
 import { type BuildMode, type IdentityInfo } from "../../types";
-import { Settings, Play, Command, PanelLeft, PanelRight, CircleDot, Search } from "lucide-react";
+import { Settings, Play, Command, PanelLeft, PanelRight, CircleDot, Search, Moon, Sun } from "lucide-react";
 
 interface TopbarProps {
   ws: string | null;
   identity: IdentityInfo | null;
   previewUrl: string;
   buildMode: BuildMode;
+  appTheme: "light" | "dark";
   showExplorerPane: boolean;
   showAssistPane: boolean;
   onQuickSwitchBuildMode: (mode: BuildMode) => void;
+  onToggleTheme: () => void;
   onOpenSettings: () => void;
   onEnsurePreviewRunning: () => void;
   onToggleExplorerPane: () => void;
@@ -21,9 +23,11 @@ export const Topbar: React.FC<TopbarProps> = ({
   identity,
   previewUrl,
   buildMode,
+  appTheme,
   showExplorerPane,
   showAssistPane,
   onQuickSwitchBuildMode,
+  onToggleTheme,
   onOpenSettings,
   onEnsurePreviewRunning,
   onToggleExplorerPane,
@@ -94,6 +98,11 @@ export const Topbar: React.FC<TopbarProps> = ({
         <button className="btn iconBtn" onClick={onOpenSettings} title="Settings">
           <Settings size={16} />
           <span>Settings</span>
+        </button>
+
+        <button className="btn iconBtn themeToggleBtn" onClick={onToggleTheme} title={`Switch to ${appTheme === "dark" ? "light" : "dark"} mode`}>
+          {appTheme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+          <span>{appTheme === "dark" ? "Light" : "Dark"}</span>
         </button>
 
         <button className="btn primary iconBtn" disabled={!ws || hostedPreviewUnavailable} onClick={onEnsurePreviewRunning} title={hostedPreviewUnavailable ? "Preview tidak tersedia di deployment ini" : "Preview"}>
