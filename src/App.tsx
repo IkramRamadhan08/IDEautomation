@@ -874,7 +874,7 @@ export default function App() {
             {appTheme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
           </button>
           <button className="apporaNavCta" onClick={startGoogleLogin}>
-            Start building
+            Start Building
             <ArrowRight size={16} />
           </button>
         </div>
@@ -883,30 +883,58 @@ export default function App() {
       <main className="apporaMain">
         <section className="apporaHero" aria-label="Appora">
           <div className="apporaHeroCopy">
-            <h1>Build real apps with an agent that can code, remember, and ship.</h1>
+            <h1>THE FUTURE JUST IN YOUR HEAD</h1>
             <p>
               Appora turns a rough idea into a hosted workspace with Clara for planning, Raka for implementation,
               live preview, project memory, Supabase data, and Vercel-ready output.
             </p>
             <div className="apporaHeroActions">
               <button className="apporaPrimaryButton" onClick={startGoogleLogin}>
-                Continue with Google
+                Continue With Google
                 <ArrowRight size={17} />
               </button>
               <a className="apporaSecondaryButton" href="#tutorial">
-                Watch the flow
+                Watch The Flow
                 <PlayCircle size={17} />
               </a>
             </div>
             <div className="apporaSignalRow" aria-label="Platform signals">
-              <span>BYOK models</span>
-              <span>Serverless ready</span>
-              <span>Project memory</span>
+              <span>BYOK Models</span>
+              <span>Serverless Ready</span>
+              <span>Project Memory</span>
             </div>
           </div>
 
           <div className="apporaHeroVisual" aria-label="Agent workflow preview">
             <div className="apporaOrbitGlow" />
+            <div className="apporaMascotStage" aria-label="Clara and Raka companions">
+              {[
+                { name: "Clara", role: "Planner", tone: "clara" },
+                { name: "Raka", role: "Builder", tone: "raka" },
+              ].map((agent) => (
+                <div className={`apporaMascot ${agent.tone}`} key={agent.name}>
+                  <div className="apporaMascotHalo" />
+                  <div className="apporaMascotBody">
+                    <div className="apporaMascotHelmet">
+                      <span className="apporaMascotAntenna" />
+                      <div className="apporaMascotFace">
+                        <span className="apporaMascotEye left" />
+                        <span className="apporaMascotEye right" />
+                        <span className="apporaMascotMouth" />
+                      </div>
+                    </div>
+                    <div className="apporaMascotSuit">
+                      <span />
+                      <strong>{agent.name.slice(0, 1)}</strong>
+                    </div>
+                  </div>
+                  <div className="apporaMascotTag">
+                    <strong>{agent.name}</strong>
+                    <span>{agent.role}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
             <div className="apporaCommandPanel">
               <div className="apporaPanelChrome">
                 <span />
@@ -943,7 +971,7 @@ export default function App() {
         <section className="apporaSection apporaSplit" id="tutorial">
           <div className="apporaSectionCopy">
             <span className="apporaSectionIndex">01</span>
-            <h2>From chat to working project without switching tools.</h2>
+            <h2>From Chat To Working Project Without Switching Tools.</h2>
             <p>Start with normal language. The agent plans the project, edits files, runs terminal actions, previews the result, and keeps every action visible.</p>
           </div>
           <div className="apporaWorkflowStack">
@@ -965,7 +993,7 @@ export default function App() {
         <section className="apporaSection apporaAgents" aria-label="Agents">
           <div className="apporaSectionHeader">
             <span className="apporaSectionIndex">02</span>
-            <h2>Two agents, one build loop.</h2>
+            <h2>Two Agents, One Build Loop.</h2>
           </div>
           <div className="apporaAgentCards">
             <article>
@@ -984,7 +1012,7 @@ export default function App() {
         <section className="apporaSection" id="templates">
           <div className="apporaSectionHeader wide">
             <span className="apporaSectionIndex">03</span>
-            <h2>Production-shaped starters for people who do not want a blank repo.</h2>
+            <h2>Production-Shaped Starters For People Who Do Not Want A Blank Repo.</h2>
           </div>
           <div className="apporaTemplateGrid">
             {templateCards.map(([title, copy]) => (
@@ -1000,7 +1028,7 @@ export default function App() {
         <section className="apporaSection apporaSplit" id="docs">
           <div className="apporaSectionCopy">
             <span className="apporaSectionIndex">04</span>
-            <h2>Bring your own keys, use the models people actually have.</h2>
+            <h2>Bring Your Own Keys, Use The Models People Actually Have.</h2>
             <p>Provider routing is built for free-tier friendly experimentation: OpenAI, Gemini, OpenRouter, Groq, Together, Cerebras, xAI, and more through hosted settings.</p>
           </div>
           <div className="apporaDocsPanel">
@@ -1013,14 +1041,14 @@ export default function App() {
         <section className="apporaSection apporaFaqSection" id="faq">
           <div className="apporaSectionHeader">
             <span className="apporaSectionIndex">05</span>
-            <h2>Built for hosted web, not a local-only toy.</h2>
+            <h2>Built For Hosted Web, Not A Local-Only Toy.</h2>
           </div>
           <div className="apporaFaqGrid">
             {[
-              ["Can it deploy?", "The app is shaped for Vercel serverless with Supabase as the durable backend."],
-              ["Can beginners use it?", "The primary flow is prompt, preview, edit with agent help, then ship from a saved project."],
-              ["Can I use free models?", "Yes. The provider layer supports BYOK model routing so users can pick what they already have."],
-              ["Where do actions show?", "Agent actions belong in Live Interaction. Model conversation streams through the orb/chat surface."],
+              ["Can It Deploy?", "The app is shaped for Vercel serverless with Supabase as the durable backend."],
+              ["Can Beginners Use It?", "The primary flow is prompt, preview, edit with agent help, then ship from a saved project."],
+              ["Can I Use Free Models?", "Yes. The provider layer supports BYOK model routing so users can pick what they already have."],
+              ["Where Do Actions Show?", "Agent actions belong in Live Interaction. Model conversation streams through the orb/chat surface."],
             ].map(([question, answer]) => (
               <article key={question}>
                 <HelpCircle size={18} />
@@ -1032,7 +1060,7 @@ export default function App() {
         </section>
 
         <section className="apporaFinalCta">
-          <h2>Start with an idea. Leave with a project you can keep improving.</h2>
+          <h2>Start With An Idea. Leave With A Project You Can Keep Improving.</h2>
           <button className="apporaPrimaryButton" onClick={startGoogleLogin}>
             Open Appora
             <ArrowRight size={17} />
