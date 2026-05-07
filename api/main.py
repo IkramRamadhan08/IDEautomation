@@ -1972,6 +1972,7 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "mcp_registry": True,
             "mcp_tool_execution": True,
             "autonomous_mcp_loop": True,
+            "deep_work_preflight": True,
             "interaction_intent_detection": True,
             "command_conversation_boundary": True,
             "read_only_inspection_boundary": True,

@@ -372,6 +372,94 @@ class AgentToolsRegressionTests(unittest.TestCase):
             self.assertTrue(read.ok)
             self.assertIn("supabase rag", read.text)
 
+    def test_local_tools_skip_dependency_and_build_output_dirs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src").mkdir(parents=True)
+            (project_dir / "node_modules" / "pkg").mkdir(parents=True)
+            (project_dir / "dist").mkdir(parents=True)
+            (project_dir / ".git").mkdir(parents=True)
+            (project_dir / "src" / "App.tsx").write_text("visible needle\n", encoding="utf-8")
+            (project_dir / "node_modules" / "pkg" / "index.js").write_text("hidden needle\n", encoding="utf-8")
+            (project_dir / "dist" / "bundle.js").write_text("hidden needle\n", encoding="utf-8")
+            (project_dir / ".git" / "config").write_text("hidden needle\n", encoding="utf-8")
+
+            search = execute_local_tool(
+                ws_root,
+                project_dir,
+                tool_name="repo_search",
+                arguments={"project_root": "demo", "query": "needle", "max_matches": 20},
+            )
+            self.assertTrue(search.ok)
+            self.assertIn("demo/src/App.tsx", search.text)
+            self.assertNotIn("node_modules", search.text)
+            self.assertNotIn("dist/bundle.js", search.text)
+            self.assertNotIn(".git", search.text)
+
+            listing = execute_local_tool(
+                ws_root,
+                project_dir,
+                tool_name="repo_list",
+                arguments={"project_root": "demo", "max_files": 20},
+            )
+            self.assertTrue(listing.ok)
+            self.assertIn("src/App.tsx", listing.text)
+            self.assertNotIn("node_modules", listing.text)
+            self.assertNotIn("dist/bundle.js", listing.text)
+            self.assertNotIn(".git", listing.text)
+
+    def test_local_tools_provide_repo_overview_package_scripts_and_dependency_graph(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src" / "components").mkdir(parents=True)
+            (project_dir / "package.json").write_text(
+                json.dumps(
+                    {
+                        "name": "demo",
+                        "packageManager": "pnpm@10.0.0",
+                        "scripts": {"dev": "vite", "lint": "eslint .", "build": "vite build"},
+                        "dependencies": {"@vitejs/plugin-react": "^latest", "react": "^19.0.0"},
+                        "devDependencies": {"typescript": "^5.0.0"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (project_dir / "src" / "components" / "Button.tsx").write_text(
+                "export function Button() { return <button /> }\n",
+                encoding="utf-8",
+            )
+            (project_dir / "src" / "App.tsx").write_text(
+                "import React from 'react';\nimport { Button } from './components/Button';\nexport default function App() { return <Button /> }\n",
+                encoding="utf-8",
+            )
+
+            read_many = execute_local_tool(
+                ws_root,
+                project_dir,
+                tool_name="repo_read_many",
+                arguments={"paths": ["demo/src/App.tsx", "demo/src/components/Button.tsx"]},
+            )
+            self.assertTrue(read_many.ok)
+            self.assertIn("FILE: demo/src/App.tsx", read_many.text)
+            self.assertIn("FILE: demo/src/components/Button.tsx", read_many.text)
+
+            scripts = execute_local_tool(ws_root, project_dir, tool_name="package_scripts", arguments={"project_root": "demo"})
+            self.assertTrue(scripts.ok)
+            self.assertIn('"lint": "eslint ."', scripts.text)
+            self.assertIn('"build"', scripts.text)
+
+            overview = execute_local_tool(ws_root, project_dir, tool_name="repo_overview", arguments={"project_root": "demo"})
+            self.assertTrue(overview.ok)
+            self.assertIn('"package_manager": "pnpm@10.0.0"', overview.text)
+            self.assertIn("src/App.tsx", overview.text)
+
+            graph = execute_local_tool(ws_root, project_dir, tool_name="dependency_graph", arguments={"project_root": "demo"})
+            self.assertTrue(graph.ok)
+            self.assertIn("src/components/Button.tsx", graph.text)
+            self.assertIn("react", graph.text)
+
 
 class HybridSeedRegressionTests(unittest.TestCase):
     def test_saas_brief_defaults_to_app_workspace_not_dashboard(self) -> None:

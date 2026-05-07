@@ -644,6 +644,7 @@ export type AgentCapabilities = {
     mcp_registry: boolean;
     mcp_tool_execution: boolean;
     autonomous_mcp_loop?: boolean;
+    deep_work_preflight?: boolean;
     interaction_intent_detection?: boolean;
     command_conversation_boundary?: boolean;
     read_only_inspection_boundary?: boolean;

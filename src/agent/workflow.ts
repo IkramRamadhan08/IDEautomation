@@ -13,7 +13,7 @@ import {
   type ProjectValidationRun,
 } from "../api";
 import type { AgentAction, AgentAuditSnapshot, AgentChange, AgentLiveItem, BuildMode, FileBuffer } from "../types";
-import { buildRepairPrompt, getAgentRunPlan } from "./runtime";
+import { buildRepairPrompt, buildVerifierRepairPrompt, getAgentRunPlan } from "./runtime";
 
 type Setter<T> = Dispatch<SetStateAction<T>>;
 
@@ -233,6 +233,20 @@ function pushRunTrace(pushAgentLiveItem: WorkflowArgs["pushAgentLiveItem"], trac
   }
 }
 
+function failedVerifierChecks(trace: AgentRunTrace | undefined) {
+  return (trace?.verification || []).filter((check) => !check.ok);
+}
+
+function blockingVerifierChecks(trace: AgentRunTrace | undefined) {
+  return failedVerifierChecks(trace).filter((check) => check.name !== "full-agent-coverage");
+}
+
+function verifierFailureSummary(trace: AgentRunTrace | undefined) {
+  const failed = failedVerifierChecks(trace);
+  if (failed.length === 0) return "";
+  return failed.slice(0, 3).map((check) => `${check.name}: ${check.detail}`).join(" • ");
+}
+
 export async function runAgentWorkflow({
   agentInput,
   agentStatus,
@@ -377,6 +391,7 @@ export async function runAgentWorkflow({
 
   const runShellActionsForPass = async (actions: AgentAction[]) => {
     for (const action of actions) {
+      const actionType = String(action.type || "").trim().toLowerCase();
       if (action.type === "mcp") {
         pushAgentLiveItem({
           role: "tool",
@@ -386,7 +401,24 @@ export async function runAgentWorkflow({
         });
         continue;
       }
-      if (action.type !== "shell" || typeof action.command !== "string") continue;
+      if (action.type === "tool") {
+        pushAgentLiveItem({
+          role: "tool",
+          tone: "error",
+          text: "Ada action tool mentah yang lolos ke frontend. Tool read-only harus dieksekusi backend sebelum final.",
+          meta: JSON.stringify(action),
+        });
+        continue;
+      }
+      if (actionType !== "shell" || typeof action.command !== "string") {
+        pushAgentLiveItem({
+          role: "tool",
+          tone: "error",
+          text: `Action agent tidak dikenal: ${actionType || "unknown"}.`,
+          meta: JSON.stringify(action),
+        });
+        continue;
+      }
       setWorkingMsg(`Menjalankan: ${action.command}`);
       pushAgentLiveItem({ role: "tool", tone: "working", text: "Aku jalanin command tambahan buat ngeberesin flow.", meta: action.command });
       try {
@@ -525,8 +557,8 @@ export async function runAgentWorkflow({
     setAgentReply(res.spoken);
     setAgentLog(res.log);
 
-    const changes: AgentChange[] = res.changes || [];
-    const actions: AgentAction[] = res.actions || [];
+    let changes: AgentChange[] = res.changes || [];
+    let actions: AgentAction[] = res.actions || [];
     const resolvedIntent = res.intent || inputIntent;
 
     pushAgentLiveItem({
@@ -535,24 +567,76 @@ export async function runAgentWorkflow({
       text: `Backend intent final: ${intentSummary(resolvedIntent)}.`,
       meta: resolvedIntent.rationale,
     });
-    const mainTrace = res.trace;
+    let mainTrace = res.trace;
     pushRunTrace(pushAgentLiveItem, mainTrace);
     if (mainTrace) {
       setAgentAuditTrail([toAuditSnapshot("Main pass", mainTrace, makeAgentLiveId)]);
+    }
+    let mainVerifierFailures = failedVerifierChecks(mainTrace);
+    let mainBlockingVerifierFailures = blockingVerifierChecks(mainTrace);
+    if (mainVerifierFailures.length > 0) {
+      pushAgentLiveItem({
+        role: "tool",
+        tone: "error",
+        text: `Verifier nemu ${mainVerifierFailures.length} masalah di output agent.`,
+        meta: verifierFailureSummary(mainTrace),
+      });
+    }
+
+    if (
+      mainBlockingVerifierFailures.length > 0
+      && (resolvedIntent.kind === "command" || resolvedIntent.kind === "mixed")
+    ) {
+      setWorkingMsg("Verifier gagal, agent memperbaiki output sebelum apply…");
+      setEditorStatus("Repairing verifier issues before apply...");
+      const verifierRepairRes = await runAgentPass(
+        buildVerifierRepairPrompt(buildMode, agentInput, verifierFailureSummary(mainTrace)),
+        "Repairing verifier issues before apply...",
+      );
+      appendLogSection("VERIFIER REPAIR PASS", verifierRepairRes.log);
+      if (verifierRepairRes.spoken) setAgentReply(verifierRepairRes.spoken);
+      const verifierRepairTrace = verifierRepairRes.trace;
+      pushRunTrace(pushAgentLiveItem, verifierRepairTrace);
+      if (verifierRepairTrace) {
+        setAgentAuditTrail((prev) => [...prev, toAuditSnapshot("Verifier repair pass", verifierRepairTrace, makeAgentLiveId)]);
+      }
+      changes = verifierRepairRes.changes || [];
+      actions = verifierRepairRes.actions || [];
+      mainTrace = verifierRepairTrace;
+      mainVerifierFailures = failedVerifierChecks(mainTrace);
+      mainBlockingVerifierFailures = blockingVerifierChecks(mainTrace);
+      if (mainVerifierFailures.length > 0) {
+        pushAgentLiveItem({
+          role: "tool",
+          tone: "error",
+          text: `Verifier repair masih nemu ${mainVerifierFailures.length} masalah.`,
+          meta: verifierFailureSummary(mainTrace),
+        });
+      }
     }
 
     combinedActions = [...actions];
     setAgentActions(combinedActions);
 
-    if (changes.length > 0) {
+    const outputSafeToApply = mainBlockingVerifierFailures.length === 0;
+    if (!outputSafeToApply) {
+      pushAgentLiveItem({
+        role: "tool",
+        tone: "error",
+        text: "Output agent diblokir sebelum apply karena gagal verifier.",
+        meta: verifierFailureSummary(mainTrace),
+      });
+    }
+
+    if (outputSafeToApply && changes.length > 0) {
       await applyChanges(changes);
     }
 
-    if (actions.length > 0) {
+    if (outputSafeToApply && actions.length > 0) {
       await runShellActionsForPass(actions);
     }
 
-    const auditedPreviewUrl = changes.length > 0 ? await refreshPreviewSurface() : currentPreviewUrl;
+    const auditedPreviewUrl = outputSafeToApply && changes.length > 0 ? await refreshPreviewSurface() : currentPreviewUrl;
 
     let validation: ProjectValidationRun | null = null;
     let previewAudit: PreviewAuditResult | null = null;
@@ -564,10 +648,10 @@ export async function runAgentWorkflow({
       finalToast = { kind: "success", message: "Jawaban siap, tidak ada perubahan file" };
     }
 
-    if ((changes.length > 0 || actions.length > 0) && shouldRunValidation) {
+    if (outputSafeToApply && (changes.length > 0 || actions.length > 0) && shouldRunValidation) {
       validation = await runValidationPass("VALIDATION PASS 1");
     }
-    if (auditedPreviewUrl && (changes.length > 0 || actions.length > 0) && shouldAuditPreview) {
+    if (outputSafeToApply && auditedPreviewUrl && (changes.length > 0 || actions.length > 0) && shouldAuditPreview) {
       previewAudit = await runPreviewAuditPass(auditedPreviewUrl, "PREVIEW AUDIT 1");
     }
 
@@ -595,6 +679,15 @@ export async function runAgentWorkflow({
       if (repairTrace) {
         setAgentAuditTrail((prev) => [...prev, toAuditSnapshot("Repair pass", repairTrace, makeAgentLiveId)]);
       }
+      const repairVerifierFailures = failedVerifierChecks(repairTrace);
+      if (repairVerifierFailures.length > 0) {
+        pushAgentLiveItem({
+          role: "tool",
+          tone: "error",
+          text: `Verifier repair masih nemu ${repairVerifierFailures.length} masalah.`,
+          meta: verifierFailureSummary(repairTrace),
+        });
+      }
 
       const repairChanges: AgentChange[] = repairRes.changes || [];
       const repairActions: AgentAction[] = repairRes.actions || [];
@@ -614,19 +707,28 @@ export async function runAgentWorkflow({
 
       const validationStillFailing = Boolean(revalidation && !revalidation.ok);
       const previewStillFailing = Boolean(reaudit && reaudit.issues.length > 0);
+      const verifierStillFailing = repairVerifierFailures.length > 0;
 
-      if (!validationStillFailing && !previewStillFailing) {
+      if (!validationStillFailing && !previewStillFailing && !verifierStillFailing) {
         finalStatus = "Agent task finished, validated, and preview-audited";
         finalToast = { kind: "success", message: "Tugas selesai, lolos validasi, dan preview lebih rapi" };
       } else {
-        finalStatus = previewStillFailing ? "Preview audit still found issues" : "Validation still failing";
-        finalToast = { kind: "warning", message: "Perubahan diterapkan, tapi masih ada temuan audit yang perlu dicek" };
+        finalStatus = verifierStillFailing ? "Agent verifier still found issues" : previewStillFailing ? "Preview audit still found issues" : "Validation still failing";
+        finalToast = { kind: "warning", message: "Perubahan diterapkan, tapi masih ada temuan verifier/audit yang perlu dicek" };
       }
     } else if (!hasValidationIssues && !hasPreviewIssues && (validation || previewAudit)) {
       finalStatus = previewAudit ? "Agent task finished, validated, and preview-audited" : "Agent task finished and validated";
       finalToast = {
         kind: "success",
         message: previewAudit ? "Tugas selesai, lolos validasi, dan preview diaudit" : "Tugas selesai dan lolos validasi",
+      };
+    } else if (mainVerifierFailures.length > 0) {
+      finalStatus = "Agent verifier found issues";
+      finalToast = {
+        kind: outputSafeToApply && (changes.length > 0 || actions.length > 0) ? "warning" : "error",
+        message: outputSafeToApply && (changes.length > 0 || actions.length > 0)
+          ? "Agent selesai dengan warning verifier"
+          : "Output agent diblokir karena gagal verifier",
       };
     } else if (changes.length > 0 && shouldDrivePreview) {
       finalStatus = auditedPreviewUrl ? "Preview refreshed after agent changes" : "Preview live after agent changes";

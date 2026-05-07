@@ -255,6 +255,7 @@ class AgentRuntimeState(TypedDict, total=False):
     mcp_call_count: int
     intent: dict[str, Any]
     plan: list[dict[str, Any]]
+    deep_preflight: bool
     emit: EventEmitter | None
 
 
@@ -867,6 +868,90 @@ def _plan_node(state: AgentRuntimeState) -> AgentRuntimeState:
     return {"context": ctx, "plan": plan}
 
 
+def _should_run_deep_preflight(ctx: PreparedAgentContext, user_input: str) -> bool:
+    if not ctx.project_dir.exists() or not ctx.project_dir.is_dir():
+        return False
+    if not (ctx.intent.should_write_files or ctx.intent.kind == "inspection"):
+        return False
+    hint = (user_input or "").lower()
+    deep_keywords = (
+        "app besar", "app gede", "large", "complex", "architecture", "arsitektur", "refactor",
+        "project", "keseluruhan", "entire", "full", "production", "cursor", "claude code",
+        "agent", "agentic", "build", "bikin", "fitur", "feature",
+    )
+    if ctx.is_full_agent and ctx.intent.should_write_files:
+        return True
+    if any(keyword in hint for keyword in deep_keywords):
+        return True
+    if ctx.intent.kind == "inspection" and any(keyword in hint for keyword in ("audit", "review", "cek", "analyze", "analisa")):
+        return True
+    return False
+
+
+def _workspace_path(ctx: PreparedAgentContext, rel: str) -> str:
+    clean = str(rel or "").strip().lstrip("/")
+    if not clean:
+        return clean
+    return f"{ctx.project_root}/{clean}" if ctx.project_root != "." and not clean.startswith(ctx.project_root + "/") else clean
+
+
+def _deep_preflight_node(state: AgentRuntimeState) -> AgentRuntimeState:
+    ctx = state["context"]
+    if not _should_run_deep_preflight(ctx, state["input"]):
+        return {"context": ctx, "deep_preflight": False}
+
+    _emit(state, "status", {"phase": "tooling", "message": "Deep work preflight: baca struktur repo, scripts, dan dependency graph dulu..."})
+    root_arg = ctx.project_root or "."
+    tool_specs: list[dict[str, Any]] = [
+        {"tool": "repo_overview", "arguments": {"project_root": root_arg, "max_files": 700}},
+        {"tool": "package_scripts", "arguments": {"project_root": root_arg}},
+        {"tool": "dependency_graph", "arguments": {"project_root": root_arg, "max_files": 220}},
+    ]
+
+    read_many_paths: list[str] = []
+    for rel in [ctx.active_rel, *ctx.open_files, "package.json", "src/App.tsx", "src/main.tsx", "src/app.css", "PRD.md", "README.md"]:
+        local = _localize_project_rel(rel, ctx.project_root)
+        if not local or local in read_many_paths:
+            continue
+        if local in ctx.all_files:
+            read_many_paths.append(local)
+    if read_many_paths:
+        tool_specs.append({
+            "tool": "repo_read_many",
+            "arguments": {
+                "paths": [_workspace_path(ctx, rel) for rel in read_many_paths[:8]],
+                "max_chars_per_file": 10000,
+                "max_total_chars": 50000,
+            },
+        })
+
+    results = []
+    for spec in tool_specs:
+        tool_name = str(spec.get("tool") or "")
+        arguments = spec.get("arguments") if isinstance(spec.get("arguments"), dict) else {}
+        result = execute_local_tool(ctx.ws_root, ctx.project_dir, tool_name=tool_name, arguments=arguments)
+        results.append(result)
+        ctx.trace_local_tools_used.append(
+            {
+                "tool": result.tool,
+                "ok": result.ok,
+                "duration_ms": result.duration_ms,
+                "error": result.error,
+                "arguments": result.arguments,
+                "text": result.text[:240],
+            }
+        )
+        if not result.ok:
+            ctx.trace_warnings.append({"phase": "deep-preflight", "message": f"Tool {result.tool} gagal ({result.error or 'unknown error'})."[:240]})
+
+    local_prompt = format_local_tool_results_prompt(results)
+    if local_prompt:
+        ctx.extra_context = f"{ctx.extra_context}\n\nDEEP WORK PREFLIGHT:\n{local_prompt}".strip()
+    ctx.trace_warnings.append({"phase": "deep-preflight", "message": f"Deep work preflight memakai {sum(1 for item in results if item.ok)}/{len(results)} local tools."})
+    _emit(state, "delta", {"message": f"Deep preflight selesai: {sum(1 for item in results if item.ok)} tool context masuk."})
+    return {"context": ctx, "deep_preflight": True}
+
+
 def _draft_node(state: AgentRuntimeState) -> AgentRuntimeState:
     ctx = state["context"]
     _emit(state, "status", {"phase": "context_ready", "message": "Konteks siap, agent mulai mikir..."})
@@ -942,13 +1027,14 @@ def _draft_node(state: AgentRuntimeState) -> AgentRuntimeState:
 
 def _route_after_draft(state: AgentRuntimeState) -> str:
     ctx = state["context"]
-    if not ctx.intent.should_write_files:
-        return "finalize"
-
     mcp_actions, tool_actions, _other_actions = _split_runtime_actions(list(state.get("actions") or []))
-    if ctx.intent.should_run_tools and int(state.get("tool_iterations") or 0) < _max_tool_loops_for_run(ctx):
+    can_run_read_tools = ctx.intent.should_run_tools or ctx.intent.kind == "inspection"
+    if can_run_read_tools and int(state.get("tool_iterations") or 0) < _max_tool_loops_for_run(ctx):
         if tool_actions or mcp_actions or (not state.get("actions") and ctx.suggested_mcp_actions):
             return "tooling"
+
+    if not ctx.intent.should_write_files:
+        return "finalize"
 
     changes = state.get("changes") or []
     if not changes:
@@ -1152,6 +1238,15 @@ def _verify_node(state: AgentRuntimeState) -> AgentRuntimeState:
     invalid_shell = [item for item in shell_actions if not isinstance(item.get("command"), str) or not str(item.get("command") or "").strip()]
     add("valid-shell-actions", not invalid_shell, "Shell actions have commands." if not invalid_shell else f"{len(invalid_shell)} shell action(s) missing command.")
 
+    unexecuted_tool_actions = [
+        item for item in actions if str(item.get("type") or "").lower() in {"tool", "mcp"}
+    ]
+    add(
+        "no-unexecuted-tool-actions",
+        not unexecuted_tool_actions,
+        "No raw tool/MCP actions remain in final output." if not unexecuted_tool_actions else f"{len(unexecuted_tool_actions)} raw tool/MCP action(s) were not executed.",
+    )
+
     if ctx.is_full_agent and ctx.intent.should_write_files:
         add(
             "full-agent-coverage",
@@ -1180,6 +1275,23 @@ def _finalize_node(state: AgentRuntimeState) -> AgentRuntimeState:
     if not ctx.intent.should_write_files:
         normalized_changes = []
         normalized_actions = []
+    else:
+        safe_actions: list[dict[str, Any]] = []
+        dropped_actions: list[str] = []
+        for item in normalized_actions:
+            action_type = str(item.get("type") or "").strip().lower()
+            if action_type == "shell":
+                safe_actions.append(item)
+            elif action_type in {"tool", "mcp"}:
+                dropped_actions.append(action_type)
+            else:
+                dropped_actions.append(action_type or "unknown")
+        if dropped_actions:
+            ctx.trace_warnings.append({
+                "phase": "finalize",
+                "message": f"Dropped unsupported/unexecuted frontend actions: {', '.join(dropped_actions[:6])}."[:240],
+            })
+        normalized_actions = safe_actions
     persona_tag = f"persona={ctx.mode_profile.persona_name.lower()}"
     if persona_tag not in log:
         log = f"{log} {persona_tag}".strip()
@@ -1254,6 +1366,7 @@ _AGENT_GRAPH_BUILDER.add_node("memory", _hydrate_memory_node)
 _AGENT_GRAPH_BUILDER.add_node("skills", _resolve_skills_node)
 _AGENT_GRAPH_BUILDER.add_node("mcp", _inspect_mcp_node)
 _AGENT_GRAPH_BUILDER.add_node("plan", _plan_node)
+_AGENT_GRAPH_BUILDER.add_node("deep_preflight", _deep_preflight_node)
 _AGENT_GRAPH_BUILDER.add_node("draft", _draft_node)
 _AGENT_GRAPH_BUILDER.add_node("tooling", _execute_tooling_node)
 _AGENT_GRAPH_BUILDER.add_node("refine", _refine_node)
@@ -1264,7 +1377,8 @@ _AGENT_GRAPH_BUILDER.add_edge("intent", "memory")
 _AGENT_GRAPH_BUILDER.add_edge("memory", "skills")
 _AGENT_GRAPH_BUILDER.add_edge("skills", "mcp")
 _AGENT_GRAPH_BUILDER.add_edge("mcp", "plan")
-_AGENT_GRAPH_BUILDER.add_edge("plan", "draft")
+_AGENT_GRAPH_BUILDER.add_edge("plan", "deep_preflight")
+_AGENT_GRAPH_BUILDER.add_edge("deep_preflight", "draft")
 _AGENT_GRAPH_BUILDER.add_conditional_edges("draft", _route_after_draft, {"tooling": "tooling", "refine": "refine", "finalize": "verify"})
 _AGENT_GRAPH_BUILDER.add_edge("tooling", "draft")
 _AGENT_GRAPH_BUILDER.add_edge("refine", "verify")

@@ -303,3 +303,22 @@ export function buildRepairPrompt(
 
   return sections.filter(Boolean).join("\n\n");
 }
+
+export function buildVerifierRepairPrompt(
+  buildMode: BuildMode,
+  originalInput: string,
+  verifierReport: string,
+): string {
+  const profile = getBuildModeProfile(buildMode);
+  const modeDirective = buildMode === "full-agent"
+    ? `${profile.personaName}, stay in full ownership mode and produce a complete, valid implementation.`
+    : `${profile.personaName}, stay scoped, but return a valid actionable fix.`;
+
+  return [
+    originalInput.trim(),
+    modeDirective,
+    "Your previous output failed the agent verifier before it could be safely applied.",
+    `Verifier failures:\n${verifierReport.trim()}`,
+    "Return a corrected JSON result. If this is a build/edit request, include valid file changes or valid shell actions. Do not return raw tool/MCP actions as the final output.",
+  ].filter(Boolean).join("\n\n");
+}

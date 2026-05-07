@@ -4,6 +4,8 @@ import json
 import re
 import time
 from dataclasses import dataclass
+import os
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +55,19 @@ _LOCAL_TOOLS: list[LocalToolInfo] = [
         },
     ),
     LocalToolInfo(
+        name="repo_read_many",
+        description="Read multiple text files from the workspace in one call (read-only, bounded output).",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "paths": {"type": "array", "items": {"type": "string"}, "description": "Paths relative to workspace"},
+                "max_chars_per_file": {"type": "integer", "default": 12000},
+                "max_total_chars": {"type": "integer", "default": 50000},
+            },
+            "required": ["paths"],
+        },
+    ),
+    LocalToolInfo(
         name="repo_search",
         description="Search for a substring/regex in project files (read-only).",
         input_schema={
@@ -64,6 +79,38 @@ _LOCAL_TOOLS: list[LocalToolInfo] = [
                 "max_matches": {"type": "integer", "default": 120},
             },
             "required": ["query"],
+        },
+    ),
+    LocalToolInfo(
+        name="package_scripts",
+        description="Inspect package.json scripts, dependencies, package manager hints, and validation candidates (read-only).",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "project_root": {"type": "string", "description": "Project root relative to workspace"},
+            },
+        },
+    ),
+    LocalToolInfo(
+        name="repo_overview",
+        description="Summarize project shape, key files, language mix, and likely stack from the file tree (read-only).",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "project_root": {"type": "string", "description": "Project root relative to workspace"},
+                "max_files": {"type": "integer", "default": 500},
+            },
+        },
+    ),
+    LocalToolInfo(
+        name="dependency_graph",
+        description="Build a bounded import/dependency graph for JS/TS source files (read-only).",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "project_root": {"type": "string", "description": "Project root relative to workspace"},
+                "max_files": {"type": "integer", "default": 180},
+            },
         },
     ),
 ]
@@ -84,6 +131,9 @@ _IGNORED_DIRS = {
     "api/.venv",
 }
 
+_BINARY_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".zip", ".pdf", ".ttf", ".woff", ".woff2"}
+_IMPORT_RE = re.compile(r'(?:import\s+(?:[^"\']+?\s+from\s+)?|export\s+[^"\']*?\s+from\s+|import\()\s*["\']([^"\']+)["\']')
+
 
 def _should_ignore_path(rel_posix: str) -> bool:
     rel = rel_posix.strip().lstrip("/")
@@ -101,19 +151,28 @@ def _should_ignore_path(rel_posix: str) -> bool:
 
 def _walk_candidate_files(project_dir: Path, *, limit_files: int = 1400) -> list[Path]:
     out: list[Path] = []
-    for path in project_dir.rglob("*"):
-        if len(out) >= limit_files:
-            break
+    for root, dirnames, filenames in os.walk(project_dir):
+        root_path = Path(root)
         try:
-            rel = path.relative_to(project_dir).as_posix()
+            root_rel = root_path.relative_to(project_dir).as_posix()
         except Exception:
             continue
-        if _should_ignore_path(rel):
-            if path.is_dir():
-                # rglob still walks into it, but cheap early skip isn't available without custom walk
+        dirnames[:] = [
+            dirname
+            for dirname in dirnames
+            if not _should_ignore_path(dirname if root_rel == "." else f"{root_rel}/{dirname}")
+        ]
+        for filename in filenames:
+            if len(out) >= limit_files:
+                return out
+            path = root_path / filename
+            try:
+                rel = path.relative_to(project_dir).as_posix()
+            except Exception:
                 continue
-        if path.is_file():
-            if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".zip", ".pdf", ".ttf", ".woff", ".woff2"}:
+            if _should_ignore_path(rel):
+                continue
+            if path.suffix.lower() in _BINARY_SUFFIXES:
                 continue
             out.append(path)
     return out
@@ -122,23 +181,83 @@ def _walk_candidate_files(project_dir: Path, *, limit_files: int = 1400) -> list
 def _repo_tree_lines(project_dir: Path, *, max_files: int = 300) -> list[str]:
     max_files = max(10, min(int(max_files or 300), 2000))
     lines: list[str] = []
-    count = 0
-    for path in project_dir.rglob("*"):
-        if count >= max_files:
-            break
+    for root, dirnames, filenames in os.walk(project_dir):
+        root_path = Path(root)
         try:
-            rel = path.relative_to(project_dir).as_posix()
+            root_rel = root_path.relative_to(project_dir).as_posix()
         except Exception:
             continue
-        if _should_ignore_path(rel):
-            continue
-        if path.is_dir():
-            continue
-        if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".zip", ".pdf", ".ttf", ".woff", ".woff2"}:
-            continue
-        lines.append(rel)
-        count += 1
+        dirnames[:] = [
+            dirname
+            for dirname in dirnames
+            if not _should_ignore_path(dirname if root_rel == "." else f"{root_rel}/{dirname}")
+        ]
+        for filename in filenames:
+            if len(lines) >= max_files:
+                return sorted(lines)
+            path = root_path / filename
+            try:
+                rel = path.relative_to(project_dir).as_posix()
+            except Exception:
+                continue
+            if _should_ignore_path(rel):
+                continue
+            if path.suffix.lower() in _BINARY_SUFFIXES:
+                continue
+            lines.append(rel)
     return sorted(lines)
+
+
+def _safe_project_dir(ws_root: Path, project_root: str) -> Path:
+    req_root = str(project_root or ".").strip() or "."
+    proj = safe_join(ws_root, req_root)
+    if not proj.exists() or not proj.is_dir():
+        raise RuntimeError("project_root must exist inside workspace")
+    return proj
+
+
+def _read_package_json(project_dir: Path) -> dict[str, Any]:
+    package_json = project_dir / "package.json"
+    if not package_json.exists():
+        return {}
+    try:
+        data = json.loads(package_json.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _package_manager_hint(project_dir: Path, package_json: dict[str, Any]) -> str:
+    package_manager = str(package_json.get("packageManager") or "").strip()
+    if package_manager:
+        return package_manager
+    if (project_dir / "pnpm-lock.yaml").exists():
+        return "pnpm"
+    if (project_dir / "yarn.lock").exists():
+        return "yarn"
+    if (project_dir / "bun.lockb").exists() or (project_dir / "bun.lock").exists():
+        return "bun"
+    if (project_dir / "package-lock.json").exists():
+        return "npm"
+    return "unknown"
+
+
+def _resolve_relative_import(source_rel: str, specifier: str, candidates: set[str]) -> str | None:
+    if not specifier.startswith("."):
+        return None
+    raw = (Path(source_rel).parent / specifier).as_posix()
+    names: list[str] = []
+    if Path(raw).suffix:
+        names.append(raw)
+    else:
+        for suffix in [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json", ".css"]:
+            names.append(raw + suffix)
+            names.append(f"{raw}/index{suffix}")
+    for candidate in names:
+        clean = candidate.lstrip("./")
+        if clean in candidates:
+            return clean
+    return None
 
 
 
@@ -173,6 +292,37 @@ def execute_local_tool(ws_root: Path, project_dir: Path, *, tool_name: str, argu
                 raw={"path": path, "truncated": len(content) > max_chars},
                 duration_ms=duration_ms,
             )
+
+        if name == "repo_read_many":
+            raw_paths = args.get("paths")
+            if not isinstance(raw_paths, list) or not raw_paths:
+                raise RuntimeError("paths is required")
+            max_chars_per_file = int(args.get("max_chars_per_file") or 12000)
+            max_chars_per_file = max(1000, min(max_chars_per_file, 50_000))
+            max_total_chars = int(args.get("max_total_chars") or 50_000)
+            max_total_chars = max(4000, min(max_total_chars, 160_000))
+            files: list[dict[str, Any]] = []
+            chunks: list[str] = []
+            used = 0
+            for raw_path in raw_paths[:24]:
+                path = str(raw_path or "").strip().lstrip("/")
+                if not path:
+                    continue
+                try:
+                    content = read_text(ws_root, path)
+                except Exception as exc:
+                    files.append({"path": path, "ok": False, "error": str(exc)})
+                    continue
+                remaining = max_total_chars - used
+                if remaining <= 0:
+                    files.append({"path": path, "ok": False, "error": "total output budget reached"})
+                    continue
+                clipped = content[: min(max_chars_per_file, remaining)]
+                used += len(clipped)
+                files.append({"path": path, "ok": True, "chars": len(content), "truncated": len(clipped) < len(content)})
+                chunks.append(f"FILE: {path}\n{clipped}")
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            return LocalToolCallResult(tool=name, arguments=args, ok=True, text="\n\n".join(chunks), raw={"files": files}, duration_ms=duration_ms)
 
         if name == "repo_search":
             req_root = str(args.get("project_root") or ".").strip() or "."
@@ -216,6 +366,89 @@ def execute_local_tool(ws_root: Path, project_dir: Path, *, tool_name: str, argu
             preview = "\n".join(f"{m['path']}:{m['line']} {m['text']}" for m in matches[:120])
             duration_ms = int((time.perf_counter() - started) * 1000)
             return LocalToolCallResult(tool=name, arguments=args, ok=True, text=preview[:6000], raw={"matches": matches}, duration_ms=duration_ms)
+
+        if name == "package_scripts":
+            req_root = str(args.get("project_root") or ".").strip() or "."
+            proj = _safe_project_dir(ws_root, req_root)
+            package_json = _read_package_json(proj)
+            scripts = package_json.get("scripts") if isinstance(package_json.get("scripts"), dict) else {}
+            deps = package_json.get("dependencies") if isinstance(package_json.get("dependencies"), dict) else {}
+            dev_deps = package_json.get("devDependencies") if isinstance(package_json.get("devDependencies"), dict) else {}
+            validation_candidates = [script for script in ["typecheck", "check", "lint", "test", "build", "preview", "dev"] if script in scripts]
+            raw = {
+                "name": package_json.get("name"),
+                "package_manager": _package_manager_hint(proj, package_json),
+                "scripts": scripts,
+                "validation_candidates": validation_candidates,
+                "dependencies": sorted(str(name) for name in deps.keys())[:80],
+                "devDependencies": sorted(str(name) for name in dev_deps.keys())[:80],
+            }
+            text = json.dumps(raw, ensure_ascii=False, indent=2)
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            return LocalToolCallResult(tool=name, arguments=args, ok=True, text=text[:8000], raw=raw, duration_ms=duration_ms)
+
+        if name == "repo_overview":
+            req_root = str(args.get("project_root") or ".").strip() or "."
+            max_files = int(args.get("max_files") or 500)
+            proj = _safe_project_dir(ws_root, req_root)
+            files = _repo_tree_lines(proj, max_files=max_files)
+            suffixes = Counter(Path(rel).suffix.lower() or "(none)" for rel in files)
+            key_files = [
+                rel for rel in files
+                if rel in {"package.json", "vite.config.ts", "vite.config.js", "tsconfig.json", "src/App.tsx", "src/main.tsx", "src/app.css", "README.md", "PRD.md"}
+            ]
+            package_json = _read_package_json(proj)
+            overview = {
+                "project_root": req_root,
+                "file_count_sample": len(files),
+                "top_extensions": suffixes.most_common(12),
+                "key_files": key_files,
+                "package_manager": _package_manager_hint(proj, package_json),
+                "package_name": package_json.get("name"),
+                "scripts": sorted((package_json.get("scripts") or {}).keys()) if isinstance(package_json.get("scripts"), dict) else [],
+                "sample_files": files[:120],
+            }
+            text = json.dumps(overview, ensure_ascii=False, indent=2)
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            return LocalToolCallResult(tool=name, arguments=args, ok=True, text=text[:10000], raw=overview, duration_ms=duration_ms)
+
+        if name == "dependency_graph":
+            req_root = str(args.get("project_root") or ".").strip() or "."
+            max_files = int(args.get("max_files") or 180)
+            proj = _safe_project_dir(ws_root, req_root)
+            candidates = [
+                path for path in _walk_candidate_files(proj, limit_files=max_files * 3)
+                if path.suffix.lower() in {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}
+            ][:max_files]
+            rel_candidates = {path.relative_to(proj).as_posix() for path in candidates}
+            graph: dict[str, list[str]] = {}
+            external = Counter()
+            for file_path in candidates:
+                rel = file_path.relative_to(proj).as_posix()
+                try:
+                    content = file_path.read_text(encoding="utf-8", errors="ignore")[:80_000]
+                except Exception:
+                    continue
+                imports: list[str] = []
+                for spec in _IMPORT_RE.findall(content):
+                    resolved = _resolve_relative_import(rel, spec, rel_candidates)
+                    if resolved:
+                        imports.append(resolved)
+                    elif not spec.startswith("."):
+                        package_name = spec.split("/", 1)[0] if not spec.startswith("@") else "/".join(spec.split("/")[:2])
+                        external.update([package_name])
+                if imports:
+                    graph[rel] = sorted(dict.fromkeys(imports))
+            payload = {
+                "project_root": req_root,
+                "files_scanned": len(candidates),
+                "internal_edges": sum(len(value) for value in graph.values()),
+                "external_imports": external.most_common(40),
+                "graph": dict(list(graph.items())[:120]),
+            }
+            text = json.dumps(payload, ensure_ascii=False, indent=2)
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            return LocalToolCallResult(tool=name, arguments=args, ok=True, text=text[:14000], raw=payload, duration_ms=duration_ms)
 
         raise RuntimeError(f"Unknown local tool: {name}")
 
