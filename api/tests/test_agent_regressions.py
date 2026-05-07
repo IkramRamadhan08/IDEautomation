@@ -885,6 +885,60 @@ class HybridSeedRegressionTests(unittest.TestCase):
 
 
 class HostedProfileIdRegressionTests(unittest.TestCase):
+    def test_background_agent_job_can_be_resumed_by_worker(self) -> None:
+        seen: list[tuple[str | None, str, str | None]] = []
+
+        def fake_run_agent_impl(req, event_cb=None, job_id=None):
+            seen.append((CURRENT_PROFILE_ID.get(), req.input, req.active_file))
+            if event_cb:
+                event_cb("done", {"result": {"ok": True, "changes": [], "actions": []}})
+            return {"ok": True, "job_id": job_id}
+
+        with patch("api.main._run_agent_impl", side_effect=fake_run_agent_impl), \
+            patch("api.main.has_supabase", return_value=False):
+            client = TestClient(main_app)
+            queued = client.post(
+                "/api/agent",
+                json={
+                    "input": "fix header",
+                    "project_root": "demo",
+                    "build_mode": "hybrid",
+                    "active_file": "src/App.tsx",
+                    "background": True,
+                },
+                headers={"X-VoiceIDE-Session": "worker-test", "X-VoiceIDE-User": "user-1"},
+            )
+            self.assertEqual(queued.status_code, 200)
+            job_id = queued.json()["job_id"]
+
+            run = client.post(
+                "/api/agent/worker/run",
+                json={"job_id": job_id, "limit": 1},
+                headers={"X-VoiceIDE-Session": "worker-test", "X-VoiceIDE-User": "user-1"},
+            )
+
+        self.assertEqual(run.status_code, 200)
+        self.assertEqual(run.json()["processed"], 1)
+        self.assertEqual(seen, [("user-1", "fix header", "src/App.tsx")])
+
+    def test_worker_endpoint_requires_secret_in_serverless(self) -> None:
+        with patch("api.main._is_serverless_runtime", return_value=True), \
+            patch.dict("os.environ", {"AGENT_WORKER_SECRET": "secret"}, clear=False):
+            client = TestClient(main_app)
+            resp = client.post("/api/agent/worker/run", json={"limit": 1})
+
+        self.assertEqual(resp.status_code, 401)
+
+    def test_worker_get_endpoint_accepts_secret_for_cron(self) -> None:
+        with patch("api.main._is_serverless_runtime", return_value=True), \
+            patch("api.main.list_agent_jobs_by_status", return_value=[]), \
+            patch.dict("os.environ", {"AGENT_WORKER_SECRET": "secret"}, clear=False):
+            client = TestClient(main_app)
+            resp = client.get("/api/agent/worker/run?limit=1", headers={"Authorization": "Bearer secret"})
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["processed"], 0)
+
     def test_streaming_agent_keeps_profile_context_in_worker_thread(self) -> None:
         seen_profile_ids: list[str | None] = []
 

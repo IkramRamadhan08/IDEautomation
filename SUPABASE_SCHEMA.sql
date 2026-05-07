@@ -92,6 +92,7 @@ create table if not exists public.agent_jobs (
   build_mode text,
   status text not null default 'queued',
   input text not null default '',
+  request_payload jsonb not null default '{}'::jsonb,
   result jsonb,
   error text,
   created_at timestamptz not null default now(),
@@ -99,6 +100,9 @@ create table if not exists public.agent_jobs (
   started_at timestamptz,
   completed_at timestamptz
 );
+
+alter table public.agent_jobs
+  add column if not exists request_payload jsonb not null default '{}'::jsonb;
 
 create table if not exists public.agent_job_events (
   id bigserial primary key,

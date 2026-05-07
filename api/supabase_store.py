@@ -190,7 +190,7 @@ def delete_project_file(*, owner_id: str, project_root: str, path: str) -> bool:
     return True
 
 
-def create_agent_job(*, owner_id: str, job_id: str, project_root: str, build_mode: str | None, input_text: str) -> dict[str, Any] | None:
+def create_agent_job(*, owner_id: str, job_id: str, project_root: str, build_mode: str | None, input_text: str, request_payload: dict[str, Any] | None = None) -> dict[str, Any] | None:
     client = get_supabase_admin()
     if not client:
         return None
@@ -201,6 +201,7 @@ def create_agent_job(*, owner_id: str, job_id: str, project_root: str, build_mod
         "build_mode": build_mode,
         "status": "queued",
         "input": str(input_text or "")[:20_000],
+        "request_payload": request_payload if isinstance(request_payload, dict) else {},
     }
     try:
         res = client.table("agent_jobs").insert(payload).execute()
@@ -257,6 +258,37 @@ def get_agent_job(*, owner_id: str, job_id: str) -> dict[str, Any] | None:
         res = client.table("agent_jobs").select("*").eq("id", job_id).eq("owner_id", owner_id).limit(1).execute()
         data = getattr(res, "data", None) or []
         return data[0] if data else None
+    except Exception:
+        return None
+
+
+def get_agent_job_any(*, job_id: str) -> dict[str, Any] | None:
+    client = get_supabase_admin()
+    if not client:
+        return None
+    try:
+        res = client.table("agent_jobs").select("*").eq("id", job_id).limit(1).execute()
+        data = getattr(res, "data", None) or []
+        return data[0] if data else None
+    except Exception:
+        return None
+
+
+def list_agent_jobs_by_status(*, status: str = "queued", limit: int = 3) -> list[dict[str, Any]] | None:
+    client = get_supabase_admin()
+    if not client:
+        return None
+    try:
+        res = (
+            client.table("agent_jobs")
+            .select("*")
+            .eq("status", status)
+            .order("created_at")
+            .limit(max(1, min(int(limit or 3), 10)))
+            .execute()
+        )
+        data = getattr(res, "data", None)
+        return data if isinstance(data, list) else []
     except Exception:
         return None
 

@@ -27,10 +27,12 @@ from api.supabase_store import (
     create_agent_job,
     delete_project_file as supabase_delete_project_file,
     get_agent_job,
+    get_agent_job_any,
     get_agent_memory_chunks_summary,
     get_agent_memory_chunks_table_status,
     has_supabase,
     list_agent_job_events,
+    list_agent_jobs_by_status,
     list_project_files as supabase_list_project_files,
     list_projects as supabase_list_projects,
     update_agent_job,
@@ -112,7 +114,7 @@ SENSITIVE_HOSTED_API_PREFIXES = (
 def _requires_verified_hosted_user(path: str) -> bool:
     if not has_supabase():
         return False
-    if path in {"/api/healthz", "/api/settings", "/api/models"}:
+    if path in {"/api/healthz", "/api/settings", "/api/models", "/api/agent/worker/run"}:
         return False
     return any(path == prefix or path.startswith(prefix + "/") for prefix in SENSITIVE_HOSTED_API_PREFIXES)
 
@@ -418,6 +420,7 @@ def _create_agent_job_record(req: "AgentReq") -> str:
         "build_mode": build_mode,
         "status": "queued",
         "input": str(getattr(req, "input", "") or "")[:20_000],
+        "request_payload": _agent_req_payload(req),
         "result": None,
         "error": None,
         "events": [],
@@ -431,8 +434,30 @@ def _create_agent_job_record(req: "AgentReq") -> str:
         project_root=project_root,
         build_mode=build_mode,
         input_text=str(getattr(req, "input", "") or ""),
+        request_payload=_agent_req_payload(req),
     )
     return job_id
+
+
+def _agent_req_payload(req: "AgentReq") -> dict:
+    data = req.model_dump(mode="json")
+    data["stream"] = False
+    data["background"] = False
+    return data
+
+
+def _agent_req_from_job(job: dict) -> "AgentReq":
+    payload = job.get("request_payload")
+    if not isinstance(payload, dict) or not payload:
+        payload = {
+            "input": str(job.get("input") or ""),
+            "project_root": str(job.get("project_root") or "."),
+            "build_mode": job.get("build_mode"),
+        }
+    payload = dict(payload)
+    payload["stream"] = False
+    payload["background"] = False
+    return AgentReq.model_validate(payload)
 
 
 def _record_agent_job_event(job_id: str | None, event: str, data: dict) -> None:
@@ -447,7 +472,7 @@ def _record_agent_job_event(job_id: str | None, event: str, data: dict) -> None:
         events = job.setdefault("events", [])
         events.append({"id": len(events) + 1, "event_type": event, "payload": payload, "created_at": int(time.time())})
         job["updated_at"] = int(time.time())
-        if event == "status" and payload.get("phase") in {"starting", "queued"}:
+        if event == "status" and payload.get("phase") == "starting":
             job["status"] = "running"
         elif event == "done":
             job["status"] = "completed"
@@ -2095,6 +2120,12 @@ class AgentReq(BaseModel):
     editor_status: str | None = None
     asset_paths: list[str] | None = None
     stream: bool = False
+    background: bool = False
+
+
+class AgentWorkerRunReq(BaseModel):
+    job_id: str | None = None
+    limit: int = 1
 
 
 class ImageAssetResp(BaseModel):
@@ -2380,6 +2411,86 @@ def agent_job_events(job_id: str, after_id: int = 0, limit: int = 200):
     raise HTTPException(404, "agent job not found")
 
 
+def _worker_secret() -> str:
+    return str(os.environ.get("AGENT_WORKER_SECRET") or os.environ.get("CRON_SECRET") or "").strip()
+
+
+def _require_worker_auth(request: Request) -> None:
+    secret = _worker_secret()
+    if not secret and not _is_serverless_runtime():
+        return
+    auth = str(request.headers.get("Authorization") or "").strip()
+    if not secret or auth != f"Bearer {secret}":
+        raise HTTPException(401, "agent worker authorization required")
+
+
+def _run_persisted_agent_job(job: dict, *, event_cb=None) -> dict:
+    owner_id = str(job.get("owner_id") or "").strip()
+    job_id = str(job.get("id") or "").strip()
+    if not owner_id or not job_id:
+        raise HTTPException(400, "invalid agent job record")
+    status = str(job.get("status") or "queued").strip().lower()
+    if status not in {"queued", "failed"}:
+        return {"job_id": job_id, "status": status, "skipped": True}
+
+    req = _agent_req_from_job(job)
+    session_token = CURRENT_SESSION_ID.set(f"agent-worker:{job_id}")
+    user_token = CURRENT_USER_ID.set(owner_id)
+    profile_token = CURRENT_PROFILE_ID.set(owner_id)
+    try:
+        return _run_agent_impl(req, event_cb=event_cb, job_id=job_id)
+    finally:
+        CURRENT_PROFILE_ID.reset(profile_token)
+        CURRENT_USER_ID.reset(user_token)
+        CURRENT_SESSION_ID.reset(session_token)
+
+
+def _run_agent_worker_jobs(*, job_id: str | None, limit: int) -> dict:
+    jobs: list[dict] = []
+    if job_id:
+        job = get_agent_job_any(job_id=job_id)
+        if not job:
+            local = _local_agent_jobs().get(job_id)
+            if isinstance(local, dict):
+                job = local
+        if not job:
+            raise HTTPException(404, "agent job not found")
+        jobs = [job]
+    else:
+        remote_jobs = list_agent_jobs_by_status(status="queued", limit=limit)
+        if remote_jobs is not None:
+            jobs = remote_jobs
+        else:
+            jobs = [
+                job for job in _local_agent_jobs().values()
+                if isinstance(job, dict) and str(job.get("status") or "") == "queued"
+            ][: max(1, min(int(limit or 1), 5))]
+
+    results: list[dict] = []
+    for job in jobs[: max(1, min(int(limit or 1), 5))]:
+        try:
+            result = _run_persisted_agent_job(job)
+            results.append({"job_id": job.get("id"), "ok": True, "result": result})
+        except HTTPException as exc:
+            results.append({"job_id": job.get("id"), "ok": False, "error": str(exc.detail), "status_code": exc.status_code})
+        except Exception as exc:
+            results.append({"job_id": job.get("id"), "ok": False, "error": str(exc)})
+
+    return {"ok": True, "processed": len(results), "results": results}
+
+
+@app.post("/api/agent/worker/run")
+def agent_worker_run(req: AgentWorkerRunReq, request: Request):
+    _require_worker_auth(request)
+    return _run_agent_worker_jobs(job_id=req.job_id, limit=req.limit)
+
+
+@app.get("/api/agent/worker/run")
+def agent_worker_run_get(request: Request, job_id: str | None = None, limit: int = 1):
+    _require_worker_auth(request)
+    return _run_agent_worker_jobs(job_id=job_id, limit=limit)
+
+
 def _run_agent_impl(req: AgentReq, event_cb=None, job_id: str | None = None):
     def emit(event: str, data: dict):
         payload = dict(data or {})
@@ -2458,6 +2569,9 @@ def _run_agent_impl(req: AgentReq, event_cb=None, job_id: str | None = None):
 def agent(req: AgentReq):
     """Suggest a multi-file patch. Adds per-file unified diffs."""
     job_id = _create_agent_job_record(req)
+    if req.background:
+        _record_agent_job_event(job_id, "status", {"phase": "queued", "message": "Agent job queued for background worker.", "job_id": job_id})
+        return {"ok": True, "job_id": job_id, "status": "queued", "background": True}
     if req.stream:
         bound_session_id = CURRENT_SESSION_ID.get()
         bound_user_id = CURRENT_USER_ID.get()

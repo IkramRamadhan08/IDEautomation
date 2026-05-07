@@ -57,9 +57,11 @@ Runtime expectations:
 
 - Agent chat/build requests should stream SSE from `/api/agent` so users see progress before the function finishes.
 - Every `/api/agent` run now gets a `job_id`. When Supabase has the `agent_jobs` and `agent_job_events` tables from `SUPABASE_SCHEMA.sql`, status/events/final result are persisted while the stream runs.
+- `/api/agent` also supports `background: true` for queue-only submission. The full request payload is stored in `agent_jobs.request_payload`, then `/api/agent/worker/run` can resume the job later.
+- `vercel.json` schedules `/api/agent/worker/run?limit=1` every five minutes. Set `CRON_SECRET` or `AGENT_WORKER_SECRET` in Vercel so the worker endpoint is authorized in hosted deployments.
 - Existing Supabase projects can apply only `docs/supabase-agent-jobs.sql` to add those two tables without rerunning the full schema.
 - Clients can poll `GET /api/agent/jobs/{job_id}` and `GET /api/agent/jobs/{job_id}/events` to recover progress/result after a dropped browser connection.
-- Agent jobs still need to stay bounded; for very long builds, split the work into multiple agent turns or move orchestration to a durable workflow runtime.
+- Agent jobs still need to stay bounded; the worker is a durable resume lane for queued jobs, not an unlimited daemon.
 - `/api/run/start` stays disabled on Vercel because a dev server is a long-running process.
 - `/api/terminal/run` should stay scoped to short commands. Long-running commands, watch modes, and background daemons are not compatible with serverless.
 - Durable state belongs in Supabase. `/tmp` is only a per-invocation working cache and can disappear between requests.
