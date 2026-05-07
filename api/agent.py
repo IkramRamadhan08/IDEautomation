@@ -196,13 +196,17 @@ Return ONLY valid JSON with this exact shape:
   "changes": [
     {"path": "relative/path", "new_content": "full content"}
   ],
+  "patches": [
+    {"path": "relative/path", "unified_diff": "--- a/relative/path\n+++ b/relative/path\n@@ ..."}
+  ],
   "actions": [
     {"type": "shell", "command": "npm install ..."}
   ]
 }
 
 Rules:
-- changes must contain FULL file contents, not patches or snippets.
+- Prefer `patches` for edits to existing files when the current file content was provided. Use `changes` with FULL file contents for new files, generated files, or when a patch would be ambiguous.
+- `patches` must be standard unified diff hunks and must apply cleanly to the provided file content. Do not use snippets.
 - The runtime target is Vercel serverless + Supabase. Direct file changes are durable, and shell actions are available when project tooling, installs, validation, or inspection are useful.
 - The user accepts terminal risk. Use shell actions when they materially help the build, while keeping commands project-scoped unless the user asks otherwise.
 - Respect the provided mode/context block. If it says hybrid/IDE mode, keep the scope surgical and preserve the existing architecture.
@@ -217,6 +221,153 @@ Rules:
 - `spoken` is for the orb conversation. Operational activity belongs in `actions` and file `changes`.
 - Output ONLY JSON, with no markdown fences or extra commentary.
 """
+
+
+class PatchApplyError(RuntimeError):
+    pass
+
+
+def _split_lines_keepends(value: str) -> list[str]:
+    if value == "":
+        return []
+    return value.splitlines(keepends=True)
+
+
+def _parse_hunk_header(line: str) -> tuple[int, int, int, int]:
+    match = re.match(r"^@@ -(?P<old_start>\d+)(?:,(?P<old_count>\d+))? \+(?P<new_start>\d+)(?:,(?P<new_count>\d+))? @@", line)
+    if not match:
+        raise PatchApplyError(f"Invalid unified diff hunk header: {line[:120]}")
+    old_count = int(match.group("old_count") or "1")
+    new_count = int(match.group("new_count") or "1")
+    return int(match.group("old_start")), old_count, int(match.group("new_start")), new_count
+
+
+def _apply_unified_diff_to_text(original: str, diff: str) -> str:
+    lines = _split_lines_keepends(original)
+    diff_lines = _split_lines_keepends(diff)
+    if not diff_lines or not any(line.startswith("@@ ") for line in diff_lines):
+        raise PatchApplyError("Patch has no unified diff hunks")
+
+    out: list[str] = []
+    cursor = 0
+    idx = 0
+    while idx < len(diff_lines):
+        line = diff_lines[idx]
+        if line.startswith(("--- ", "+++ ", "diff --git ", "index ")):
+            idx += 1
+            continue
+        if not line.startswith("@@ "):
+            idx += 1
+            continue
+
+        old_start, _old_count, _new_start, _new_count = _parse_hunk_header(line)
+        hunk_pos = max(0, old_start - 1)
+        if hunk_pos < cursor:
+            raise PatchApplyError("Patch hunks overlap or move backwards")
+        out.extend(lines[cursor:hunk_pos])
+        cursor = hunk_pos
+        idx += 1
+
+        while idx < len(diff_lines):
+            hunk_line = diff_lines[idx]
+            if hunk_line.startswith("@@ "):
+                break
+            if hunk_line.startswith(("\\ No newline at end of file", "--- ", "+++ ")):
+                idx += 1
+                continue
+            if not hunk_line:
+                idx += 1
+                continue
+
+            marker = hunk_line[0]
+            body = hunk_line[1:]
+            if marker == " ":
+                if cursor >= len(lines) or lines[cursor] != body:
+                    raise PatchApplyError("Patch context did not match current file content")
+                out.append(lines[cursor])
+                cursor += 1
+            elif marker == "-":
+                if cursor >= len(lines) or lines[cursor] != body:
+                    raise PatchApplyError("Patch removal did not match current file content")
+                cursor += 1
+            elif marker == "+":
+                out.append(body)
+            else:
+                raise PatchApplyError(f"Unsupported patch line: {hunk_line[:120]}")
+            idx += 1
+
+    out.extend(lines[cursor:])
+    return "".join(out)
+
+
+def _workspace_read_for_patch(workspace_root: str | Path | None, rel: str) -> str | None:
+    if not workspace_root:
+        return None
+    try:
+        root = Path(workspace_root)
+        target = (root / rel).resolve()
+        target.relative_to(root.resolve())
+        if target.exists() and target.is_file():
+            return target.read_text(encoding="utf-8")
+    except Exception:
+        return None
+    return None
+
+
+def _source_text_for_patch(
+    *,
+    rel: str,
+    active_path: str,
+    active_content: str,
+    relevant_files: dict[str, str],
+    workspace_root: str | Path | None,
+) -> str | None:
+    if rel == active_path:
+        return active_content
+    if rel in relevant_files:
+        return relevant_files[rel]
+    return _workspace_read_for_patch(workspace_root, rel)
+
+
+def _patches_to_changes(
+    patches: Any,
+    *,
+    active_path: str,
+    active_content: str,
+    relevant_files: dict[str, str],
+    workspace_root: str | Path | None,
+) -> tuple[list[dict[str, str]], list[str]]:
+    if not isinstance(patches, list):
+        return [], []
+    out: list[dict[str, str]] = []
+    warnings: list[str] = []
+    for item in patches:
+        if not isinstance(item, dict):
+            continue
+        rel = str(item.get("path") or "").strip()
+        diff = item.get("unified_diff") or item.get("diff") or item.get("patch")
+        if not rel or not isinstance(diff, str) or not diff.strip():
+            continue
+        if ".." in rel.split("/"):
+            warnings.append(f"patch rejected for invalid path: {rel}")
+            continue
+        source = _source_text_for_patch(
+            rel=rel,
+            active_path=active_path,
+            active_content=active_content,
+            relevant_files=relevant_files,
+            workspace_root=workspace_root,
+        )
+        if source is None:
+            warnings.append(f"patch skipped because source file was not available: {rel}")
+            continue
+        try:
+            new_content = _apply_unified_diff_to_text(source, diff)
+        except PatchApplyError as exc:
+            warnings.append(f"patch failed for {rel}: {exc}")
+            continue
+        out.append({"path": rel, "new_content": new_content})
+    return out, warnings
 
 SYSTEM_SCAFFOLD = """You are an expert product engineer and front-end architect.
 Create a brand new React + Vite + TypeScript website/app for a non-coder using a hosted web builder.
@@ -678,14 +829,31 @@ def suggest(
         new_content = item.get("new_content")
         if rel and isinstance(new_content, str):
             out_changes.append({"path": rel, "new_content": new_content})
-    
+
+    patch_changes, patch_warnings = _patches_to_changes(
+        data.get("patches"),
+        active_path=path,
+        active_content=str(content or ""),
+        relevant_files=relevant_files,
+        workspace_root=workspace_root,
+    )
+    if patch_changes:
+        existing_paths = {item["path"] for item in out_changes}
+        for patch_change in patch_changes:
+            if patch_change["path"] not in existing_paths:
+                out_changes.append(patch_change)
+                existing_paths.add(patch_change["path"])
+
     actions = data.get("actions") or []
     if not isinstance(actions, list):
         actions = []
 
     spoken = str(data.get("spoken") or ("I prepared the requested changes." if out_changes else "I reviewed the request but did not propose any file edits."))
+    patch_note = f" patches={len(patch_changes)}" if patch_changes else ""
+    patch_warning_note = f" patch_warnings={len(patch_warnings)}" if patch_warnings else ""
     log = (
         f"provider={provider} model={model} files={len(out_changes)} actions={len(actions)} "
+        f"{patch_note}{patch_warning_note} "
         f"{_provider_fallback_log(data)} "
         f"prompt_chars={len(user)} prompt_tokens_est={_rough_token_estimate(user)} context_budget={context_budget} context_skipped={skipped_context}"
     )

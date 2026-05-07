@@ -158,6 +158,93 @@ class AgentRuntimeContextRegressionTests(unittest.TestCase):
                 self.assertEqual(_max_tool_loops_for_run(ctx), 1)
 
 
+class AgentPatchEditingRegressionTests(unittest.TestCase):
+    def test_suggest_converts_unified_patch_to_file_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            project_dir.mkdir(parents=True)
+            (project_dir / "src").mkdir()
+            (project_dir / "src" / "App.tsx").write_text(
+                "export default function App() {\n  return <h1>Old</h1>;\n}\n",
+                encoding="utf-8",
+            )
+
+            with patch("api.agent._generate_json", return_value=(
+                "openrouter",
+                "openrouter/free",
+                {
+                    "spoken": "patched",
+                    "patches": [
+                        {
+                            "path": "src/App.tsx",
+                            "unified_diff": (
+                                "--- a/src/App.tsx\n"
+                                "+++ b/src/App.tsx\n"
+                                "@@ -1,3 +1,3 @@\n"
+                                " export default function App() {\n"
+                                "-  return <h1>Old</h1>;\n"
+                                "+  return <h1>New</h1>;\n"
+                                " }\n"
+                            ),
+                        }
+                    ],
+                    "changes": [],
+                    "actions": [],
+                },
+            )):
+                suggestion = agent_mod.suggest(
+                    instruction="ubah heading",
+                    path="src/App.tsx",
+                    content="export default function App() {\n  return <h1>Old</h1>;\n}\n",
+                    file_tree=["src/App.tsx"],
+                    relevant_files={"src/App.tsx": "export default function App() {\n  return <h1>Old</h1>;\n}\n"},
+                    workspace_root=project_dir,
+                )
+
+        self.assertEqual(suggestion.changes, [{"path": "src/App.tsx", "new_content": "export default function App() {\n  return <h1>New</h1>;\n}\n"}])
+        self.assertIn("patches=1", suggestion.log)
+
+    def test_suggest_skips_unmatched_patch_without_overwriting_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            project_dir.mkdir(parents=True)
+
+            with patch("api.agent._generate_json", return_value=(
+                "openrouter",
+                "openrouter/free",
+                {
+                    "spoken": "patched",
+                    "patches": [
+                        {
+                            "path": "src/App.tsx",
+                            "unified_diff": (
+                                "--- a/src/App.tsx\n"
+                                "+++ b/src/App.tsx\n"
+                                "@@ -1,2 +1,2 @@\n"
+                                "-missing\n"
+                                "+new\n"
+                            ),
+                        }
+                    ],
+                    "changes": [],
+                    "actions": [],
+                },
+            )):
+                suggestion = agent_mod.suggest(
+                    instruction="ubah heading",
+                    path="src/App.tsx",
+                    content="actual\n",
+                    file_tree=["src/App.tsx"],
+                    relevant_files={"src/App.tsx": "actual\n"},
+                    workspace_root=project_dir,
+                )
+
+        self.assertEqual(suggestion.changes, [])
+        self.assertIn("patch_warnings=1", suggestion.log)
+
+
 class MemoryRetrievalRegressionTests(unittest.TestCase):
     def test_local_vector_memory_retrieval_prefers_relevant_chunks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
