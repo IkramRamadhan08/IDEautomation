@@ -42,9 +42,9 @@ export type BuildModeProfile = {
 };
 
 const PREVIEW_INTENT_RE = /\b(preview|run|launch|start|ship|deploy)\b/i;
-const VALIDATION_INTENT_RE = /\b(fix|bug|audit|review|polish|refine|build|production|preview|ship|launch|repair|bikin|buat|tambah|tambahin|ubah|rapihin|benahin|perbaiki|validasi|cek)\b/i;
+const VALIDATION_INTENT_RE = /\b(fix|bug|audit|review|polish|refine|build|production|preview|ship|launch|repair|bikin|buat|tambah|tambahin|ubah|rapihin|benahin|perbaiki|validasi|cek|implementasiin|kerjain|garap|eksekusi)\b/i;
 const AUDIT_INTENT_RE = /\b(audit|ux|ui|design|landing|hero|preview|polish|refine)\b/i;
-const WRITE_RE = /\b(fix|build|ship|implement|create|add|remove|update|change|edit|refactor|repair|wire|connect|integrate|generate|scaffold|run|start|launch|deploy|bikin|buat|tambahin|tambah|hapus|ubah|rapihin|benahin|perbaiki|jalanin|pasang|sambungin|integrasi)\b/i;
+const WRITE_RE = /\b(fix|build|ship|implement|create|add|remove|update|change|edit|refactor|repair|wire|connect|integrate|generate|scaffold|run|start|launch|deploy|bikin|buat|tambahin|tambah|hapus|ubah|rapihin|benahin|perbaiki|jalanin|pasang|sambungin|integrasi|implementasiin|kerjain|garap|eksekusi)\b/i;
 const INSPECTION_RE = /\b(debug|audit|review|validate|check|inspect|analy[sz]e|cek|validasi|analisa|analisis)\b/i;
 const READONLY_AUDIT_RE = /\b(audit|review|cek|check|inspect|analy[sz]e|jelasin|explain|laporin|report)\b/i;
 const BUILDER_RE = /\b(app|builder|feature|ui|ux|preview|project|repo|component|state|style|css|tsx|react|vite|file|folder|mcp|memory|agentic|agent|graph|rag)\b/i;
@@ -235,7 +235,7 @@ export function classifyAgentInputIntent(input: string, buildMode: BuildMode): A
     signals.push("agentic builder framing");
   }
 
-  const explicitWrite = /\b(can you|please|tolong|implement|build|fix|bikin|buat|tambahin|ubah|rapihin|perbaiki)\b/i.test(normalizedInput)
+  const explicitWrite = /\b(can you|please|tolong|implement|build|fix|bikin|buat|tambahin|ubah|rapihin|perbaiki|implementasiin|kerjain|garap|eksekusi)\b/i.test(normalizedInput)
     || (FOLLOWUP_WRITE_RE.test(normalizedInput) && hasWriteObject);
   const readonlyAudit = READONLY_AUDIT_RE.test(normalizedInput);
   if (explicitWrite) writeScore += 0.75;

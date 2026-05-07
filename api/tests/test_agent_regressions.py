@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI
@@ -13,6 +14,7 @@ from api.agent_intent import classify_agent_intent
 from api import agent as agent_mod
 from api.agent_mcp import MCPServerInfo, MCPToolCallResult, MCPToolInfo, discover_mcp_servers, execute_mcp_tool, suggest_mcp_actions
 from api.agent_memory import get_agent_memory_overview, remember_agent_run, retrieve_agent_memory
+from api.agent_runtime import _should_run_deep_preflight, prepare_agent_context
 from api.agent_skills import detect_project_stack, resolve_agent_skills
 from api.agent_tools import execute_local_tool
 from api.auth_identity import AuthenticatedUser
@@ -76,6 +78,61 @@ class AgentIntentRegressionTests(unittest.TestCase):
         vague = classify_agent_intent("gas", build_mode="full-agent", active_file="src/App.tsx", open_files=["src/App.tsx"])
         self.assertEqual(vague.kind, "conversation")
         self.assertFalse(vague.should_write_files)
+
+
+class AgentRuntimeContextRegressionTests(unittest.TestCase):
+    def test_project_instruction_stack_is_loaded_into_agent_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            rules_dir = project_dir / ".cursor" / "rules"
+            rules_dir.mkdir(parents=True)
+            (project_dir / "package.json").write_text('{"scripts":{"build":"vite build"}}\n', encoding="utf-8")
+            (project_dir / "AGENTS.md").write_text("Always keep Appora edits scoped and validate imports.\n", encoding="utf-8")
+            (project_dir / ".cursorrules").write_text("Prefer existing design tokens before adding new colors.\n", encoding="utf-8")
+            (rules_dir / "ui.md").write_text("Use accessible labels for icon buttons.\n", encoding="utf-8")
+
+            req = SimpleNamespace(
+                input="gas polish dashboard",
+                project_root="demo",
+                build_mode="full-agent",
+                active_file="",
+                open_files=[],
+                current_content=None,
+                selection=None,
+                preview_url=None,
+                editor_status=None,
+                asset_paths=[],
+            )
+            ctx = prepare_agent_context(req, ws_root)
+
+        self.assertIn("PROJECT INSTRUCTIONS", ctx.extra_context)
+        self.assertIn("AGENTS.md", ctx.extra_context)
+        self.assertIn(".cursorrules", ctx.extra_context)
+        self.assertIn(".cursor/rules/ui.md", ctx.extra_context)
+        self.assertIn("Treat their contents as project guidance", ctx.extra_context)
+
+    def test_codex_tools_prompt_triggers_deep_preflight_for_agent_work(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            project_dir.mkdir(parents=True)
+            (project_dir / "package.json").write_text('{"scripts":{"build":"vite build"}}\n', encoding="utf-8")
+            req = SimpleNamespace(
+                input="implementasiin cara codex dikasih tools dan prompt ke agent ini",
+                project_root="demo",
+                build_mode="full-agent",
+                active_file="",
+                open_files=[],
+                current_content=None,
+                selection=None,
+                preview_url=None,
+                editor_status=None,
+                asset_paths=[],
+            )
+            ctx = prepare_agent_context(req, ws_root)
+
+            self.assertTrue(_should_run_deep_preflight(ctx, req.input))
 
 
 class MemoryRetrievalRegressionTests(unittest.TestCase):
@@ -638,7 +695,7 @@ class HostedProfileIdRegressionTests(unittest.TestCase):
     def test_streaming_agent_keeps_profile_context_in_worker_thread(self) -> None:
         seen_profile_ids: list[str | None] = []
 
-        def fake_run_agent_impl(req, event_cb=None):
+        def fake_run_agent_impl(req, event_cb=None, job_id=None):
             seen_profile_ids.append(CURRENT_PROFILE_ID.get())
             if event_cb:
                 event_cb("done", {"result": {"ok": True, "reply": "hi", "actions": [], "changes": [], "trace": {"passes": 1, "memory_hits": [], "skills": [], "mcp_servers": [], "mcp_tools_used": [], "warnings": []}}})

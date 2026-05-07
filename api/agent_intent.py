@@ -8,7 +8,7 @@ InteractionKind = Literal["command", "conversation", "mixed", "inspection"]
 
 _WRITE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\b(fix|build|ship|implement|create|add|remove|update|change|edit|refactor|repair|wire|connect|integrate|generate|scaffold|run|start|launch|deploy)\b", re.IGNORECASE), "explicit write/build verb"),
-    (re.compile(r"\b(bikin|buat|tambahin|tambah|hapus|ubah|rapihin|benahin|perbaiki|perbaikin|jalanin|pasang|sambungin|integrasi)\b", re.IGNORECASE), "explicit Indonesian write/build verb"),
+    (re.compile(r"\b(bikin|buat|tambahin|tambah|hapus|ubah|rapihin|benahin|perbaiki|perbaikin|jalanin|pasang|sambungin|integrasi|implementasiin|kerjain|garap|eksekusi)\b", re.IGNORECASE), "explicit Indonesian write/build verb"),
 ]
 
 _INSPECTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
@@ -28,7 +28,7 @@ _CONVERSATION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 ]
 
 _EXPLICIT_WRITE_REQUEST_RE = re.compile(
-    r"\b(can you|please|tolong|implement|build|fix|bikin|buat|tambahin|ubah|rapihin|perbaiki)\b",
+    r"\b(can you|please|tolong|implement|build|fix|bikin|buat|tambahin|ubah|rapihin|perbaiki|implementasiin|kerjain|garap|eksekusi)\b",
     re.IGNORECASE,
 )
 _FOLLOWUP_WRITE_RE = re.compile(r"^\s*(gas|lanjut|lanjutin|go|execute|eksekusi|oke lanjut|yaudah lanjut)\b", re.IGNORECASE)
