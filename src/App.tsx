@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { Toaster, toast } from "sonner";
 import { supabase } from "./lib/supabase";
@@ -53,7 +53,7 @@ import {
 
 import { Topbar } from "./components/navigation/Topbar";
 import { AgentOrb } from "./components/agent/AgentOrb";
-import { ArrowRight, Bot, BookOpen, Boxes, Moon, PanelsTopLeft, Rocket, Sparkles, Sun, Workflow } from "lucide-react";
+import { ArrowRight, Moon, Sparkles, Sun } from "lucide-react";
 import { runAgentWorkflow } from "./agent/workflow";
 import { errorMessage, notifyToast } from "./app/feedback";
 import { ensurePreviewRunningFlow, isHostedBrowser } from "./preview/runtime";
@@ -62,7 +62,6 @@ const SettingsModal = lazy(() => import("./components/settings/SettingsModal").t
 const HybridWorkspace = lazy(() => import("./modes/HybridWorkspace").then((module) => ({ default: module.HybridWorkspace })));
 const FullAgentWorkspace = lazy(() => import("./modes/FullAgentWorkspace").then((module) => ({ default: module.FullAgentWorkspace })));
 
-const MODEL_PROVIDERS = ["OpenRouter", "Gemini", "Groq", "OpenAI", "Anthropic", "Together", "Cerebras", "xAI"];
 type AppTheme = "light" | "dark";
 
 function getDefaultAssistPaneWidth() {
@@ -800,33 +799,14 @@ export default function App() {
     }
   };
 
-  const scrollLandingTo = (event: ReactMouseEvent<HTMLElement>, sectionId: string) => {
-    event.preventDefault();
-    const scroller = document.querySelector<HTMLElement>(".authLanding");
-    const target = sectionId === "top" ? scroller : document.getElementById(sectionId);
-    if (!scroller || !target) return;
-
-    const top = sectionId === "top" ? 0 : target.offsetTop - 84;
-
-    scroller.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
-    window.history.replaceState(null, "", `#${sectionId}`);
-  };
-
   // --- Renders ---
   const renderGoogleLoginGate = () => (
-    <div className="authLanding splineLanding" id="top">
-      <header className="authLandingNav splineNav">
-        <button className="splineBrandButton" type="button" onClick={(event) => scrollLandingTo(event, "top")} aria-label="Back to top">
+    <div className="authLanding splineLanding simpleSplineLanding" id="top">
+      <header className="simpleSplineNav">
+        <div className="splineBrandButton">
           <span className="authBrandMark">A</span>
           <span>Appora</span>
-        </button>
-        <nav className="authNavLinks" aria-label="Landing navigation">
-          <a href="#build" onClick={(event) => scrollLandingTo(event, "build")}>Explore</a>
-          <a href="#agents" onClick={(event) => scrollLandingTo(event, "agents")}>Agents</a>
-          <a href="#templates" onClick={(event) => scrollLandingTo(event, "templates")}>Templates</a>
-          <a href="#tutorial" onClick={(event) => scrollLandingTo(event, "tutorial")}>Workflow</a>
-          <a href="#docs" onClick={(event) => scrollLandingTo(event, "docs")}>Resources</a>
-        </nav>
+        </div>
         <div className="splineNavActions">
           <button className="splineThemeToggle" type="button" onClick={() => setAppTheme((theme) => theme === "dark" ? "light" : "dark")} title={`Switch to ${appTheme === "dark" ? "light" : "dark"} mode`} aria-label={`Switch to ${appTheme === "dark" ? "light" : "dark"} mode`}>
             {appTheme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
@@ -838,240 +818,30 @@ export default function App() {
         </div>
       </header>
 
-      <main className="splineLandingMain">
-        <section className="splineHeroSection">
-          <div className="splineHeroCopy">
-            <div className="splineKicker"><Sparkles size={15} /> Agentic app builder community</div>
-            <h1>Discover, remix, and ship web apps with AI agents.</h1>
-            <p>
-              Appora turns templates, model keys, project memory, terminal actions, and preview checks into a hosted builder for people who want results without local setup.
-            </p>
-            <div className="splineHeroActions">
-              <button className="splinePrimaryButton" onClick={startGoogleLogin}>
-                Continue with Google
-                <ArrowRight size={17} />
+      <main className="simpleSplineMain">
+        <section className="simpleSplineHero" aria-label="Appora">
+          <div className="simpleSplineCopy">
+            <div className="splineKicker"><Sparkles size={15} /> Interactive agent builder</div>
+            <h1>Build apps by moving ideas into boxes.</h1>
+            <p>Talk to Clara, refine with Raka, and keep the whole project in one hosted workspace.</p>
+            <button className="splinePrimaryButton" onClick={startGoogleLogin}>
+              Continue with Google
+              <ArrowRight size={17} />
+            </button>
+          </div>
+
+          <div className="boxesHoverScene" aria-label="Interactive Appora boxes">
+            {[
+              "Clara", "Raka", "Preview", "Memory", "Terminal", "Supabase",
+              "Vercel", "Templates", "BYOK", "MCP", "Repair", "Ship",
+            ].map((label, index) => (
+              <button className="hoverBox" type="button" key={label} style={{ "--i": index } as CSSProperties}>
+                <span>{label}</span>
               </button>
-              <button className="splineSecondaryButton" onClick={(event) => scrollLandingTo(event, "templates")}>
-                Browse templates
-              </button>
-            </div>
-            <div className="splineHeroStats" aria-label="Appora highlights">
-              <span><strong>8</strong> model providers</span>
-              <span><strong>2</strong> agent modes</span>
-              <span><strong>0</strong> local setup</span>
-            </div>
-          </div>
-
-          <div className="splineHeroVisual" aria-label="Appora visual workspace preview">
-            <div className="splineSceneGrid">
-              <div className="splineSceneCard sceneLarge">
-                <span>Clara</span>
-                <strong>Building SaaS dashboard</strong>
-                <p>6 patches applied. Build passed. Mobile preview repaired.</p>
-              </div>
-              <div className="splineSceneCard sceneCyan"><Bot size={26} /><span>Agent loop</span></div>
-              <div className="splineSceneCard scenePink"><PanelsTopLeft size={26} /><span>Live preview</span></div>
-              <div className="splineSceneCard sceneLime"><Workflow size={26} /><span>Project memory</span></div>
-              <div className="splineSceneCard sceneDark">
-                <code>npm run build</code>
-                <small>terminal action</small>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section className="splineProviderMarquee" aria-label="Supported model providers">
-          <span>Connect model keys users already have</span>
-          <div className="authMarqueeViewport">
-            <div className="authMarqueeTrack">
-              {[...MODEL_PROVIDERS, ...MODEL_PROVIDERS].map((provider, index) => (
-                <span className="authProviderLogoChip" key={`${provider}-primary-${index}`}>
-                  <em>{provider.slice(0, 2)}</em>
-                  {provider}
-                </span>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <section id="build" className="splineSection splineExploreSection" aria-label="Explore Appora">
-          <div className="splineSectionHeader centered">
-            <span>Explore Appora</span>
-            <h2>Pick a direction, then let the agent turn it into a working project.</h2>
-          </div>
-          <div className="splineCategoryTabs" aria-label="Build categories">
-            <span>All Resources</span>
-            <span>Dashboards</span>
-            <span>Landing pages</span>
-            <span>AI tools</span>
-            <span>Admin apps</span>
-          </div>
-          <div className="splineGalleryGrid">
-            <article className="splineGalleryCard cardMint">
-              <Boxes size={30} />
-              <span>Template</span>
-              <h3>SaaS command center</h3>
-              <p>Billing, analytics, users, settings, and responsive dashboard states.</p>
-            </article>
-            <article className="splineGalleryCard cardBlue tall">
-              <Rocket size={30} />
-              <span>Starter</span>
-              <h3>Launch page with pricing</h3>
-              <p>Hero, feature grid, pricing, FAQ, final CTA, and production-ready copy sections.</p>
-            </article>
-            <article className="splineGalleryCard cardYellow">
-              <PanelsTopLeft size={30} />
-              <span>Workspace</span>
-              <h3>Browser IDE</h3>
-              <p>Files, editor, preview, terminal actions, and checkpoints in one hosted surface.</p>
-            </article>
-            <article className="splineGalleryCard cardPink wide">
-              <Sparkles size={30} />
-              <span>AI product</span>
-              <h3>Prompt app with BYOK routing</h3>
-              <p>Provider settings, chat flow, model fallback, and user-owned keys for free-tier experimentation.</p>
-            </article>
-          </div>
-        </section>
-
-        <section id="agents" className="splineSection splineAgentsSection" aria-label="Agents">
-          <div className="splineSectionHeader">
-            <span>Agent studio</span>
-            <h2>Two builders with different personalities and responsibilities.</h2>
-          </div>
-          <div className="splineAgentPanels">
-            <article>
-              <div className="splineAgentBadge clara">Clara</div>
-              <h3>Full builder agent</h3>
-              <p>Plans, patches, requests terminal actions, reads failures, repairs, and summarizes the result in the orb.</p>
-              <ul>
-                <li>Patch-based editing</li>
-                <li>Preview inspection</li>
-                <li>Project memory</li>
-              </ul>
-            </article>
-            <article>
-              <div className="splineAgentBadge raka">Raka</div>
-              <h3>Hybrid IDE copilot</h3>
-              <p>Works close to the active file when users want direct control, focused edits, and code explanations.</p>
-              <ul>
-                <li>Editor-aware help</li>
-                <li>Scoped refactors</li>
-                <li>Workspace context</li>
-              </ul>
-            </article>
-          </div>
-        </section>
-
-        <section id="templates" className="splineSection" aria-label="Templates">
-          <div className="splineSectionHeader centered">
-            <span>Templates</span>
-            <h2>Not blank projects. App shapes users can remix immediately.</h2>
-          </div>
-          <div className="splineTemplateRows">
-            {["SaaS Dashboard", "Landing + Pricing", "Admin CRUD", "AI Tool App", "Portfolio", "Client Portal"].map((template) => (
-              <div className="splineTemplateTile" key={template}>
-                <strong>{template}</strong>
-                <span>Open, remix, ask Clara to customize</span>
-              </div>
             ))}
           </div>
-        </section>
-
-        <section id="tutorial" className="splineSection splineWorkflowSection" aria-label="Workflow">
-          <div className="splineSectionHeader">
-            <span>Workflow</span>
-            <h2>From rough idea to previewable app without asking users to configure a machine.</h2>
-          </div>
-          <div className="splineWorkflowRail">
-            <div><em>01</em><strong>Choose a base</strong><p>Start from a template that already has routes, states, and layout structure.</p></div>
-            <div><em>02</em><strong>Talk to Clara</strong><p>Describe the product. Clara edits files, asks for actions, and repairs failures.</p></div>
-            <div><em>03</em><strong>Inspect and refine</strong><p>Use preview checks, terminal output, and Raka for focused corrections.</p></div>
-            <div><em>04</em><strong>Keep context</strong><p>Project memory stores stack signals, decisions, and recent implementation facts.</p></div>
-          </div>
-        </section>
-
-        <section id="providers" className="splineSection splineProvidersSection" aria-label="Providers">
-          <div className="splineSectionHeader centered">
-            <span>Provider routing</span>
-            <h2>BYOK for people who paste the key they already have.</h2>
-          </div>
-          <div className="splineProviderCloud">
-            {MODEL_PROVIDERS.map((provider) => (
-              <span key={provider}><em>{provider.slice(0, 2)}</em>{provider}</span>
-            ))}
-          </div>
-        </section>
-
-        <section id="docs" className="splineSection splineResourcesSection" aria-label="Resources">
-          <div className="splineSectionHeader">
-            <span>Resources</span>
-            <h2>Clear enough for beginners, structured enough for serious app work.</h2>
-          </div>
-          <div className="splineResourceGrid">
-            <article><BookOpen size={24} /><strong>Hosted setup</strong><p>Vercel serverless plus Supabase-backed project records, settings, keys, and memory.</p></article>
-            <article><Workflow size={24} /><strong>Action model</strong><p>Conversation, patches, terminal actions, tool calls, and preview checks stay separated.</p></article>
-            <article><Bot size={24} /><strong>MCP and skills</strong><p>Advanced users can connect external tools without forcing first-time users through setup.</p></article>
-            <article><Rocket size={24} /><strong>Preview confidence</strong><p>Catch blank screens, runtime errors, layout overflow, and failed builds before users trust the result.</p></article>
-          </div>
-        </section>
-
-        <section id="faq" className="splineSection splineFaqSection" aria-label="FAQ">
-          <div className="splineSectionHeader centered">
-            <span>FAQ</span>
-            <h2>The basics users need before they start.</h2>
-          </div>
-          <div className="splineFaqList">
-            <details open><summary>Do I need to code?</summary><p>No. Start with a template and ask Clara to build. The IDE is there when you want more control.</p></details>
-            <details><summary>Do I need paid AI credits?</summary><p>Users bring their own keys. Free and trial tiers can work, but limits depend on the provider.</p></details>
-            <details><summary>Where are projects stored?</summary><p>The hosted product is designed around Supabase persistence and Vercel delivery.</p></details>
-            <details><summary>Can I still edit code myself?</summary><p>Yes. Raka keeps the hybrid IDE workflow available for direct edits and focused assistance.</p></details>
-          </div>
-        </section>
-
-        <section className="splineFinalCta" aria-label="Start building">
-          <span>The community is waiting for your next app</span>
-          <h2>Open Appora and turn the rough idea into a project Clara can actually work on.</h2>
-          <button className="splinePrimaryButton" onClick={startGoogleLogin}>
-            Continue with Google
-            <ArrowRight size={17} />
-          </button>
         </section>
       </main>
-
-      <footer className="authFooter splineFooter">
-        <div className="authFooterBrand">
-          <button className="splineBrandButton" type="button" onClick={(event) => scrollLandingTo(event, "top")}>
-            <span className="authBrandMark">A</span>
-            <span>Appora</span>
-          </button>
-          <p>Agentic web builder for hosted Vercel and Supabase app workflows.</p>
-        </div>
-        <div className="authFooterGrid">
-          <div>
-            <strong>Product</strong>
-            <a href="#build" onClick={(event) => scrollLandingTo(event, "build")}>Explore</a>
-            <a href="#agents" onClick={(event) => scrollLandingTo(event, "agents")}>Agents</a>
-            <a href="#templates" onClick={(event) => scrollLandingTo(event, "templates")}>Templates</a>
-          </div>
-          <div>
-            <strong>Resources</strong>
-            <a href="#tutorial" onClick={(event) => scrollLandingTo(event, "tutorial")}>Workflow</a>
-            <a href="#docs" onClick={(event) => scrollLandingTo(event, "docs")}>Resources</a>
-            <a href="#faq" onClick={(event) => scrollLandingTo(event, "faq")}>FAQ</a>
-          </div>
-          <div>
-            <strong>Platform</strong>
-            <span>BYOK providers</span>
-            <span>Project memory</span>
-            <span>Preview audit</span>
-          </div>
-        </div>
-        <div className="authFooterBottom">
-          <span>Appora</span>
-          <span>Discover, remix, and ship web apps with AI agents.</span>
-        </div>
-      </footer>
     </div>
   );
 

@@ -3681,6 +3681,202 @@ a {
   border-color: rgba(255, 255, 255, 0.1);
 }
 
+.simpleSplineLanding {
+  min-height: 100vh;
+  color: #171717;
+  background:
+    radial-gradient(circle at 18% 10%, rgba(182, 255, 107, 0.42), transparent 24%),
+    radial-gradient(circle at 82% 18%, rgba(132, 230, 255, 0.36), transparent 25%),
+    #f8f5ec;
+}
+
+.simpleSplineNav {
+  width: min(1180px, calc(100vw - 32px));
+  min-height: 72px;
+  margin: 18px auto 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(23, 23, 23, 0.1);
+  background: rgba(255, 255, 255, 0.68);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 18px 54px rgba(36, 30, 17, 0.08);
+}
+
+.simpleSplineMain {
+  width: min(1180px, calc(100vw - 32px));
+  min-height: calc(100vh - 112px);
+  margin: 0 auto;
+  display: grid;
+  align-items: center;
+  padding: 26px 0 42px;
+}
+
+.simpleSplineHero {
+  display: grid;
+  grid-template-columns: minmax(0, 0.82fr) minmax(420px, 1.18fr);
+  align-items: center;
+  gap: clamp(28px, 5vw, 74px);
+}
+
+.simpleSplineCopy {
+  display: grid;
+  justify-items: start;
+  gap: 20px;
+}
+
+.simpleSplineCopy h1 {
+  margin: 0;
+  max-width: 620px;
+  color: #171717;
+  font-size: clamp(54px, 7.8vw, 108px);
+  line-height: 0.92;
+  letter-spacing: 0;
+  font-weight: 900;
+}
+
+.simpleSplineCopy p {
+  margin: 0;
+  max-width: 500px;
+  color: rgba(23, 23, 23, 0.62);
+  font-size: clamp(17px, 1.45vw, 20px);
+  line-height: 1.55;
+}
+
+.boxesHoverScene {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-auto-rows: 118px;
+  gap: 14px;
+  perspective: 900px;
+}
+
+.hoverBox {
+  position: relative;
+  border: 1px solid rgba(23, 23, 23, 0.1);
+  border-radius: 24px;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.5)),
+    hsl(calc(72 + var(--i) * 24) 92% 76%);
+  color: #171717;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  font-size: 15px;
+  font-weight: 900;
+  box-shadow:
+    inset -8px -10px 0 rgba(23, 23, 23, 0.055),
+    0 18px 42px rgba(36, 30, 17, 0.11);
+  transform: translateY(0) rotateX(0) rotateY(0);
+  transition: transform 180ms ease, box-shadow 180ms ease, filter 180ms ease;
+  animation: simpleBoxFloat 4.6s ease-in-out infinite;
+  animation-delay: calc(var(--i) * -120ms);
+}
+
+.hoverBox:nth-child(3n) {
+  grid-row: span 2;
+}
+
+.hoverBox:nth-child(5n) {
+  grid-column: span 2;
+}
+
+.hoverBox:hover {
+  z-index: 2;
+  filter: saturate(1.08);
+  transform: translateY(-12px) rotateX(8deg) rotateY(-8deg) scale(1.035);
+  box-shadow:
+    inset -8px -10px 0 rgba(23, 23, 23, 0.05),
+    0 30px 72px rgba(36, 30, 17, 0.18);
+}
+
+.hoverBox span {
+  pointer-events: none;
+}
+
+:root[data-app-theme="dark"] .simpleSplineLanding {
+  color: #f4f1ea;
+  background:
+    radial-gradient(circle at 18% 10%, rgba(182, 255, 107, 0.18), transparent 24%),
+    radial-gradient(circle at 82% 18%, rgba(132, 230, 255, 0.16), transparent 25%),
+    #101010;
+}
+
+:root[data-app-theme="dark"] .simpleSplineNav {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(20, 20, 20, 0.72);
+}
+
+:root[data-app-theme="dark"] .simpleSplineCopy h1,
+:root[data-app-theme="dark"] .splineBrandButton {
+  color: #f4f1ea;
+}
+
+:root[data-app-theme="dark"] .simpleSplineCopy p {
+  color: rgba(244, 241, 234, 0.66);
+}
+
+:root[data-app-theme="dark"] .hoverBox {
+  border-color: rgba(255, 255, 255, 0.1);
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.04)),
+    hsl(calc(72 + var(--i) * 24) 82% 38%);
+  color: #f4f1ea;
+  box-shadow:
+    inset -8px -10px 0 rgba(255, 255, 255, 0.035),
+    0 18px 42px rgba(0, 0, 0, 0.24);
+}
+
+@keyframes simpleBoxFloat {
+  0%, 100% {
+    translate: 0 0;
+  }
+  50% {
+    translate: 0 -6px;
+  }
+}
+
+@media (max-width: 900px) {
+  .simpleSplineHero {
+    grid-template-columns: 1fr;
+  }
+
+  .boxesHoverScene {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-auto-rows: 104px;
+  }
+}
+
+@media (max-width: 620px) {
+  .simpleSplineNav {
+    min-height: 64px;
+    margin-top: 10px;
+  }
+
+  .simpleSplineMain {
+    min-height: auto;
+    padding: 34px 0;
+  }
+
+  .simpleSplineCopy h1 {
+    font-size: 52px;
+  }
+
+  .boxesHoverScene {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-rows: 92px;
+  }
+
+  .hoverBox:nth-child(3n),
+  .hoverBox:nth-child(5n) {
+    grid-row: auto;
+    grid-column: auto;
+  }
+}
+
 :root[data-app-theme="dark"] .splineSection::before {
   background: linear-gradient(90deg, transparent, rgba(244, 241, 234, 0.18), transparent);
 }
