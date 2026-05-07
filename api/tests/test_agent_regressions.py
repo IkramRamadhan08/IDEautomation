@@ -48,11 +48,34 @@ class AgentIntentRegressionTests(unittest.TestCase):
                 self.assertEqual(intent.should_run_tools, should_tools)
 
     def test_short_greetings_stay_conversational(self) -> None:
-        for prompt in ["hi", "hello", "hei", "hai", "halo", "p", "bro"]:
+        for prompt in ["hi", "hello", "hei", "hai", "halo", "p", "bro", "gas", "lanjut"]:
             with self.subTest(prompt=prompt):
                 intent = classify_agent_intent(prompt, build_mode="full-agent", active_file="src/App.tsx", open_files=["src/App.tsx"])
                 self.assertEqual(intent.kind, "conversation")
                 self.assertFalse(intent.should_write_files)
+
+    def test_questions_about_agent_do_not_trigger_file_writes(self) -> None:
+        cases = [
+            "agent udah bisa bedain mana interaksi mana intruksi?",
+            "perbedaan new workspace sama new project itu apa dah",
+            "kenapa provider free masih kena billing?",
+            "apa maksudnya mcp tools?",
+            "gimana cara jalaninnya?",
+        ]
+        for prompt in cases:
+            with self.subTest(prompt=prompt):
+                intent = classify_agent_intent(prompt, build_mode="full-agent", active_file="src/App.tsx", open_files=["src/App.tsx"])
+                self.assertEqual(intent.kind, "conversation")
+                self.assertFalse(intent.should_write_files)
+
+    def test_followup_only_becomes_command_when_it_has_work_object(self) -> None:
+        intent = classify_agent_intent("gas fix navbar spacing", build_mode="full-agent", active_file="src/App.tsx", open_files=["src/App.tsx"])
+        self.assertEqual(intent.kind, "command")
+        self.assertTrue(intent.should_write_files)
+
+        vague = classify_agent_intent("gas", build_mode="full-agent", active_file="src/App.tsx", open_files=["src/App.tsx"])
+        self.assertEqual(vague.kind, "conversation")
+        self.assertFalse(vague.should_write_files)
 
 
 class MemoryRetrievalRegressionTests(unittest.TestCase):

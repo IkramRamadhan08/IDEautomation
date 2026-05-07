@@ -8,7 +8,7 @@ InteractionKind = Literal["command", "conversation", "mixed", "inspection"]
 
 _WRITE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\b(fix|build|ship|implement|create|add|remove|update|change|edit|refactor|repair|wire|connect|integrate|generate|scaffold|run|start|launch|deploy)\b", re.IGNORECASE), "explicit write/build verb"),
-    (re.compile(r"\b(bikin|buat|tambahin|tambah|hapus|ubah|rapihin|benahin|perbaiki|perbaikin|jalanin|gas|lanjut|lanjutin|pasang|sambungin|integrasi)\b", re.IGNORECASE), "explicit Indonesian write/build verb"),
+    (re.compile(r"\b(bikin|buat|tambahin|tambah|hapus|ubah|rapihin|benahin|perbaiki|perbaikin|jalanin|pasang|sambungin|integrasi)\b", re.IGNORECASE), "explicit Indonesian write/build verb"),
 ]
 
 _INSPECTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
@@ -22,17 +22,25 @@ _BUILDER_CONTEXT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 ]
 
 _CONVERSATION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"\b(hi|hello|hey|thanks|thank you|thx|good job|nice|status|update|udah|sudah|gimana|gmn|bro|bang|sip|mantap)\b", re.IGNORECASE), "chat/status language"),
-    (re.compile(r"\b(explain|jelasin|jelaskan|why|kenapa|what do you think|menurutmu|opinion|pendapat|brainstorm|ngobrol|chat)\b", re.IGNORECASE), "discussion language"),
-    (re.compile(r"^(ok|oke|sip|siap|bro|bang|udah bro\??)$", re.IGNORECASE), "short conversational prompt"),
+    (re.compile(r"\b(hi|hello|hey|hai|halo|hei|thanks|thank you|thx|good job|nice|status|update|udah|sudah|gimana|gmn|bro|bang|sip|mantap)\b", re.IGNORECASE), "chat/status language"),
+    (re.compile(r"\b(explain|jelasin|jelaskan|why|kenapa|apa|apaan|what|how|what do you think|menurutmu|opinion|pendapat|brainstorm|ngobrol|chat)\b", re.IGNORECASE), "discussion language"),
+    (re.compile(r"^(ok|oke|sip|siap|bro|bang|p|hi|hello|hey|hai|halo|hei|udah bro\??)$", re.IGNORECASE), "short conversational prompt"),
 ]
 
 _EXPLICIT_WRITE_REQUEST_RE = re.compile(
-    r"\b(can you|please|tolong|pastiin|make sure|lanjut|gas|implement|build|fix|bikin|buat|tambahin|ubah|rapihin|perbaiki)\b",
+    r"\b(can you|please|tolong|implement|build|fix|bikin|buat|tambahin|ubah|rapihin|perbaiki)\b",
     re.IGNORECASE,
 )
+_FOLLOWUP_WRITE_RE = re.compile(r"^\s*(gas|lanjut|lanjutin|go|execute|eksekusi|oke lanjut|yaudah lanjut)\b", re.IGNORECASE)
 _READONLY_AUDIT_RE = re.compile(
     r"\b(audit|review|cek|check|inspect|analy[sz]e|jelasin|explain|laporin|report)\b",
+    re.IGNORECASE,
+)
+_QUESTION_RE = re.compile(r"\?|^(apa|apaan|gimana|gmn|kenapa|mengapa|why|what|how|can|could|would|is|are|do|does|did)\b", re.IGNORECASE)
+_SHORT_CHAT_RE = re.compile(r"^(p+|hi+|hello+|hey+|hai+|halo+|hei+|yo+|ok|oke|sip|siap|bro|bang|thanks|makasih|mantap)[!.?\\s]*$", re.IGNORECASE)
+_BARE_FOLLOWUP_RE = re.compile(r"^(gas|lanjut|lanjutin|next|continue|go|oke lanjut|yaudah lanjut)[!.?\\s]*$", re.IGNORECASE)
+_WRITE_OBJECT_RE = re.compile(
+    r"\b(file|page|screen|ui|ux|component|button|modal|form|layout|style|css|tsx|react|vite|route|api|endpoint|database|schema|table|auth|login|project|app|landing|navbar|sidebar|terminal|agent|memory|provider|model)\b",
     re.IGNORECASE,
 )
 
@@ -81,6 +89,22 @@ def classify_agent_intent(
 ) -> AgentIntent:
     raw = str(text or "").strip()
     lowered = raw.lower()
+    word_count = len(raw.split())
+    has_question = bool(_QUESTION_RE.search(raw))
+    is_short_chat = bool(_SHORT_CHAT_RE.match(raw))
+    is_bare_followup = bool(_BARE_FOLLOWUP_RE.match(raw))
+    has_write_object = bool(_WRITE_OBJECT_RE.search(raw))
+
+    if not raw or is_short_chat:
+        return AgentIntent(
+            kind="conversation",
+            confidence=0.99,
+            rationale="short conversational prompt",
+            should_write_files=False,
+            should_run_tools=False,
+            wants_app_builder=False,
+        )
+
     write_score = 0.0
     inspection_score = 0.0
     conversation_score = 0.0
@@ -134,17 +158,27 @@ def classify_agent_intent(
         inspection_score += 0.2
         signals.append("agentic builder framing")
 
-    explicit_write_request = bool(_EXPLICIT_WRITE_REQUEST_RE.search(raw))
+    explicit_write_request = bool(_EXPLICIT_WRITE_REQUEST_RE.search(raw)) or bool(_FOLLOWUP_WRITE_RE.search(raw) and has_write_object)
     readonly_audit_request = bool(_READONLY_AUDIT_RE.search(raw))
     wants_app_builder = bool(re.search(r"\b(app|builder|ui|ux|feature|project|repo|mcp|memory|agentic|agent|graph|rag)\b", lowered))
 
     if explicit_write_request:
         write_score += 0.8
+    if has_question and not explicit_write_request:
+        conversation_score += 0.65
+        write_score *= 0.55
     if raw and len(raw.split()) <= 4 and conversation_score > 0 and write_score < 1.4 and inspection_score < 1.35:
         conversation_score += 0.45
+    if is_bare_followup and not has_write_object:
+        conversation_score += 0.7
+        write_score = min(write_score, 0.8)
 
     kind: InteractionKind
-    if write_score >= 1.7 and conversation_score >= 0.95:
+    if has_question and not explicit_write_request and inspection_score < 1.1:
+        kind = "conversation"
+    elif readonly_audit_request and not explicit_write_request and write_score < 2.1:
+        kind = "inspection"
+    elif write_score >= 1.7 and conversation_score >= 0.95:
         kind = "mixed"
     elif explicit_write_request or write_score >= 1.85:
         kind = "command"
@@ -154,7 +188,7 @@ def classify_agent_intent(
         kind = "conversation"
     else:
         if explicit_write_request or (build_mode == "full-agent" and write_score >= 1.1):
-            kind = "command"
+            kind = "command" if explicit_write_request or (has_write_object and word_count >= 5) else "conversation"
         elif readonly_audit_request and write_score < 1.7:
             kind = "inspection"
         else:
@@ -163,7 +197,10 @@ def classify_agent_intent(
     if kind == "mixed" and not explicit_write_request and write_score < 1.95:
         kind = "inspection" if readonly_audit_request else "conversation"
 
-    should_write_files = kind in {"command", "mixed"} and (explicit_write_request or write_score >= 1.95)
+    if kind in {"command", "mixed"} and not explicit_write_request and not has_write_object:
+        kind = "conversation"
+
+    should_write_files = kind in {"command", "mixed"} and (explicit_write_request or (write_score >= 1.95 and has_write_object))
     should_run_tools = should_write_files and (write_score + inspection_score) >= 2.15
 
     dominant = max(write_score, inspection_score, conversation_score, 0.001)

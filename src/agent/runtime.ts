@@ -44,11 +44,16 @@ export type BuildModeProfile = {
 const PREVIEW_INTENT_RE = /\b(preview|run|launch|start|ship|deploy)\b/i;
 const VALIDATION_INTENT_RE = /\b(fix|bug|audit|review|polish|refine|build|production|preview|ship|launch|repair|bikin|buat|tambah|tambahin|ubah|rapihin|benahin|perbaiki|validasi|cek)\b/i;
 const AUDIT_INTENT_RE = /\b(audit|ux|ui|design|landing|hero|preview|polish|refine)\b/i;
-const WRITE_RE = /\b(fix|build|ship|implement|create|add|remove|update|change|edit|refactor|repair|wire|connect|integrate|generate|scaffold|run|start|launch|deploy|bikin|buat|tambahin|tambah|hapus|ubah|rapihin|benahin|perbaiki|jalanin|gas|lanjut|lanjutin|pastiin)\b/i;
+const WRITE_RE = /\b(fix|build|ship|implement|create|add|remove|update|change|edit|refactor|repair|wire|connect|integrate|generate|scaffold|run|start|launch|deploy|bikin|buat|tambahin|tambah|hapus|ubah|rapihin|benahin|perbaiki|jalanin|pasang|sambungin|integrasi)\b/i;
 const INSPECTION_RE = /\b(debug|audit|review|validate|check|inspect|analy[sz]e|cek|validasi|analisa|analisis)\b/i;
 const READONLY_AUDIT_RE = /\b(audit|review|cek|check|inspect|analy[sz]e|jelasin|explain|laporin|report)\b/i;
 const BUILDER_RE = /\b(app|builder|feature|ui|ux|preview|project|repo|component|state|style|css|tsx|react|vite|file|folder|mcp|memory|agentic|agent|graph|rag)\b/i;
-const CONVERSATION_RE = /\b(hi|hello|hey|thanks|thank you|status|update|udah|sudah|gimana|bro|bang|sip|mantap|jelasin|jelaskan|kenapa|why|brainstorm|ngobrol|chat)\b/i;
+const CONVERSATION_RE = /\b(hi|hello|hey|hai|halo|hei|thanks|thank you|status|update|udah|sudah|gimana|gmn|bro|bang|sip|mantap|jelasin|jelaskan|kenapa|apa|apaan|why|what|how|brainstorm|ngobrol|chat)\b/i;
+const QUESTION_RE = /\?|^(apa|apaan|gimana|gmn|kenapa|mengapa|why|what|how|can|could|would|is|are|do|does|did)\b/i;
+const SHORT_CHAT_RE = /^(p+|hi+|hello+|hey+|hai+|halo+|hei+|yo+|ok|oke|sip|siap|bro|bang|thanks|makasih|mantap)[!.?\s]*$/i;
+const BARE_FOLLOWUP_RE = /^(gas|lanjut|lanjutin|next|continue|go|oke lanjut|yaudah lanjut)[!.?\s]*$/i;
+const FOLLOWUP_WRITE_RE = /^\s*(gas|lanjut|lanjutin|go|execute|eksekusi|oke lanjut|yaudah lanjut)\b/i;
+const WRITE_OBJECT_RE = /\b(file|page|screen|ui|ux|component|button|modal|form|layout|style|css|tsx|react|vite|route|api|endpoint|database|schema|table|auth|login|project|app|landing|navbar|sidebar|terminal|agent|memory|provider|model)\b/i;
 
 const PROFILES: Record<BuildMode, BuildModeProfile> = {
   "full-agent": {
@@ -182,6 +187,20 @@ export function getModeQuickPrompts(
 export function classifyAgentInputIntent(input: string, buildMode: BuildMode): AgentInputIntent {
   const normalizedInput = input.trim();
   const lowered = normalizedInput.toLowerCase();
+  const wordCount = normalizedInput ? normalizedInput.split(/\s+/).length : 0;
+  const hasQuestion = QUESTION_RE.test(normalizedInput);
+  const isShortChat = SHORT_CHAT_RE.test(normalizedInput);
+  const isBareFollowup = BARE_FOLLOWUP_RE.test(normalizedInput);
+  const hasWriteObject = WRITE_OBJECT_RE.test(normalizedInput);
+  if (!normalizedInput || isShortChat) {
+    return {
+      kind: "conversation",
+      confidence: 0.99,
+      rationale: "short conversational prompt",
+      shouldWriteFiles: false,
+      shouldRunTools: false,
+    };
+  }
   let writeScore = 0;
   let inspectionScore = 0;
   let conversationScore = 0;
@@ -216,20 +235,32 @@ export function classifyAgentInputIntent(input: string, buildMode: BuildMode): A
     signals.push("agentic builder framing");
   }
 
-  const explicitWrite = /\b(can you|please|tolong|pastiin|make sure|lanjut|gas|implement|build|fix|bikin|buat|tambahin|ubah|rapihin|perbaiki)\b/i.test(normalizedInput);
+  const explicitWrite = /\b(can you|please|tolong|implement|build|fix|bikin|buat|tambahin|ubah|rapihin|perbaiki)\b/i.test(normalizedInput)
+    || (FOLLOWUP_WRITE_RE.test(normalizedInput) && hasWriteObject);
   const readonlyAudit = READONLY_AUDIT_RE.test(normalizedInput);
   if (explicitWrite) writeScore += 0.75;
+  if (hasQuestion && !explicitWrite) {
+    conversationScore += 0.65;
+    writeScore *= 0.55;
+  }
+  if (isBareFollowup && !hasWriteObject) {
+    conversationScore += 0.7;
+    writeScore = Math.min(writeScore, 0.8);
+  }
 
   let kind: AgentInputIntent["kind"] = "conversation";
-  if (writeScore >= 1.7 && conversationScore >= 0.95) kind = "mixed";
+  if (hasQuestion && !explicitWrite && inspectionScore < 1.1) kind = "conversation";
+  else if (readonlyAudit && !explicitWrite && writeScore < 2.1) kind = "inspection";
+  else if (writeScore >= 1.7 && conversationScore >= 0.95) kind = "mixed";
   else if (explicitWrite || writeScore >= 1.85) kind = "command";
   else if (inspectionScore >= 1.1 && writeScore < 1.7) kind = "inspection";
-  else if (buildMode === "full-agent" && writeScore >= 1.1) kind = "command";
+  else if (buildMode === "full-agent" && writeScore >= 1.1) kind = explicitWrite || (hasWriteObject && wordCount >= 5) ? "command" : "conversation";
   else if (readonlyAudit && writeScore < 1.7) kind = "inspection";
 
   if (kind === "mixed" && !explicitWrite && writeScore < 1.95) kind = readonlyAudit ? "inspection" : "conversation";
+  if ((kind === "command" || kind === "mixed") && !explicitWrite && !hasWriteObject) kind = "conversation";
 
-  const shouldWriteFiles = (kind === "command" || kind === "mixed") && (explicitWrite || writeScore >= 1.95);
+  const shouldWriteFiles = (kind === "command" || kind === "mixed") && (explicitWrite || (writeScore >= 1.95 && hasWriteObject));
   const shouldRunTools = shouldWriteFiles && (writeScore + inspectionScore) >= 2.15;
   const total = Math.max(writeScore + inspectionScore + conversationScore, 0.001);
   const confidence = Math.max(writeScore, inspectionScore, conversationScore) / total;
