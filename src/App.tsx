@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { Toaster, toast } from "sonner";
 import { supabase } from "./lib/supabase";
@@ -94,6 +94,9 @@ export default function App() {
   const [agentRunViewPinned, setAgentRunViewPinned] = useState(false);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [newProjectOpen, setNewProjectOpen] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [newProjectSaving, setNewProjectSaving] = useState(false);
   const [settings, setSettings] = useState<SettingsInfo | null>(null);
   const [llmProviderDraft, setLlmProviderDraft] = useState<ProviderChoice>("");
   const [buildMode, setBuildMode] = useState<BuildMode>("hybrid");
@@ -539,25 +542,31 @@ export default function App() {
     }
   };
 
-  const createHostedProjectFromPrompt = async () => {
-    const name = window.prompt("Project name:");
-    if (!name?.trim()) return;
+  const createHostedProjectFromName = async (event?: FormEvent) => {
+    event?.preventDefault();
+    const name = newProjectName.trim();
+    if (!name || newProjectSaving) return;
+    setNewProjectSaving(true);
     try {
       if (!ws) {
         const provisioned = await provisionWorkspace();
         setWs(provisioned.path);
       }
 
-      const res = await createHostedProject({ name: name.trim() });
+      const res = await createHostedProject({ name });
       if (hasVerifiedHostedAuth) {
         await updateProjectPreferences(res.project.id, { build_mode: buildModeDraft });
       }
       await refreshProjects();
       setSelectedProject(res.project.root);
       setEditorStatus(`Project ready: ${res.project.name}`);
+      setNewProjectName("");
+      setNewProjectOpen(false);
       toast.success(`Project created: ${res.project.name}`);
     } catch (e) {
       toast.error("Gagal membuat project: " + errorMessage(e));
+    } finally {
+      setNewProjectSaving(false);
     }
   };
 
@@ -821,8 +830,44 @@ export default function App() {
     </div>
   );
 
+  const renderNewProjectModal = () => (
+    newProjectOpen ? (
+      <div className="modalBackdrop" onClick={() => !newProjectSaving && setNewProjectOpen(false)}>
+        <form className="newProjectModal pane" onSubmit={createHostedProjectFromName} onClick={(event) => event.stopPropagation()}>
+          <div className="newProjectModalHeader">
+            <div>
+              <div className="savedProjectsEyebrow">New project</div>
+              <div className="newProjectModalTitle">Bikin project baru</div>
+            </div>
+            <button className="btn subtleBtn" type="button" disabled={newProjectSaving} onClick={() => setNewProjectOpen(false)}>
+              Close
+            </button>
+          </div>
+          <label className="newProjectField">
+            <span>Project name</span>
+            <input
+              className="input"
+              value={newProjectName}
+              onChange={(event) => setNewProjectName(event.target.value)}
+              placeholder="Contoh: Portfolio Raka"
+              disabled={newProjectSaving}
+              autoFocus
+            />
+          </label>
+          <div className="newProjectModalActions">
+            <button className="btn" type="button" disabled={newProjectSaving} onClick={() => setNewProjectOpen(false)}>Cancel</button>
+            <button className="btn primary" type="submit" disabled={!newProjectName.trim() || newProjectSaving}>
+              {newProjectSaving ? "Creating..." : "Create project"}
+            </button>
+          </div>
+        </form>
+      </div>
+    ) : null
+  );
+
   const renderWorkspaceOnboarding = () => (
     <div className="workspaceGateWrap workspaceSetupWrap">
+      {renderNewProjectModal()}
       <div className="workspaceGateCard pane workspaceSetupCard">
         <div className="workspaceGateKicker">Project setup</div>
         <div className="workspaceGateTitle">Start a project for this session</div>
@@ -842,7 +887,7 @@ export default function App() {
         </div>
         <div className="workspaceGateActions">
           <button className="btn primary" onClick={pickWorkspace}>{isHostedBrowser() ? "Upload project…" : "Open project…"}</button>
-          <button className="btn" onClick={createHostedProjectFromPrompt}>New project</button>
+          <button className="btn" onClick={() => setNewProjectOpen(true)}>New project</button>
           <button className="btn" onClick={logoutToStart}>Logout</button>
         </div>
         {hasVerifiedHostedAuth && hostedProjects.length > 0 ? (
@@ -995,6 +1040,7 @@ export default function App() {
           onSave={saveSettings}
         />
       </Suspense>
+      {renderNewProjectModal()}
 
       <Topbar
         ws={ws}

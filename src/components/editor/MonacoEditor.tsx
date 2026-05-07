@@ -1,7 +1,7 @@
 import React from "react";
 import { type OnMount } from "@monaco-editor/react";
 import { type AgentAction, type AgentLiveItem, type FileBuffer } from "../../types";
-import { Save, RotateCcw, Sparkles, TerminalSquare } from "lucide-react";
+import { PanelBottomClose, PanelBottomOpen, RotateCcw, Save, Sparkles, TerminalSquare, Trash2 } from "lucide-react";
 import { terminalRun } from "../../api";
 
 interface MonacoEditorProps {
@@ -44,6 +44,7 @@ export const MonacoEditor: React.FC<MonacoEditorProps> = ({
   const [activePanel, setActivePanel] = React.useState<"terminal" | "output" | "problems">("terminal");
   const [terminalCommand, setTerminalCommand] = React.useState("");
   const [terminalBusy, setTerminalBusy] = React.useState(false);
+  const [terminalVisible, setTerminalVisible] = React.useState(true);
   const [terminalHistory, setTerminalHistory] = React.useState<Array<{
     id: string;
     command: string;
@@ -84,8 +85,12 @@ export const MonacoEditor: React.FC<MonacoEditorProps> = ({
     const command = terminalCommand.trim();
     if (!command || terminalBusy) return;
     setTerminalCommand("");
-    setTerminalBusy(true);
     setActivePanel("terminal");
+    if (command.toLowerCase() === "clear" || command.toLowerCase() === "cls") {
+      setTerminalHistory([]);
+      return;
+    }
+    setTerminalBusy(true);
     try {
       const result = await terminalRun(command, selectedProject !== "." ? selectedProject : undefined);
       setTerminalHistory((prev) => [
@@ -219,6 +224,7 @@ export const MonacoEditor: React.FC<MonacoEditorProps> = ({
           </div>
         </div>
 
+        {terminalVisible ? (
         <div className="hybridTerminalPanel">
           <div className="terminalTabs">
             {(["problems", "output", "terminal"] as const).map((panel) => (
@@ -234,6 +240,12 @@ export const MonacoEditor: React.FC<MonacoEditorProps> = ({
             <div className="terminalTabsSpacer" />
             <span className={`terminalStatusDot ${agentStatus === "thinking" ? "running" : agentStatus === "error" ? "error" : ""}`} />
             <span className="terminalStatusText">{agentStatus === "thinking" ? "running" : agentStatus === "error" ? "needs review" : "idle"}</span>
+            <button className="terminalIconButton" type="button" onClick={() => setTerminalHistory([])} title="Clear terminal">
+              <Trash2 size={14} />
+            </button>
+            <button className="terminalIconButton" type="button" onClick={() => setTerminalVisible(false)} title="Hide terminal">
+              <PanelBottomClose size={15} />
+            </button>
           </div>
 
           <div className="terminalViewport">
@@ -309,6 +321,13 @@ export const MonacoEditor: React.FC<MonacoEditorProps> = ({
             ) : null}
           </div>
         </div>
+        ) : (
+          <button className="terminalCollapsedBar" type="button" onClick={() => setTerminalVisible(true)}>
+            <PanelBottomOpen size={15} />
+            <span>Terminal hidden</span>
+            <span className="terminalCollapsedHint">Show terminal</span>
+          </button>
+        )}
 
         <div className="statusbar">
           <span>{editorBusy ? "Working…" : editorStatus || (activeBuffer?.dirty ? "Unsaved changes" : "Ready")}</span>

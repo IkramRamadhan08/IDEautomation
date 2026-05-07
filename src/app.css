@@ -1330,6 +1330,52 @@ a {
   font-size: 11px;
 }
 
+.terminalIconButton {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.terminalIconButton:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text);
+}
+
+.terminalCollapsedBar {
+  height: 36px;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 0;
+  border-top: 1px solid rgba(229, 231, 235, 0.09);
+  background: #0f1013;
+  color: var(--text-soft);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.terminalCollapsedBar:hover {
+  background: rgba(124, 140, 255, 0.08);
+  color: var(--text);
+}
+
+.terminalCollapsedHint {
+  margin-left: auto;
+  color: var(--brand-strong);
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .terminalViewport {
   flex: 1;
   min-height: 0;
@@ -2277,6 +2323,43 @@ a {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.newProjectModal {
+  width: min(460px, calc(100vw - 24px));
+  padding: 18px;
+  border-radius: 10px;
+}
+
+.newProjectModalHeader,
+.newProjectModalActions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.newProjectModalTitle {
+  margin-top: 4px;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.newProjectField {
+  display: grid;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.newProjectField span {
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.newProjectModalActions {
+  justify-content: flex-end;
+  margin-top: 18px;
 }
 
 .modalHeader {
