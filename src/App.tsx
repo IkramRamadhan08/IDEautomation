@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent, type PointerEvent } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { Toaster, toast } from "sonner";
 import { supabase } from "./lib/supabase";
@@ -855,9 +855,30 @@ export default function App() {
       ["Portfolio app", "Content pages, templates, deployment"],
     ];
     const providers = ["OpenAI", "Gemini", "Anthropic", "OpenRouter", "Groq", "Together", "Cerebras", "xAI", "Supabase", "Vercel"];
+    const handleLandingPointerMove = (event: PointerEvent<HTMLDivElement>) => {
+      const target = event.currentTarget;
+      target.style.setProperty("--appora-cursor-x", `${event.clientX}px`);
+      target.style.setProperty("--appora-cursor-y", `${event.clientY}px`);
+      target.style.setProperty("--appora-cursor-hot", "1");
+    };
+    const handleLandingPointerLeave = (event: PointerEvent<HTMLDivElement>) => {
+      event.currentTarget.style.setProperty("--appora-cursor-hot", "0");
+    };
 
     return (
-    <div className="authLanding apporaLanding" id="top">
+    <div
+      className="authLanding apporaLanding"
+      id="top"
+      onPointerMove={handleLandingPointerMove}
+      onPointerLeave={handleLandingPointerLeave}
+    >
+      <div className="apporaCursorLiquid" aria-hidden="true">
+        <span className="apporaCursorCore" />
+        <span className="apporaCursorBlob one" />
+        <span className="apporaCursorBlob two" />
+        <span className="apporaCursorBlob three" />
+        <span className="apporaCursorGlint" />
+      </div>
       <header className="apporaNav">
         <a className="splineBrandButton apporaBrand" href="#top" aria-label="Appora home">
           <span className="authBrandMark">A</span>
