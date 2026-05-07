@@ -93,6 +93,8 @@ def _is_serverless_runtime() -> bool:
     return bool(
         os.environ.get("VERCEL")
         or os.environ.get("VERCEL_ENV")
+        or os.environ.get("RAILWAY_ENVIRONMENT")
+        or os.environ.get("RAILWAY_PROJECT_ID")
         or os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
         or os.environ.get("LAMBDA_TASK_ROOT")
     )
@@ -497,12 +499,8 @@ def _update_agent_job_record(job_id: str | None, status: str, *, result: dict | 
             job["error"] = error
     _best_effort_background(update_agent_job, owner_id=owner_id, job_id=job_id, status=status, result=result, error=error)
 
-# Local app: allow frontend dev server
-app.add_middleware(
-    CORSMiddleware,
-    # Vite dev server ports can shift if one is already in use.
-    # Keep this permissive for local dev.
-    allow_origins=[
+def _cors_origins() -> list[str]:
+    defaults = [
         "http://localhost:5173",
         "http://localhost:5174",
         "http://localhost:5175",
@@ -510,8 +508,22 @@ app.add_middleware(
         "http://127.0.0.1:5174",
         "http://127.0.0.1:5175",
         "http://localhost:8788",
-    ],
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+        "https://voice-ide-rho.vercel.app",
+        "https://voice-ide-ikramramadhan08s-projects.vercel.app",
+    ]
+    extra = os.getenv("APPORA_CORS_ORIGINS") or os.getenv("VOICEIDE_CORS_ORIGINS") or ""
+    for origin in extra.split(","):
+        value = origin.strip().rstrip("/")
+        if value and value not in defaults:
+            defaults.append(value)
+    return defaults
+
+
+# Local app: allow frontend dev server; hosted app: allow configured frontend origins.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins(),
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?$|https://.*\.vercel\.app$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1218,7 +1230,7 @@ def _managed_workspace_root() -> Path:
     if base_raw:
         return Path(base_raw).expanduser().resolve()
 
-    if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME") or os.environ.get("LAMBDA_TASK_ROOT"):
+    if _is_serverless_runtime():
         return Path("/tmp/.voiceide-home").resolve()
 
     return Path("~/.voiceide-home").expanduser().resolve()

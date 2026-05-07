@@ -1,0 +1,15 @@
+.git
+.vercel
+.venv
+api/.venv
+node_modules
+dist
+coverage
+playwright-report
+.env
+.env.*
+*.log
+__pycache__
+*.pyc
+.voiceide-home
+.voiceide-users.json

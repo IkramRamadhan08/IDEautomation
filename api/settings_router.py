@@ -200,7 +200,12 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
         user = resolve_request_user(authorization=authorization, x_voiceide_user=x_voiceide_user)
         changed: list[str] = []
 
-        is_serverless = bool((os.getenv("VERCEL") or "").strip() or (os.getenv("VERCEL_ENV") or "").strip())
+        is_serverless = bool(
+            (os.getenv("VERCEL") or "").strip()
+            or (os.getenv("VERCEL_ENV") or "").strip()
+            or (os.getenv("RAILWAY_ENVIRONMENT") or "").strip()
+            or (os.getenv("RAILWAY_PROJECT_ID") or "").strip()
+        )
         secrets_ready = has_supabase() and bool((os.getenv("VOICEIDE_SECRET_KEY") or "").strip())
         hosted_mode = secrets_ready and user.auth_source == "supabase"
         secret_updates = [
