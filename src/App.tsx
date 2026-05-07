@@ -57,13 +57,20 @@ import { Topbar } from "./components/navigation/Topbar";
 import { AgentOrb } from "./components/agent/AgentOrb";
 import {
   ArrowRight,
+  Bot,
   Boxes,
+  Code2,
   Database,
+  Globe2,
   HelpCircle,
+  Layers3,
   Moon,
   PlayCircle,
+  Rocket,
   ShieldCheck,
+  Sparkles,
   Sun,
+  Terminal,
   Workflow,
 } from "lucide-react";
 import { runAgentWorkflow } from "./agent/workflow";
@@ -115,9 +122,9 @@ export default function App() {
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [appTheme, setAppTheme] = useState<AppTheme>(() => {
-    if (typeof window === "undefined") return "dark";
+    if (typeof window === "undefined") return "light";
     const saved = window.localStorage.getItem("appora-theme");
-    return saved === "dark" || saved === "light" ? saved : "dark";
+    return saved === "dark" || saved === "light" ? saved : "light";
   });
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
@@ -833,6 +840,14 @@ export default function App() {
 
   // --- Renders ---
   const renderGoogleLoginGate = () => {
+    const heroNodes = [
+      { label: "Prompt", detail: "Describe the app", icon: Sparkles },
+      { label: "Plan", detail: "Clara scopes the build", icon: Bot },
+      { label: "Code", detail: "Raka edits files", icon: Code2 },
+      { label: "Preview", detail: "Inspect in browser", icon: Globe2 },
+      { label: "Memory", detail: "Project context stays", icon: Layers3 },
+      { label: "Deploy", detail: "Vercel-ready output", icon: Rocket },
+    ];
     const templateCards = [
       ["SaaS dashboard", "Auth, settings, billing-ready workspace"],
       ["AI landing page", "Conversion sections with provider routing"],
@@ -844,8 +859,6 @@ export default function App() {
       const target = event.currentTarget;
       target.style.setProperty("--appora-cursor-x", `${event.clientX}px`);
       target.style.setProperty("--appora-cursor-y", `${event.clientY}px`);
-      target.style.setProperty("--appora-lens-shift-x", `${(event.clientX - window.innerWidth / 2) * -0.06}px`);
-      target.style.setProperty("--appora-lens-shift-y", `${(event.clientY - window.innerHeight / 2) * -0.06}px`);
       target.style.setProperty("--appora-cursor-hot", "1");
     };
     const handleLandingPointerLeave = (event: PointerEvent<HTMLDivElement>) => {
@@ -859,16 +872,12 @@ export default function App() {
       onPointerMove={handleLandingPointerMove}
       onPointerLeave={handleLandingPointerLeave}
     >
-      <div className="apporaGlassLens" aria-hidden="true">
-        <div className="apporaLensText">
-          <span>APPORA</span>
-          <span>BUILD</span>
-          <span>AGENT</span>
-          <span>SHIP</span>
-        </div>
-        <span className="apporaLensGlare" />
-        <span className="apporaLensCaustic one" />
-        <span className="apporaLensCaustic two" />
+      <div className="apporaCursorLiquid" aria-hidden="true">
+        <span className="apporaCursorCore" />
+        <span className="apporaCursorBlob one" />
+        <span className="apporaCursorBlob two" />
+        <span className="apporaCursorBlob three" />
+        <span className="apporaCursorGlint" />
       </div>
       <header className="apporaNav">
         <a className="splineBrandButton apporaBrand" href="#top" aria-label="Appora home">
@@ -894,14 +903,8 @@ export default function App() {
 
       <main className="apporaMain">
         <section className="apporaHero" aria-label="Appora">
-          <div className="apporaHeroCopy apporaTypeStage">
-            <div className="apporaHugeType" aria-hidden="true">
-              <span>APPORA</span>
-              <span>BUILD</span>
-              <span>AGENT</span>
-              <span>SHIP</span>
-            </div>
-            <h1>The Future Just In Your Head</h1>
+          <div className="apporaHeroCopy">
+            <h1>THE FUTURE JUST IN YOUR HEAD</h1>
             <p>
               Appora turns a rough idea into a hosted workspace with Clara for planning, Raka for implementation,
               live preview, project memory, Supabase data, and Vercel-ready output.
@@ -920,6 +923,60 @@ export default function App() {
               <span>BYOK Models</span>
               <span>Serverless Ready</span>
               <span>Project Memory</span>
+            </div>
+          </div>
+
+          <div className="apporaHeroVisual" aria-label="Agent workflow preview">
+            <div className="apporaOrbitGlow" />
+            <div className="apporaMascotStage" aria-label="Clara and Raka companions">
+              {[
+                { name: "Clara", role: "Planner", tone: "clara" },
+                { name: "Raka", role: "Builder", tone: "raka" },
+              ].map((agent) => (
+                <div className={`apporaMascot ${agent.tone}`} key={agent.name}>
+                  <div className="apporaMascotHalo" />
+                  <div className="apporaMascotBody">
+                    <div className="apporaMascotHelmet">
+                      <span className="apporaMascotAntenna" />
+                      <div className="apporaMascotFace">
+                        <span className="apporaMascotEye left" />
+                        <span className="apporaMascotEye right" />
+                        <span className="apporaMascotMouth" />
+                      </div>
+                    </div>
+                    <div className="apporaMascotSuit">
+                      <span />
+                      <strong>{agent.name.slice(0, 1)}</strong>
+                    </div>
+                  </div>
+                  <div className="apporaMascotTag">
+                    <strong>{agent.name}</strong>
+                    <span>{agent.role}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="apporaCommandPanel">
+              <div className="apporaPanelChrome">
+                <span />
+                <span />
+                <span />
+                <strong>appora://workspace</strong>
+              </div>
+              <div className="apporaPromptLine">Build a booking app with auth, admin dashboard, and deploy notes.</div>
+              <div className="apporaAgentRows">
+                <div><Bot size={17} /><strong>Clara</strong><span>breaks the request into product, data, UI, and test steps</span></div>
+                <div><Terminal size={17} /><strong>Raka</strong><span>edits files, runs checks, and records actions only</span></div>
+              </div>
+            </div>
+            <div className="apporaNodeGrid">
+              {heroNodes.map(({ label, detail, icon: Icon }) => (
+                <div className="apporaNode" key={label}>
+                  <Icon size={18} />
+                  <strong>{label}</strong>
+                  <span>{detail}</span>
+                </div>
+              ))}
             </div>
           </div>
         </section>
