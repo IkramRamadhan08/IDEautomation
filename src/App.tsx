@@ -1335,7 +1335,6 @@ export default function App() {
       previewFrameKey={previewFrameKey}
       recentActions={agentActions}
       agentLiveItems={agentLiveItems}
-      agentCapabilities={agentCapabilities}
       onRefreshExplorer={refreshExplorer}
       onSelectProject={selectProject}
       onRestoreCheckpoint={restoreLatestCheckpoint}
@@ -1366,7 +1365,6 @@ export default function App() {
       agentActions={agentActions}
       agentLiveItems={agentLiveItems}
       agentAuditTrail={agentAuditTrail}
-      agentCapabilities={agentCapabilities}
       attachedAssetName={attachedImage?.name || null}
       onEnsurePreviewRunning={ensurePreviewRunning}
     />
@@ -1384,7 +1382,6 @@ export default function App() {
           settingsOpen={settingsOpen}
           identity={identity}
           settings={settings}
-          agentCapabilities={agentCapabilities}
           llmProviderDraft={llmProviderDraft}
           buildModeDraft={buildModeDraft}
           modelDraft={modelDraft}

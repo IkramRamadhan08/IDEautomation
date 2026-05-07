@@ -1,12 +1,10 @@
 import React from "react";
-import { Bot, Image as ImageIcon, Play, Sparkles, Wand2 } from "lucide-react";
+import { Bot, Image as ImageIcon, Play, Sparkles } from "lucide-react";
 import { PreviewPane } from "../components/preview/PreviewPane";
 import { AgentAuditTrail } from "../components/agent/AgentAuditTrail";
-import { AgentCapabilitiesPanel } from "../components/agent/AgentCapabilitiesPanel";
 import { actionDetail, isOperationalLiveItem } from "../agent/liveActions";
 import { getBuildModeProfile } from "../agent/runtime";
 import { type AgentAction, type AgentAuditSnapshot, type AgentLiveItem } from "../types";
-import type { AgentCapabilities } from "../api";
 
 interface FullAgentWorkspaceProps {
   ws: string | null;
@@ -19,7 +17,6 @@ interface FullAgentWorkspaceProps {
   agentActions: AgentAction[];
   agentLiveItems: AgentLiveItem[];
   agentAuditTrail: AgentAuditSnapshot[];
-  agentCapabilities: AgentCapabilities | null;
   attachedAssetName?: string | null;
   onEnsurePreviewRunning: () => void | Promise<string | void>;
 }
@@ -42,7 +39,6 @@ export const FullAgentWorkspace: React.FC<FullAgentWorkspaceProps> = ({
   agentActions,
   agentLiveItems,
   agentAuditTrail,
-  agentCapabilities,
   attachedAssetName,
   onEnsurePreviewRunning,
 }) => {
@@ -83,8 +79,6 @@ export const FullAgentWorkspace: React.FC<FullAgentWorkspaceProps> = ({
             <div className="missionPrimaryText">{statusText}</div>
           </div>
 
-          <AgentCapabilitiesPanel capabilities={agentCapabilities} />
-
           <div className="missionCard">
             <div className="missionCardHeader">
               <div>
@@ -118,35 +112,6 @@ export const FullAgentWorkspace: React.FC<FullAgentWorkspaceProps> = ({
             </div>
           </div>
 
-          <div className="missionCard">
-            <div className="missionCardHeader">
-              <div>
-                <div className="missionCardEyebrow">How to use</div>
-                <div className="missionCardTitle">Brief, then review result</div>
-              </div>
-              <Wand2 size={16} />
-            </div>
-            <div className="missionCompactList">
-              <div className="missionCompactItem static">
-                <div>
-                  <div className="missionCompactPrimary">1. Give Clara the outcome</div>
-                  <div className="missionCompactMeta">Describe the product or feature you want, not only the tiny patch.</div>
-                </div>
-              </div>
-              <div className="missionCompactItem static">
-                <div>
-                  <div className="missionCompactPrimary">2. Let her drive</div>
-                  <div className="missionCompactMeta">Clara can restructure, polish, validate, and iterate automatically.</div>
-                </div>
-              </div>
-              <div className="missionCompactItem static">
-                <div>
-                  <div className="missionCompactPrimary">3. Review the preview</div>
-                  <div className="missionCompactMeta">Use the live product result as the main review surface.</div>
-                </div>
-              </div>
-            </div>
-          </div>
         </div>
       </aside>
 
