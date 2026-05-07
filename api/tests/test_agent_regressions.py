@@ -899,13 +899,14 @@ class SupabaseReadinessRegressionTests(unittest.TestCase):
 
 
 class ProviderCatalogRegressionTests(unittest.TestCase):
-    def test_openrouter_latest_models_are_first_and_free_models_remain_available(self) -> None:
+    def test_openrouter_free_router_is_default_and_paid_models_remain_available(self) -> None:
         models = list_provider_models("openrouter")
         catalog = provider_catalog()
 
-        self.assertEqual(models[0], "x-ai/grok-4.3")
+        self.assertEqual(models[0], "openrouter/free")
         self.assertEqual(catalog["openrouter"]["recommended_model"], models[0])
         self.assertTrue(any(model.endswith(":free") for model in catalog["openrouter"]["free_tier_models"]))
+        self.assertIn("x-ai/grok-4.3", models)
 
     def test_openai_is_familiar_credit_path_not_fake_free_tier(self) -> None:
         catalog = provider_catalog()
@@ -951,8 +952,10 @@ class ProviderCatalogRegressionTests(unittest.TestCase):
             "openai": {"connected": True},
             "openrouter": {"connected": True},
         }
+        attempted: list[tuple[str, str]] = []
 
         def fake_once(provider: str, model: str, *, system: str, user: str):
+            attempted.append((provider, model))
             if provider == "openai":
                 raise RuntimeError("OpenAI sedang kena rate limit.")
             return {"spoken": "ok", "changes": [], "actions": []}
@@ -972,6 +975,21 @@ class ProviderCatalogRegressionTests(unittest.TestCase):
         self.assertEqual(model, "openrouter/free")
         self.assertEqual(data["spoken"], "ok")
         self.assertEqual(data["_voiceide_provider_fallback"]["selected_provider"], "openai")
+        self.assertNotIn(("openai", "gpt-5.5"), attempted)
+
+    def test_free_mode_uses_provider_free_models_instead_of_paid_defaults(self) -> None:
+        with patch.object(agent_mod.settings_mod.settings, "openrouter_model", "x-ai/grok-4.3"), \
+            patch.object(agent_mod.settings_mod.settings, "gemini_model", "gemini-3-pro-preview"), \
+            patch.object(agent_mod.settings_mod.settings, "friendly_free_tier_mode", True):
+            openrouter_models = agent_mod._candidate_models_for_provider("openrouter")
+            gemini_models = agent_mod._candidate_models_for_provider("gemini")
+            openai_models = agent_mod._candidate_models_for_provider("openai")
+
+        self.assertEqual(openrouter_models[0], "openrouter/free")
+        self.assertTrue(all(model == "openrouter/free" or model.endswith(":free") for model in openrouter_models))
+        self.assertIn("gemini-3-flash-preview", gemini_models)
+        self.assertNotIn("gemini-3-pro-preview", gemini_models)
+        self.assertEqual(openai_models, [])
 
     def test_generate_json_can_use_connected_provider_when_none_selected(self) -> None:
         snapshot = {

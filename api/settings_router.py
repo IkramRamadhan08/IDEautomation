@@ -131,7 +131,7 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
             build_mode=s.build_mode,
             openai_model=s.openai_model,
             anthropic_model=getattr(s, "anthropic_model", "claude-sonnet-4-0"),
-            openrouter_model=getattr(s, "openrouter_model", "openai/gpt-5.4"),
+            openrouter_model=getattr(s, "openrouter_model", "openrouter/free"),
             groq_model=getattr(s, "groq_model", "llama-3.3-70b-versatile"),
             gemini_model=getattr(s, "gemini_model", "gemini-2.5-flash"),
             together_model=getattr(s, "together_model", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),

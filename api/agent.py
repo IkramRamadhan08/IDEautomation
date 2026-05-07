@@ -34,6 +34,7 @@ from .oauth_runtime import (
     get_provider_cooldown_remaining,
     auth_snapshot,
     list_models,
+    provider_catalog,
 )
 
 _REF_CACHE: dict[str, tuple[float, str]] = {}
@@ -380,6 +381,49 @@ def _fallback_provider_order(selected_provider: str) -> list[str]:
     return out
 
 
+def _dedupe_models(models: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for model in models:
+        clean = str(model or "").strip()
+        if not clean or clean in seen:
+            continue
+        seen.add(clean)
+        out.append(clean)
+    return out
+
+
+def _is_openrouter_free_model(model: str) -> bool:
+    clean = str(model or "").strip().lower()
+    return clean == "openrouter/free" or clean.endswith(":free")
+
+
+def _free_tier_models_for_provider(provider: str) -> list[str]:
+    catalog = provider_catalog().get(provider) or {}
+    models = catalog.get("free_tier_models")
+    return [str(model).strip() for model in models if str(model or "").strip()] if isinstance(models, list) else []
+
+
+def _candidate_models_for_provider(provider: str) -> list[str]:
+    configured_model = _model_for_provider(provider)
+    if not _friendly_free_tier_mode():
+        return [configured_model] if configured_model else []
+
+    free_models = _free_tier_models_for_provider(provider)
+    preferred: list[str] = []
+    if provider == OPENROUTER_PROVIDER:
+        preferred.append("openrouter/free")
+        if _is_openrouter_free_model(configured_model):
+            preferred.append(configured_model)
+        preferred.extend(free_models)
+        return _dedupe_models(preferred)[:8]
+
+    if configured_model and configured_model in free_models:
+        preferred.append(configured_model)
+    preferred.extend(free_models)
+    return _dedupe_models(preferred)[:6]
+
+
 def _is_fallback_worthy_error(message: str) -> bool:
     lowered = (message or "").lower()
     return any(token in lowered for token in [
@@ -479,30 +523,36 @@ def _generate_json(*, system: str, user: str) -> tuple[str, str, dict[str, Any]]
         raise RuntimeError("Belum ada provider connected. Isi minimal satu API key di Settings.")
 
     errors: list[str] = []
-    for index, provider in enumerate(candidates):
-        model = _model_for_provider(provider)
-        try:
-            require_provider_connected(provider)
-            _throttle_llm_calls(provider, _effective_min_gap_seconds() if index == 0 else 0.0)
-            data = _generate_json_once(provider, model, system=system, user=user)
-            if index > 0:
-                data["_voiceide_provider_fallback"] = {
-                    "selected_provider": selected_provider,
-                    "used_provider": provider,
-                    "used_model": model,
-                    "previous_errors": errors[-3:],
-                }
-            return provider, model, data
-        except Exception as exc:
-            message = str(exc)
-            errors.append(f"{provider}/{model}: {message}"[:500])
-            if index == 0 and len(candidates) > 1 and _is_fallback_worthy_error(message):
+    attempt_index = 0
+    for provider in candidates:
+        models = _candidate_models_for_provider(provider)
+        if not models:
+            if _friendly_free_tier_mode():
+                errors.append(f"{provider}: dilewati karena mode gratis aktif dan provider/model ini tidak punya free-tier model yang jelas"[:500])
                 continue
-            if index > 0 and _is_fallback_worthy_error(message):
-                continue
-            if index < len(candidates) - 1 and _is_fallback_worthy_error(message):
-                continue
-            raise RuntimeError(message)
+            errors.append(f"{provider}: no model configured"[:500])
+            continue
+        for model in models:
+            attempt_index += 1
+            fallback_attempt = provider != selected_provider or model != _model_for_provider(selected_provider)
+            try:
+                require_provider_connected(provider)
+                _throttle_llm_calls(provider, _effective_min_gap_seconds() if attempt_index == 1 else 0.0)
+                data = _generate_json_once(provider, model, system=system, user=user)
+                if fallback_attempt:
+                    data["_voiceide_provider_fallback"] = {
+                        "selected_provider": selected_provider,
+                        "used_provider": provider,
+                        "used_model": model,
+                        "previous_errors": errors[-3:],
+                    }
+                return provider, model, data
+            except Exception as exc:
+                message = str(exc)
+                errors.append(f"{provider}/{model}: {message}"[:500])
+                if _is_fallback_worthy_error(message):
+                    continue
+                raise RuntimeError(message)
 
     raise RuntimeError("Semua provider fallback gagal: " + " | ".join(errors[-4:]))
 

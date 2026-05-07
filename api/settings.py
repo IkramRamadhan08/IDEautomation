@@ -25,7 +25,7 @@ class Settings(BaseModel):
     build_mode: BuildMode = "hybrid"
     openai_model: str = "gpt-5.5"
     anthropic_model: str = "claude-opus-4-7"
-    openrouter_model: str = "x-ai/grok-4.3"
+    openrouter_model: str = "openrouter/free"
     groq_model: str = "groq/compound"
     gemini_model: str = "gemini-3-pro-preview"
     together_model: str = "deepseek-ai/DeepSeek-V4-Pro"
@@ -134,7 +134,7 @@ def load_settings() -> Settings:
         build_mode=build_mode,  # type: ignore[arg-type]
         openai_model=str(g("OPENAI_MODEL", g("OPENAI_CODEX_MODEL", "gpt-5.5")) or "gpt-5.5").strip(),
         anthropic_model=str(g("ANTHROPIC_MODEL", "claude-opus-4-7") or "claude-opus-4-7").strip(),
-        openrouter_model=str(g("OPENROUTER_MODEL", "x-ai/grok-4.3") or "x-ai/grok-4.3").strip(),
+        openrouter_model=str(g("OPENROUTER_MODEL", "openrouter/free") or "openrouter/free").strip(),
         groq_model=str(g("GROQ_MODEL", "groq/compound") or "groq/compound").strip(),
         gemini_model=str(g("GEMINI_MODEL", "gemini-3-pro-preview") or "gemini-3-pro-preview").strip(),
         together_model=str(g("TOGETHER_MODEL", "deepseek-ai/DeepSeek-V4-Pro") or "deepseek-ai/DeepSeek-V4-Pro").strip(),

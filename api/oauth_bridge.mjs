@@ -134,6 +134,13 @@ async function listModels({ provider }) {
   if (provider === "openrouter") {
     return {
       models: [
+        "openrouter/free",
+        "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+        "deepseek/deepseek-v4-flash:free",
+        "deepseek/deepseek-chat-v3-0324:free",
+        "deepseek/deepseek-r1:free",
+        "meta-llama/llama-3.3-70b-instruct:free",
+        "google/gemini-2.0-flash-exp:free",
         "openai/gpt-5.4-mini",
         "openai/gpt-4o-mini",
         "openai/gpt-4.1-mini",

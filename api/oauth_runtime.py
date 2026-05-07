@@ -55,7 +55,7 @@ HOSTED_PROVIDER_CATALOG: dict[str, dict[str, Any]] = {
     OPENROUTER_PROVIDER: {
         "label": "OpenRouter",
         "positioning": "Best for trial users and free/cheap model routing.",
-        "recommended_model": "x-ai/grok-4.3",
+        "recommended_model": "openrouter/free",
         "free_tier_models": [
             "openrouter/free",
             "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
@@ -81,7 +81,7 @@ HOSTED_PROVIDER_CATALOG: dict[str, dict[str, Any]] = {
             "openai/gpt-5.4",
             "anthropic/claude-sonnet-4",
         ],
-        "hint": "Recommended default for public demos because users can bring one OpenRouter key and route to free/cheap models.",
+        "hint": "Recommended default for public demos because users can bring one OpenRouter key and route to free models first.",
     },
     OPENAI_PROVIDER: {
         "label": "OpenAI",
@@ -520,6 +520,13 @@ def list_models(provider: str) -> list[str]:
         ]
     if provider == OPENROUTER_PROVIDER:
         return [
+            "openrouter/free",
+            "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+            "deepseek/deepseek-v4-flash:free",
+            "deepseek/deepseek-chat-v3-0324:free",
+            "deepseek/deepseek-r1:free",
+            "meta-llama/llama-3.3-70b-instruct:free",
+            "google/gemini-2.0-flash-exp:free",
             "x-ai/grok-4.3",
             "openai/gpt-5.5",
             "openai/gpt-5.5-pro",
@@ -534,13 +541,6 @@ def list_models(provider: str) -> list[str]:
             "openai/gpt-5.4-pro",
             "openai/gpt-5.4-mini",
             "openai/gpt-5.4-nano",
-            "openrouter/free",
-            "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-            "deepseek/deepseek-v4-flash:free",
-            "deepseek/deepseek-chat-v3-0324:free",
-            "deepseek/deepseek-r1:free",
-            "meta-llama/llama-3.3-70b-instruct:free",
-            "google/gemini-2.0-flash-exp:free",
             "openai/gpt-4o-mini",
             "openai/gpt-4.1-mini",
             "google/gemini-2.5-flash",
