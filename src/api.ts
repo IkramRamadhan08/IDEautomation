@@ -710,6 +710,9 @@ export type AgentCapabilities = {
     mcp_tool_execution: boolean;
     autonomous_mcp_loop?: boolean;
     deep_work_preflight?: boolean;
+    repo_symbol_tools?: boolean;
+    route_analysis_tool?: boolean;
+    quality_scan_tool?: boolean;
     interaction_intent_detection?: boolean;
     command_conversation_boundary?: boolean;
     read_only_inspection_boundary?: boolean;
@@ -734,6 +737,7 @@ export type AgentCapabilities = {
     mcp_config_candidates: string[];
     supabase_rag_table?: string | null;
     mcp_loop_budget?: number;
+    local_tool_names?: string[];
   };
   memory: {
     session_entries: number;
@@ -765,6 +769,11 @@ export type AgentCapabilities = {
       description: string;
       input_schema: Record<string, unknown>;
     }>;
+  }>;
+  local_tools?: Array<{
+    name: string;
+    description: string;
+    input_schema: Record<string, unknown>;
   }>;
 };
 export type AgentStreamEvent = {

@@ -394,6 +394,8 @@ def _max_tool_loops_for_run(ctx: PreparedAgentContext) -> int:
         return _MAX_MCP_TOOL_LOOPS
     if ctx.intent.kind == "inspection":
         return 1
+    if ctx.intent.should_write_files:
+        return 1
     return 0
 
 
@@ -976,6 +978,9 @@ def _deep_preflight_node(state: AgentRuntimeState) -> AgentRuntimeState:
         {"tool": "repo_overview", "arguments": {"project_root": root_arg, "max_files": 700}},
         {"tool": "package_scripts", "arguments": {"project_root": root_arg}},
         {"tool": "dependency_graph", "arguments": {"project_root": root_arg, "max_files": 220}},
+        {"tool": "component_index", "arguments": {"project_root": root_arg, "max_files": 240}},
+        {"tool": "route_map", "arguments": {"project_root": root_arg, "max_files": 240}},
+        {"tool": "quality_scan", "arguments": {"project_root": root_arg, "max_files": 260}},
     ]
 
     read_many_paths: list[str] = []
@@ -1124,8 +1129,14 @@ def _execute_tooling_node(state: AgentRuntimeState) -> AgentRuntimeState:
     ctx = state["context"]
     raw_actions = list(state.get("actions") or [])
     mcp_actions, tool_actions, other_actions = _split_runtime_actions(raw_actions)
+    if _friendly_free_tier_mode() and ctx.intent.kind != "inspection":
+        if mcp_actions:
+            ctx.trace_warnings.append({"phase": "mcp", "message": "Free-tier guard menahan MCP eksternal untuk command build; local read-only tools tetap boleh dipakai."})
+        mcp_actions = []
     if not mcp_actions and not tool_actions and int(state.get("tool_iterations") or 0) == 0:
         mcp_actions = list(ctx.suggested_mcp_actions or [])
+        if _friendly_free_tier_mode() and ctx.intent.kind != "inspection":
+            mcp_actions = []
     if not mcp_actions and not tool_actions:
         return {"actions": raw_actions}
 

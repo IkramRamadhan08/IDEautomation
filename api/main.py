@@ -2161,6 +2161,9 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "mcp_tool_execution": True,
             "autonomous_mcp_loop": True,
             "deep_work_preflight": True,
+            "repo_symbol_tools": True,
+            "route_analysis_tool": True,
+            "quality_scan_tool": True,
             "interaction_intent_detection": True,
             "command_conversation_boundary": True,
             "read_only_inspection_boundary": True,
@@ -2187,6 +2190,7 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "mcp_config_candidates": [".voiceide/mcp.json", f"{proj_root}/.voiceide/mcp.json" if proj_root != "." else ".voiceide/mcp.json", f"{proj_root}/mcp.json" if proj_root != "." else "mcp.json"],
             "supabase_rag_table": "agent_memory_chunks" if supabase_enabled else None,
             "mcp_loop_budget": 1 if friendly_free_tier else 2,
+            "local_tool_names": [tool.name for tool in list_local_tools()],
             "free_tier_call_budget": {
                 "conversation": 1,
                 "inspection": 2,

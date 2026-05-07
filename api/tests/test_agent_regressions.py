@@ -14,7 +14,7 @@ from api.agent_intent import classify_agent_intent
 from api import agent as agent_mod
 from api.agent_mcp import MCPServerInfo, MCPToolCallResult, MCPToolInfo, discover_mcp_servers, execute_mcp_tool, suggest_mcp_actions
 from api.agent_memory import get_agent_memory_overview, remember_agent_run, retrieve_agent_memory
-from api.agent_runtime import _should_run_deep_preflight, prepare_agent_context
+from api.agent_runtime import _max_tool_loops_for_run, _should_run_deep_preflight, prepare_agent_context
 from api.agent_skills import detect_project_stack, resolve_agent_skills
 from api.agent_tools import execute_local_tool
 from api.auth_identity import AuthenticatedUser
@@ -133,6 +133,29 @@ class AgentRuntimeContextRegressionTests(unittest.TestCase):
             ctx = prepare_agent_context(req, ws_root)
 
             self.assertTrue(_should_run_deep_preflight(ctx, req.input))
+
+    def test_free_tier_build_still_allows_one_local_tool_loop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            project_dir.mkdir(parents=True)
+            (project_dir / "package.json").write_text('{"scripts":{"build":"vite build"}}\n', encoding="utf-8")
+            req = SimpleNamespace(
+                input="kerjain component index dan fix struktur app",
+                project_root="demo",
+                build_mode="full-agent",
+                active_file="",
+                open_files=[],
+                current_content=None,
+                selection=None,
+                preview_url=None,
+                editor_status=None,
+                asset_paths=[],
+            )
+            ctx = prepare_agent_context(req, ws_root)
+
+            with patch("api.agent_runtime.settings_mod.settings.friendly_free_tier_mode", True):
+                self.assertEqual(_max_tool_loops_for_run(ctx), 1)
 
 
 class MemoryRetrievalRegressionTests(unittest.TestCase):
@@ -590,11 +613,15 @@ class AgentToolsRegressionTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (project_dir / "src" / "components" / "Button.tsx").write_text(
-                "export function Button() { return <button /> }\n",
+                "export interface ButtonProps { label: string }\nexport function Button(props: ButtonProps) { return <button aria-label={props.label}>{props.label}</button> }\n",
                 encoding="utf-8",
             )
             (project_dir / "src" / "App.tsx").write_text(
-                "import React from 'react';\nimport { Button } from './components/Button';\nexport default function App() { return <Button /> }\n",
+                "import React from 'react';\nimport { Button } from './components/Button';\nexport function App() { const loading = false; const error = null; return <main><a href=\"/dashboard\">Dashboard</a><Button label=\"Save\" /></main> }\n",
+                encoding="utf-8",
+            )
+            (project_dir / "src" / "app.css").write_text(
+                ":root { --color-bg: #fff; }\n@media (max-width: 700px) { main { display: grid; } }\n/* TODO: remove old spacing token */\n",
                 encoding="utf-8",
             )
 
@@ -622,6 +649,22 @@ class AgentToolsRegressionTests(unittest.TestCase):
             self.assertTrue(graph.ok)
             self.assertIn("src/components/Button.tsx", graph.text)
             self.assertIn("react", graph.text)
+
+            components = execute_local_tool(ws_root, project_dir, tool_name="component_index", arguments={"project_root": "demo"})
+            self.assertTrue(components.ok)
+            self.assertIn('"Button"', components.text)
+            self.assertIn('"ButtonProps"', components.text)
+            self.assertIn("src/App.tsx", components.text)
+
+            routes = execute_local_tool(ws_root, project_dir, tool_name="route_map", arguments={"project_root": "demo"})
+            self.assertTrue(routes.ok)
+            self.assertIn("/dashboard", routes.text)
+
+            quality = execute_local_tool(ws_root, project_dir, tool_name="quality_scan", arguments={"project_root": "demo"})
+            self.assertTrue(quality.ok)
+            self.assertIn('"responsive": true', quality.text)
+            self.assertIn('"a11y_labels": true', quality.text)
+            self.assertIn('"todo"', quality.text)
 
 
 class HybridSeedRegressionTests(unittest.TestCase):
@@ -936,9 +979,15 @@ class CapabilityHonestyRegressionTests(unittest.TestCase):
         self.assertIn("agent_memory_chunks", caps["memory"]["supabase_warning"])
         self.assertTrue(caps["supports"]["vector_memory_retrieval"])
         self.assertTrue(caps["supports"]["preview_quality_checks"])
+        self.assertTrue(caps["supports"]["repo_symbol_tools"])
+        self.assertTrue(caps["supports"]["route_analysis_tool"])
+        self.assertTrue(caps["supports"]["quality_scan_tool"])
         self.assertIn("mcp", caps["supports"]["tool_actions"])
         self.assertIn("shell", caps["supports"]["tool_actions"])
         self.assertIn("tool", caps["supports"]["tool_actions"])
+        self.assertIn("component_index", caps["boundaries"]["local_tool_names"])
+        self.assertIn("route_map", caps["boundaries"]["local_tool_names"])
+        self.assertIn("quality_scan", caps["boundaries"]["local_tool_names"])
 
 
 class SupabaseReadinessRegressionTests(unittest.TestCase):

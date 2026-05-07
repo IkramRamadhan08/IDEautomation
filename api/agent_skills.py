@@ -78,6 +78,24 @@ _BUILTIN_SKILLS: list[SkillDoc] = [
             "Use available preview audit and validation paths instead."
         ),
     ),
+    SkillDoc(
+        skill_id="agentic-tool-discipline",
+        title="Agentic tool discipline",
+        source="builtin",
+        body=(
+            "Use local read-only tools for repo-local facts before editing: repo_overview for shape, package_scripts for validation, dependency_graph for imports, "
+            "component_index for React surfaces, route_map for navigation, and quality_scan for production-readiness risks. Use MCP only for external systems or live integrations."
+        ),
+    ),
+    SkillDoc(
+        skill_id="large-app-delivery",
+        title="Large app delivery",
+        source="builtin",
+        body=(
+            "For app-scale requests, identify routes, state boundaries, shared components, validation scripts, and risk hotspots before generating edits. "
+            "Keep implementation, types, styles, and tests coherent so the result can scale beyond a demo."
+        ),
+    ),
 ]
 
 
@@ -260,6 +278,10 @@ def resolve_agent_skills(
             bonus += 0.8
         if (stack.has_headless_browser or stack.has_webcontainer) and skill.skill_id == "browser-runtime-boundaries":
             bonus += 0.35
+        if skill.skill_id == "agentic-tool-discipline" and any(token in query_tokens for token in {"tool", "tools", "mcp", "skill", "agent", "agentic", "codex", "cursor"}):
+            bonus += 0.85
+        if skill.skill_id == "large-app-delivery" and any(token in query_tokens for token in {"app", "project", "large", "gede", "production", "cursor", "claude", "feature"}):
+            bonus += 0.65
         score = _score(query_tokens, f"{skill.title}\n{skill.body}") + bonus
         if score > 0:
             scored.append((score, skill))

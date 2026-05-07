@@ -113,6 +113,39 @@ _LOCAL_TOOLS: list[LocalToolInfo] = [
             },
         },
     ),
+    LocalToolInfo(
+        name="component_index",
+        description="Index exported React components/functions, hooks, props types, and likely component files (read-only).",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "project_root": {"type": "string", "description": "Project root relative to workspace"},
+                "max_files": {"type": "integer", "default": 220},
+            },
+        },
+    ),
+    LocalToolInfo(
+        name="route_map",
+        description="Extract likely app routes, navigation links, route components, and router usage from JS/TS/HTML files (read-only).",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "project_root": {"type": "string", "description": "Project root relative to workspace"},
+                "max_files": {"type": "integer", "default": 220},
+            },
+        },
+    ),
+    LocalToolInfo(
+        name="quality_scan",
+        description="Scan source files for production-readiness signals and risks: TODOs, console logs, a11y labels, loading/error/empty states, responsive CSS, and placeholders (read-only).",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "project_root": {"type": "string", "description": "Project root relative to workspace"},
+                "max_files": {"type": "integer", "default": 260},
+            },
+        },
+    ),
 ]
 
 
@@ -133,6 +166,16 @@ _IGNORED_DIRS = {
 
 _BINARY_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".zip", ".pdf", ".ttf", ".woff", ".woff2"}
 _IMPORT_RE = re.compile(r'(?:import\s+(?:[^"\']+?\s+from\s+)?|export\s+[^"\']*?\s+from\s+|import\()\s*["\']([^"\']+)["\']')
+_SOURCE_SUFFIXES = {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}
+_FRONTEND_SUFFIXES = {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".css", ".scss", ".sass", ".less", ".html"}
+_COMPONENT_EXPORT_RE = re.compile(
+    r"\bexport\s+(?:default\s+)?(?:function|const)\s+([A-Z][A-Za-z0-9_]*)\b|\bfunction\s+([A-Z][A-Za-z0-9_]*)\s*\(",
+    re.MULTILINE,
+)
+_HOOK_RE = re.compile(r"\b(?:export\s+)?(?:function|const)\s+(use[A-Z][A-Za-z0-9_]*)\b")
+_TYPE_RE = re.compile(r"\bexport\s+(?:type|interface)\s+([A-Z][A-Za-z0-9_]*(?:Props|State|Config|Options)?)\b")
+_ROUTE_RE = re.compile(r'\b(?:path|to|href)=["\']([^"\']+)["\']|createBrowserRouter\s*\(|<Route\b|react-router-dom|@tanstack/react-router')
+_PLACEHOLDER_RE = re.compile(r"\b(lorem ipsum|todo app|placeholder|coming soon|dummy data|mock data|example\.com)\b", re.IGNORECASE)
 
 
 def _should_ignore_path(rel_posix: str) -> bool:
@@ -258,6 +301,65 @@ def _resolve_relative_import(source_rel: str, specifier: str, candidates: set[st
         if clean in candidates:
             return clean
     return None
+
+
+def _source_candidates(project_dir: Path, *, max_files: int, suffixes: set[str] | None = None) -> list[Path]:
+    wanted = suffixes or _SOURCE_SUFFIXES
+    return [
+        path for path in _walk_candidate_files(project_dir, limit_files=max_files * 4)
+        if path.suffix.lower() in wanted
+    ][:max_files]
+
+
+def _line_number(text: str, index: int) -> int:
+    return text.count("\n", 0, max(0, index)) + 1
+
+
+def _line_at(text: str, line: int) -> str:
+    lines = text.splitlines()
+    if line < 1 or line > len(lines):
+        return ""
+    return lines[line - 1][:180]
+
+
+def _looks_like_component_file(rel: str, text: str) -> bool:
+    name = Path(rel).stem
+    return (
+        (name[:1].isupper() and Path(rel).suffix.lower() in {".tsx", ".jsx"})
+        or "React.FC" in text
+        or bool(_COMPONENT_EXPORT_RE.search(text))
+        or bool(re.search(r"return\s*\(\s*<|=>\s*<", text))
+    )
+
+
+def _quality_signals_for_file(rel: str, text: str) -> tuple[dict[str, bool], list[dict[str, Any]]]:
+    lowered = text.lower()
+    signals = {
+        "responsive": bool(re.search(r"@media\b|clamp\(|minmax\(|grid-template|matchMedia\(|\b(sm|md|lg|xl):", text)),
+        "loading_state": bool(re.search(r"\bloading\b|isLoading|pending|skeleton|spinner", text, re.IGNORECASE)),
+        "error_state": bool(re.search(r"\berror\b|failed|retry|try again|catch\s*\(", text, re.IGNORECASE)),
+        "empty_state": bool(re.search(r"empty state|no results|no items|not found|belum ada|kosong", text, re.IGNORECASE)),
+        "a11y_labels": bool(re.search(r"<label\b|htmlFor=|aria-label=|aria-labelledby=", text)),
+        "theme_tokens": bool(re.search(r"--[a-z0-9-]+:\s*|var\(--|data-app-theme|ThemeProvider", text, re.IGNORECASE)),
+    }
+    risks: list[dict[str, Any]] = []
+    patterns = [
+        ("todo", re.compile(r"\b(TODO|FIXME|HACK)\b")),
+        ("console-log", re.compile(r"\bconsole\.(log|debug|warn)\s*\(")),
+        ("placeholder", _PLACEHOLDER_RE),
+        ("unlabeled-button", re.compile(r"<button(?![^>]*(aria-label|aria-labelledby|title=|>[^<A-Za-z0-9]*[A-Za-z0-9]))", re.IGNORECASE)),
+        ("dangerous-html", re.compile(r"dangerouslySetInnerHTML")),
+        ("any-type", re.compile(r":\s*any\b|as\s+any\b")),
+    ]
+    for risk, pattern in patterns:
+        for match in pattern.finditer(text):
+            line = _line_number(text, match.start())
+            risks.append({"path": rel, "line": line, "risk": risk, "text": _line_at(text, line)})
+            if len(risks) >= 24:
+                return signals, risks
+    if "onclick=" in lowered and rel.endswith(".html"):
+        risks.append({"path": rel, "line": 1, "risk": "inline-handler", "text": "HTML contains inline event handlers"})
+    return signals, risks
 
 
 
@@ -450,6 +552,114 @@ def execute_local_tool(ws_root: Path, project_dir: Path, *, tool_name: str, argu
             duration_ms = int((time.perf_counter() - started) * 1000)
             return LocalToolCallResult(tool=name, arguments=args, ok=True, text=text[:14000], raw=payload, duration_ms=duration_ms)
 
+        if name == "component_index":
+            req_root = str(args.get("project_root") or ".").strip() or "."
+            max_files = int(args.get("max_files") or 220)
+            proj = _safe_project_dir(ws_root, req_root)
+            components: list[dict[str, Any]] = []
+            hooks: list[dict[str, Any]] = []
+            types: list[dict[str, Any]] = []
+            component_files: list[str] = []
+            for file_path in _source_candidates(proj, max_files=max_files, suffixes={".ts", ".tsx", ".js", ".jsx"}):
+                rel = file_path.relative_to(proj).as_posix()
+                try:
+                    content = file_path.read_text(encoding="utf-8", errors="ignore")[:100_000]
+                except Exception:
+                    continue
+                if _looks_like_component_file(rel, content):
+                    component_files.append(rel)
+                for match in _COMPONENT_EXPORT_RE.finditer(content):
+                    comp = match.group(1) or match.group(2)
+                    if comp:
+                        components.append({"name": comp, "path": rel, "line": _line_number(content, match.start())})
+                for match in _HOOK_RE.finditer(content):
+                    hooks.append({"name": match.group(1), "path": rel, "line": _line_number(content, match.start())})
+                for match in _TYPE_RE.finditer(content):
+                    types.append({"name": match.group(1), "path": rel, "line": _line_number(content, match.start())})
+            payload = {
+                "project_root": req_root,
+                "component_files": component_files[:120],
+                "components": components[:160],
+                "hooks": hooks[:80],
+                "types": types[:100],
+            }
+            text = json.dumps(payload, ensure_ascii=False, indent=2)
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            return LocalToolCallResult(tool=name, arguments=args, ok=True, text=text[:14000], raw=payload, duration_ms=duration_ms)
+
+        if name == "route_map":
+            req_root = str(args.get("project_root") or ".").strip() or "."
+            max_files = int(args.get("max_files") or 220)
+            proj = _safe_project_dir(ws_root, req_root)
+            routes: list[dict[str, Any]] = []
+            router_files: list[str] = []
+            nav_links: list[dict[str, Any]] = []
+            for file_path in _source_candidates(proj, max_files=max_files, suffixes={".ts", ".tsx", ".js", ".jsx", ".html"}):
+                rel = file_path.relative_to(proj).as_posix()
+                try:
+                    content = file_path.read_text(encoding="utf-8", errors="ignore")[:120_000]
+                except Exception:
+                    continue
+                if re.search(r"react-router-dom|createBrowserRouter|<Route\b|RouterProvider|@tanstack/react-router", content):
+                    router_files.append(rel)
+                for match in _ROUTE_RE.finditer(content):
+                    value = match.group(1)
+                    if not value or not value.startswith(("/", "#")):
+                        continue
+                    item = {"path": value, "file": rel, "line": _line_number(content, match.start())}
+                    if "href=" in match.group(0) or "to=" in match.group(0):
+                        nav_links.append(item)
+                    else:
+                        routes.append(item)
+            payload = {
+                "project_root": req_root,
+                "router_files": sorted(dict.fromkeys(router_files))[:80],
+                "routes": routes[:160],
+                "nav_links": nav_links[:160],
+            }
+            text = json.dumps(payload, ensure_ascii=False, indent=2)
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            return LocalToolCallResult(tool=name, arguments=args, ok=True, text=text[:12000], raw=payload, duration_ms=duration_ms)
+
+        if name == "quality_scan":
+            req_root = str(args.get("project_root") or ".").strip() or "."
+            max_files = int(args.get("max_files") or 260)
+            proj = _safe_project_dir(ws_root, req_root)
+            aggregate = {
+                "responsive": False,
+                "loading_state": False,
+                "error_state": False,
+                "empty_state": False,
+                "a11y_labels": False,
+                "theme_tokens": False,
+            }
+            risks: list[dict[str, Any]] = []
+            scanned = 0
+            for file_path in _source_candidates(proj, max_files=max_files, suffixes=_FRONTEND_SUFFIXES):
+                rel = file_path.relative_to(proj).as_posix()
+                try:
+                    content = file_path.read_text(encoding="utf-8", errors="ignore")[:120_000]
+                except Exception:
+                    continue
+                scanned += 1
+                signals, file_risks = _quality_signals_for_file(rel, content)
+                for key, value in signals.items():
+                    aggregate[key] = aggregate[key] or value
+                risks.extend(file_risks)
+                if len(risks) >= 80:
+                    risks = risks[:80]
+                    break
+            payload = {
+                "project_root": req_root,
+                "files_scanned": scanned,
+                "signals": aggregate,
+                "missing_signals": [key for key, value in aggregate.items() if not value],
+                "risks": risks[:80],
+            }
+            text = json.dumps(payload, ensure_ascii=False, indent=2)
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            return LocalToolCallResult(tool=name, arguments=args, ok=True, text=text[:14000], raw=payload, duration_ms=duration_ms)
+
         raise RuntimeError(f"Unknown local tool: {name}")
 
     except Exception as exc:
@@ -462,6 +672,7 @@ def format_local_tools_prompt() -> str:
         "LOCAL TOOLS (read-only):",
         "These tools run inside this backend, no external MCP server required.",
         "If you need one, return an action like {\"type\": \"tool\", \"tool\": \"repo_search\", \"arguments\": { ... }}.",
+        "Use local tools before MCP for repo-local facts. Use MCP only for external systems or integrations not represented in the local workspace.",
     ]
     for tool in _LOCAL_TOOLS:
         lines.append(f"- {tool.name}: {tool.description}")
