@@ -4253,12 +4253,12 @@ a {
 }
 
 .apporaHero {
-  min-height: calc(100vh - 84px);
+  min-height: calc(100vh - 112px);
   display: grid;
   grid-template-columns: minmax(0, 0.92fr) minmax(470px, 1.08fr);
   gap: clamp(34px, 5vw, 82px);
   align-items: center;
-  padding: clamp(50px, 7vw, 86px) 0 72px;
+  padding: clamp(28px, 4.8vw, 58px) 0 38px;
 }
 
 .apporaHeroCopy {
@@ -4319,7 +4319,7 @@ a {
 
 .apporaHeroVisual {
   position: relative;
-  min-height: 680px;
+  min-height: 620px;
   display: grid;
   align-content: center;
   gap: 16px;
@@ -4570,8 +4570,14 @@ a {
 .apporaCommandPanel {
   position: relative;
   overflow: hidden;
-  padding: 16px;
-  border-radius: 30px;
+  padding: 0 16px 16px;
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.075) 18%, rgba(255, 255, 255, 0.05)),
+    linear-gradient(180deg, var(--appora-surface-strong), var(--appora-surface));
+  box-shadow:
+    0 28px 90px rgba(0, 0, 0, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
 }
 
 .apporaCommandPanel::after {
@@ -4583,31 +4589,56 @@ a {
 }
 
 .apporaPanelChrome {
+  height: 46px;
+  margin: 0 -16px;
+  padding: 0 16px;
   display: flex;
   align-items: center;
   gap: 7px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.11);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.08));
   color: var(--appora-soft);
   font-size: 12px;
   font-weight: 580;
 }
 
 .apporaPanelChrome span {
-  width: 9px;
-  height: 9px;
+  width: 12px;
+  height: 12px;
   border-radius: 999px;
   background: var(--appora-soft);
+  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.2);
+}
+
+.apporaPanelChrome span:nth-child(1) {
+  background: #ff5f57;
+}
+
+.apporaPanelChrome span:nth-child(2) {
+  background: #ffbd2e;
+}
+
+.apporaPanelChrome span:nth-child(3) {
+  background: #28c840;
 }
 
 .apporaPanelChrome strong {
   margin-left: 8px;
   color: var(--appora-muted);
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .apporaPromptLine {
-  margin-top: 18px;
+  margin-top: 16px;
   padding: 18px;
-  border-radius: 18px;
-  background: rgba(0, 0, 0, 0.18);
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(0, 0, 0, 0.1));
   color: var(--appora-text);
   font-size: 18px;
   font-weight: 660;
@@ -4708,7 +4739,7 @@ a {
 }
 
 .apporaBand {
-  padding: 12px 0 64px;
+  padding: 0 0 34px;
   overflow: hidden;
 }
 
@@ -4735,9 +4766,9 @@ a {
 
 .apporaSection {
   display: grid;
-  gap: 28px;
-  padding: clamp(82px, 10vw, 132px) 0;
-  scroll-margin-top: 102px;
+  gap: 24px;
+  padding: clamp(58px, 7vw, 92px) 0;
+  scroll-margin-top: 88px;
 }
 
 .apporaSection::before {
@@ -4908,8 +4939,8 @@ a {
   display: grid;
   justify-items: center;
   gap: 24px;
-  margin: 52px 0 0;
-  padding: clamp(54px, 8vw, 96px);
+  margin: 24px 0 0;
+  padding: clamp(48px, 7vw, 82px);
   border-radius: 36px;
   text-align: center;
   overflow: hidden;
@@ -4941,27 +4972,111 @@ a {
   position: relative;
   z-index: 1;
   width: min(1200px, calc(100vw - 32px));
-  margin: 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  padding: 42px 0 54px;
+  margin: 34px auto 0;
+  padding: 0 0 44px;
   color: var(--appora-muted);
 }
 
-.apporaFooter div {
+.apporaFooterShell {
+  position: relative;
   display: grid;
-  gap: 4px;
+  gap: 28px;
+  padding: clamp(24px, 4vw, 40px);
+  border: 1px solid var(--appora-border);
+  border-radius: 30px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 10% 0%, rgba(156, 255, 95, 0.16), transparent 28%),
+    radial-gradient(circle at 92% 22%, rgba(97, 232, 255, 0.2), transparent 34%),
+    linear-gradient(180deg, var(--appora-surface-strong), rgba(255, 255, 255, 0.035));
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.16);
+  backdrop-filter: blur(18px);
+}
+
+.apporaFooterShell::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: 42px 42px;
+  mask-image: linear-gradient(180deg, black, transparent 80%);
+}
+
+.apporaFooterBrand,
+.apporaFooterColumns,
+.apporaFooterBottom {
+  position: relative;
+  z-index: 1;
+}
+
+.apporaFooterBrand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.apporaFooterBrand > div,
+.apporaFooterSignal {
+  display: grid;
+  gap: 5px;
 }
 
 .apporaFooter strong {
   color: var(--appora-text);
 }
 
-.apporaFooter nav {
+.apporaFooterColumns {
+  display: grid;
+  grid-template-columns: 1.2fr 1.2fr 1.6fr;
   gap: 18px;
-  flex-wrap: wrap;
+}
+
+.apporaFooter nav,
+.apporaFooterSignal {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-height: 132px;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.apporaFooter a {
+  width: fit-content;
+}
+
+.apporaFooter a:hover {
+  color: var(--appora-text);
+}
+
+.apporaFooterBottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.apporaFooterCta {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 15px;
+  border: 0;
+  border-radius: 999px;
+  color: #071015;
+  background: linear-gradient(135deg, var(--appora-accent), var(--appora-cyan));
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
 }
 
 @keyframes apporaMarquee {
@@ -5069,6 +5184,14 @@ a {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .apporaFooterColumns {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .apporaFooterSignal {
+    grid-column: 1 / -1;
+  }
+
   .apporaNavLinks {
     display: none;
   }
@@ -5164,6 +5287,28 @@ a {
   .apporaFooter {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .apporaFooterShell {
+    border-radius: 24px;
+  }
+
+  .apporaFooterColumns {
+    grid-template-columns: 1fr;
+  }
+
+  .apporaFooterSignal {
+    grid-column: auto;
+  }
+
+  .apporaFooterBottom,
+  .apporaFooterBrand {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .apporaFooterCta {
+    width: 100%;
   }
 }
 

@@ -1090,16 +1090,39 @@ export default function App() {
       </main>
 
       <footer className="apporaFooter">
-        <div>
-          <strong>Appora</strong>
-          <span>Agentic web builder for hosted projects.</span>
+        <div className="apporaFooterShell">
+          <div className="apporaFooterBrand">
+            <span className="authBrandMark">A</span>
+            <div>
+              <strong>Appora</strong>
+              <span>Agentic web builder for hosted projects.</span>
+            </div>
+          </div>
+          <div className="apporaFooterColumns">
+            <nav aria-label="Footer product navigation">
+              <strong>Product</strong>
+              <a href="#templates">Templates</a>
+              <a href="#tutorial">Tutorial</a>
+            </nav>
+            <nav aria-label="Footer platform navigation">
+              <strong>Platform</strong>
+              <a href="#docs">Docs</a>
+              <a href="#faq">FAQ</a>
+            </nav>
+            <div className="apporaFooterSignal">
+              <strong>Ready for</strong>
+              <span>Supabase memory</span>
+              <span>Vercel deploys</span>
+            </div>
+          </div>
+          <div className="apporaFooterBottom">
+            <span>Bring your own keys. Keep your projects saved.</span>
+            <button className="apporaFooterCta" type="button" onClick={startGoogleLogin}>
+              Open Appora
+              <ArrowRight size={15} />
+            </button>
+          </div>
         </div>
-        <nav aria-label="Footer navigation">
-          <a href="#templates">Templates</a>
-          <a href="#tutorial">Tutorial</a>
-          <a href="#docs">Docs</a>
-          <a href="#faq">FAQ</a>
-        </nav>
       </footer>
     </div>
   );
