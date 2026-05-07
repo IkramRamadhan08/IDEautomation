@@ -1,3 +1,19 @@
+@font-face {
+  font-family: "Geist";
+  src: url("../node_modules/geist/dist/fonts/geist-sans/Geist-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  src: url("../node_modules/geist/dist/fonts/geist-mono/GeistMono-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   color-scheme: dark;
   --bg: #090a0d;
@@ -68,7 +84,7 @@ body,
 body {
   overflow: hidden;
   color: var(--text);
-  font-family: Inter, "SF Pro Display", "SF Pro Text", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: "Geist", Inter, "SF Pro Text", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   background: var(--bg);
   font-feature-settings: "cv02", "cv03", "cv04", "ss01";
   text-rendering: geometricPrecision;
@@ -996,7 +1012,7 @@ a {
 }
 
 .mono {
-  font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  font-family: "Geist Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
 }
 
 .assistShell,
@@ -1515,7 +1531,7 @@ a {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-family: "Geist Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 12px;
   line-height: 1.45;
   color: rgba(229, 231, 235, 0.92);
@@ -4055,7 +4071,7 @@ a {
   color: var(--appora-muted);
   text-decoration: none;
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 620;
 }
 
 .apporaNavLinks a {
@@ -4106,7 +4122,7 @@ a {
   color: #071015;
   background: linear-gradient(135deg, var(--appora-accent), var(--appora-cyan));
   font-size: 13px;
-  font-weight: 900;
+  font-weight: 680;
   box-shadow: 0 18px 54px rgba(97, 232, 255, 0.2);
 }
 
@@ -4119,7 +4135,7 @@ a {
   color: var(--appora-text);
   background: var(--appora-surface);
   font-size: 13px;
-  font-weight: 850;
+  font-weight: 620;
 }
 
 .apporaThemeToggle:hover,
@@ -4160,10 +4176,10 @@ a {
 }
 
 .apporaHero h1 {
-  max-width: 720px;
-  font-size: clamp(56px, 7.7vw, 104px);
-  line-height: 0.91;
-  font-weight: 920;
+  max-width: 760px;
+  font-size: clamp(48px, 6.3vw, 82px);
+  line-height: 0.98;
+  font-weight: 650;
 }
 
 .apporaHero p,
@@ -4198,7 +4214,7 @@ a {
   background: rgba(255, 255, 255, 0.045);
   color: var(--appora-muted);
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 620;
 }
 
 .apporaHeroVisual {
@@ -4266,7 +4282,7 @@ a {
   gap: 7px;
   color: var(--appora-soft);
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 580;
 }
 
 .apporaPanelChrome span {
@@ -4288,7 +4304,7 @@ a {
   background: rgba(0, 0, 0, 0.18);
   color: var(--appora-text);
   font-size: 18px;
-  font-weight: 820;
+  font-weight: 660;
   line-height: 1.35;
 }
 
@@ -4408,7 +4424,7 @@ a {
   background: var(--appora-surface);
   color: var(--appora-muted);
   font-size: 13px;
-  font-weight: 850;
+  font-weight: 620;
 }
 
 .apporaSection {
@@ -4449,14 +4465,14 @@ a {
   width: fit-content;
   color: var(--appora-accent);
   font-size: 12px;
-  font-weight: 950;
-  letter-spacing: 0.18em;
+  font-weight: 680;
+  letter-spacing: 0.08em;
 }
 
 .apporaSection h2 {
-  font-size: clamp(38px, 5.3vw, 72px);
-  line-height: 0.98;
-  font-weight: 900;
+  font-size: clamp(34px, 4.45vw, 58px);
+  line-height: 1.02;
+  font-weight: 640;
 }
 
 .apporaSection p {
@@ -4490,7 +4506,7 @@ a {
   color: #071015;
   font-size: 12px;
   font-style: normal;
-  font-weight: 950;
+  font-weight: 700;
 }
 
 .apporaAgents {
@@ -4521,7 +4537,7 @@ a {
   border-radius: 22px;
   color: #071015;
   font-size: 24px;
-  font-weight: 950;
+  font-weight: 720;
 }
 
 .apporaAgentAvatar.clara {
@@ -4534,8 +4550,9 @@ a {
 
 .apporaAgentCards h3 {
   margin: 0;
-  font-size: 32px;
+  font-size: 30px;
   line-height: 1;
+  font-weight: 680;
 }
 
 .apporaAgentCards p {
@@ -4609,8 +4626,9 @@ a {
 
 .apporaFinalCta h2 {
   max-width: 880px;
-  font-size: clamp(38px, 5.7vw, 78px);
-  line-height: 0.98;
+  font-size: clamp(34px, 4.8vw, 62px);
+  line-height: 1.02;
+  font-weight: 640;
 }
 
 .apporaFooter {
@@ -4696,7 +4714,8 @@ a {
   }
 
   .apporaHero h1 {
-    font-size: 50px;
+    font-size: 42px;
+    line-height: 1;
   }
 
   .apporaHero p,
@@ -4737,7 +4756,7 @@ a {
   }
 
   .apporaSection h2 {
-    font-size: 38px;
+    font-size: 34px;
   }
 
   .apporaFinalCta {

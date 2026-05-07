@@ -29,6 +29,7 @@
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
     "framer-motion": "^12.4.7",
+    "geist": "^1.7.0",
     "lucide-react": "^0.477.0",
     "monaco-editor": "^0.55.1",
     "react": "^19.2.0",
