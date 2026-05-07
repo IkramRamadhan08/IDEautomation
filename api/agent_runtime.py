@@ -98,6 +98,8 @@ _PROJECT_INSTRUCTION_FILES = (
     ".voiceide/instructions.md",
 )
 _PROJECT_INSTRUCTION_MAX_CHARS = 18_000
+_IMPORT_CHECK_EXTS = {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}
+_IMPORT_RESOLUTION_EXTS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json", ".css", ".scss"]
 
 
 @dataclass(frozen=True)
@@ -383,6 +385,87 @@ def _merge_action_sets(*batches: list[dict[str, Any]]) -> list[dict[str, Any]]:
             seen.add(key)
             merged.append(item)
     return merged
+
+
+def _change_map_by_local_path(changes: list[dict[str, Any]]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for item in changes:
+        if not isinstance(item, dict):
+            continue
+        rel = str(item.get("path") or "").strip().lstrip("/")
+        content = item.get("new_content")
+        if rel and isinstance(content, str):
+            out[rel] = content
+    return out
+
+
+def _resolve_import_candidate(source_rel: str, specifier: str, candidates: set[str]) -> str | None:
+    if not specifier.startswith("."):
+        return None
+    raw = str(PurePosixPath(PurePosixPath(source_rel).parent, specifier)).lstrip("/")
+    names: list[str] = []
+    if PurePosixPath(raw).suffix:
+        names.append(raw)
+    else:
+        for ext in _IMPORT_RESOLUTION_EXTS:
+            names.append(raw + ext)
+            names.append(f"{raw}/index{ext}")
+    for name in names:
+        clean = str(PurePosixPath(name)).lstrip("/")
+        if clean in candidates:
+            return clean
+    return None
+
+
+def _missing_relative_imports(ctx: PreparedAgentContext, changes: list[dict[str, Any]]) -> list[str]:
+    change_map = _change_map_by_local_path(changes)
+    if not change_map:
+        return []
+    candidate_files = set(ctx.all_files) | set(change_map.keys())
+    missing: list[str] = []
+    for rel, content in change_map.items():
+        if PurePosixPath(rel).suffix.lower() not in _IMPORT_CHECK_EXTS:
+            continue
+        for specifier in _RELATIVE_IMPORT_RE.findall(content[:180_000]):
+            if not specifier.startswith("."):
+                continue
+            if _resolve_import_candidate(rel, specifier, candidate_files):
+                continue
+            missing.append(f"{rel} imports {specifier}")
+            if len(missing) >= 12:
+                return missing
+    return missing
+
+
+def _large_rewrite_warnings(ctx: PreparedAgentContext, changes: list[dict[str, Any]], user_input: str) -> list[str]:
+    hint = (user_input or "").lower()
+    if any(token in hint for token in ("rewrite", "rombak", "bongkar", "rebuild", "ulang", "replace", "hapus semua")):
+        return []
+    warnings: list[str] = []
+    for item in changes:
+        rel = str(item.get("path") or "").strip().lstrip("/")
+        new_content = item.get("new_content")
+        if not rel or not isinstance(new_content, str):
+            continue
+        old_content = ctx.relevant_files.get(rel)
+        if old_content is None and rel == ctx.active_rel:
+            old_content = ctx.current
+        if old_content is None:
+            try:
+                old_path = ctx.project_dir / rel
+                if old_path.exists() and old_path.is_file():
+                    old_content = old_path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                old_content = None
+        if not old_content or len(old_content) < 4000:
+            continue
+        old_lines = old_content.splitlines()
+        new_lines = new_content.splitlines()
+        if len(new_lines) < max(8, int(len(old_lines) * 0.35)):
+            warnings.append(f"{rel} shrank from {len(old_lines)} to {len(new_lines)} lines without explicit rewrite/delete language")
+        if len(warnings) >= 8:
+            break
+    return warnings
 
 
 _MAX_MCP_TOOL_LOOPS = 2
@@ -1312,6 +1395,14 @@ def _verify_node(state: AgentRuntimeState) -> AgentRuntimeState:
     ]
     add("valid-change-paths", not invalid_paths, "All change paths look project-relative." if not invalid_paths else f"Invalid paths: {', '.join(invalid_paths[:5])}")
 
+    change_paths = [str(item.get("path") or "").strip().lstrip("/") for item in changes if isinstance(item, dict) and str(item.get("path") or "").strip()]
+    duplicate_paths = sorted({path for path in change_paths if change_paths.count(path) > 1})
+    add(
+        "unique-change-paths",
+        not duplicate_paths,
+        "No duplicate file changes." if not duplicate_paths else f"Duplicate change paths: {', '.join(duplicate_paths[:8])}",
+    )
+
     empty_files = [
         str(item.get("path") or "")
         for item in changes
@@ -1322,6 +1413,22 @@ def _verify_node(state: AgentRuntimeState) -> AgentRuntimeState:
     shell_actions = [item for item in actions if str(item.get("type") or "").lower() == "shell"]
     invalid_shell = [item for item in shell_actions if not isinstance(item.get("command"), str) or not str(item.get("command") or "").strip()]
     add("valid-shell-actions", not invalid_shell, "Shell actions have commands." if not invalid_shell else f"{len(invalid_shell)} shell action(s) missing command.")
+
+    missing_imports = _missing_relative_imports(ctx, changes)
+    add(
+        "relative-imports-resolve",
+        not missing_imports,
+        "Changed relative imports resolve against the project tree." if not missing_imports else f"Missing relative imports: {', '.join(missing_imports[:6])}",
+    )
+
+    rewrite_warnings = _large_rewrite_warnings(ctx, changes, state["input"])
+    add(
+        "large-rewrite-review",
+        True,
+        "No suspicious large rewrite detected." if not rewrite_warnings else f"Warnings: {'; '.join(rewrite_warnings[:3])}",
+    )
+    for warning in rewrite_warnings:
+        ctx.trace_warnings.append({"phase": "rewrite-review", "message": warning[:240]})
 
     unexecuted_tool_actions = [
         item for item in actions if str(item.get("type") or "").lower() in {"tool", "mcp"}

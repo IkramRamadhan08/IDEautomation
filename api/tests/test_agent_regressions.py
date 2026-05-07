@@ -14,7 +14,7 @@ from api.agent_intent import classify_agent_intent
 from api import agent as agent_mod
 from api.agent_mcp import MCPServerInfo, MCPToolCallResult, MCPToolInfo, discover_mcp_servers, execute_mcp_tool, suggest_mcp_actions
 from api.agent_memory import get_agent_memory_overview, remember_agent_run, retrieve_agent_memory
-from api.agent_runtime import _max_tool_loops_for_run, _should_run_deep_preflight, prepare_agent_context
+from api.agent_runtime import _max_tool_loops_for_run, _should_run_deep_preflight, _verify_node, prepare_agent_context
 from api.agent_skills import detect_project_stack, resolve_agent_skills
 from api.agent_tools import execute_local_tool
 from api.auth_identity import AuthenticatedUser
@@ -243,6 +243,69 @@ class AgentPatchEditingRegressionTests(unittest.TestCase):
 
         self.assertEqual(suggestion.changes, [])
         self.assertIn("patch_warnings=1", suggestion.log)
+
+
+class AgentVerifierRegressionTests(unittest.TestCase):
+    def _ctx(self, ws_root: Path, prompt: str = "fix app imports"):
+        req = SimpleNamespace(
+            input=prompt,
+            project_root="demo",
+            build_mode="full-agent",
+            active_file="src/App.tsx",
+            open_files=["src/App.tsx"],
+            current_content=None,
+            selection=None,
+            preview_url=None,
+            editor_status=None,
+            asset_paths=[],
+        )
+        return prepare_agent_context(req, ws_root)
+
+    def test_verifier_blocks_missing_relative_imports_and_duplicate_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src").mkdir(parents=True)
+            (project_dir / "src" / "App.tsx").write_text("export default function App() { return null }\n", encoding="utf-8")
+            ctx = self._ctx(ws_root)
+
+            state = {
+                "context": ctx,
+                "input": "fix app imports",
+                "changes": [
+                    {"path": "src/App.tsx", "new_content": "import Missing from './Missing';\nexport default function App() { return <Missing /> }\n"},
+                    {"path": "src/App.tsx", "new_content": "import Missing from './Missing';\nexport default function App() { return <Missing /> }\n"},
+                ],
+                "actions": [],
+            }
+            result = _verify_node(state)
+
+        verification = {item["name"]: item for item in result["context"].trace_verification}
+        self.assertFalse(verification["unique-change-paths"]["ok"])
+        self.assertFalse(verification["relative-imports-resolve"]["ok"])
+        self.assertIn("./Missing", verification["relative-imports-resolve"]["detail"])
+
+    def test_verifier_warns_on_large_rewrite_without_blocking(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src").mkdir(parents=True)
+            old_content = "\n".join(f"export const value{i} = {i};" for i in range(260)) + "\n"
+            (project_dir / "src" / "App.tsx").write_text(old_content, encoding="utf-8")
+            ctx = self._ctx(ws_root, prompt="fix typo")
+
+            state = {
+                "context": ctx,
+                "input": "fix typo",
+                "changes": [{"path": "src/App.tsx", "new_content": "export default function App() { return null }\n"}],
+                "actions": [],
+            }
+            result = _verify_node(state)
+
+        verification = {item["name"]: item for item in result["context"].trace_verification}
+        self.assertTrue(verification["large-rewrite-review"]["ok"])
+        self.assertIn("Warnings:", verification["large-rewrite-review"]["detail"])
+        self.assertTrue(any(warning["phase"] == "rewrite-review" for warning in result["context"].trace_warnings))
 
 
 class MemoryRetrievalRegressionTests(unittest.TestCase):
