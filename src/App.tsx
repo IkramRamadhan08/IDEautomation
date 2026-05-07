@@ -61,6 +61,8 @@ const SettingsModal = lazy(() => import("./components/settings/SettingsModal").t
 const HybridWorkspace = lazy(() => import("./modes/HybridWorkspace").then((module) => ({ default: module.HybridWorkspace })));
 const FullAgentWorkspace = lazy(() => import("./modes/FullAgentWorkspace").then((module) => ({ default: module.FullAgentWorkspace })));
 
+const MODEL_PROVIDERS = ["OpenRouter", "Gemini", "Groq", "OpenAI", "Anthropic", "Together", "Cerebras", "xAI"];
+
 function getDefaultAssistPaneWidth() {
   if (typeof window === "undefined") return 280;
   return Math.max(220, Math.min(280, Math.floor(window.innerWidth * 0.24)));
@@ -889,6 +891,32 @@ export default function App() {
         </section>
         </section>
 
+        <section className="authProviderMarquee" aria-label="Supported model providers">
+          <div className="authProviderMarqueeHeader">
+            <span>Connect the model keys your users already have</span>
+          </div>
+          <div className="authMarqueeViewport">
+            <div className="authMarqueeTrack">
+              {[...MODEL_PROVIDERS, ...MODEL_PROVIDERS].map((provider, index) => (
+                <span className="authProviderLogoChip" key={`${provider}-primary-${index}`}>
+                  <em>{provider.slice(0, 2)}</em>
+                  {provider}
+                </span>
+              ))}
+            </div>
+          </div>
+          <div className="authMarqueeViewport reverse">
+            <div className="authMarqueeTrack">
+              {[...MODEL_PROVIDERS.slice().reverse(), ...MODEL_PROVIDERS.slice().reverse()].map((provider, index) => (
+                <span className="authProviderLogoChip muted" key={`${provider}-reverse-${index}`}>
+                  <em>{provider.slice(0, 2)}</em>
+                  {provider}
+                </span>
+              ))}
+            </div>
+          </div>
+        </section>
+
         <section className="authInfoBand authCapabilityBand" aria-label="What Appora can build">
           <div className="authSectionHeader">
             <span>What you can build</span>
@@ -1037,7 +1065,7 @@ export default function App() {
             <h2>Paste the key you already have. Appora can route and fallback when limits hit.</h2>
           </div>
           <div className="authProviderList">
-            {["OpenRouter", "Gemini", "Groq", "OpenAI", "Anthropic", "Together", "Cerebras", "xAI"].map((provider) => (
+            {MODEL_PROVIDERS.map((provider) => (
               <span key={provider}>{provider}</span>
             ))}
           </div>
