@@ -889,6 +889,89 @@ export default function App() {
         </section>
         </section>
 
+        <section className="authInfoBand authCapabilityBand" aria-label="What Appora can build">
+          <div className="authSectionHeader">
+            <span>What you can build</span>
+            <h2>Start with a real app shape, then let the agent push it toward something usable.</h2>
+          </div>
+          <div className="authCapabilityGrid">
+            <div className="wide">
+              <strong>Business apps</strong>
+              <p>Dashboards, client portals, admin panels, internal tools, analytics views, and CRUD flows with real empty, loading, and error states.</p>
+            </div>
+            <div>
+              <strong>Public sites</strong>
+              <p>Landing pages, pricing pages, waitlists, portfolios, product pages, and campaign sites with responsive sections.</p>
+            </div>
+            <div>
+              <strong>AI products</strong>
+              <p>Prompt tools, chat interfaces, generation workflows, BYOK settings, and model routing for users testing free tiers.</p>
+            </div>
+            <div>
+              <strong>Prototype to MVP</strong>
+              <p>Use templates to get structure fast, then ask Clara to add routes, polish UI, wire state, and validate the build.</p>
+            </div>
+            <div className="wide">
+              <strong>Hosted project workspaces</strong>
+              <p>Projects are meant to live in the browser with Supabase persistence, preview checks, checkpoints, and a coding surface for deeper edits.</p>
+            </div>
+          </div>
+        </section>
+
+        <section className="authInfoBand authAgentBand" aria-label="Agent capabilities">
+          <div className="authSectionHeader">
+            <span>Agent capabilities</span>
+            <h2>Clara builds autonomously. Raka helps when the user wants precise control.</h2>
+          </div>
+          <div className="authAgentGrid">
+            <div>
+              <span>Clara</span>
+              <strong>Full builder agent</strong>
+              <p>Understands the request, inspects files, makes scoped patches, requests terminal actions, reads failures, repairs, and summarizes the result.</p>
+            </div>
+            <div>
+              <span>Raka</span>
+              <strong>Hybrid IDE copilot</strong>
+              <p>Works close to the active file and editor context for focused changes, refactors, explanations, and incremental implementation.</p>
+            </div>
+            <div>
+              <span>Memory</span>
+              <strong>Project-aware context</strong>
+              <p>Stores project profile, stack signals, decisions, recent runs, and reusable facts so follow-up requests stay connected.</p>
+            </div>
+            <div>
+              <span>Tools</span>
+              <strong>Terminal, MCP, preview audit</strong>
+              <p>Can use local repo tools, MCP integrations, shell actions, browser inspection, and build checks when those steps matter.</p>
+            </div>
+          </div>
+        </section>
+
+        <section className="authInfoBand authWorkspaceBand" aria-label="Workspace overview">
+          <div className="authSectionHeader">
+            <span>Inside the workspace</span>
+            <h2>A browser IDE shaped for non-coders, with enough control for serious iteration.</h2>
+          </div>
+          <div className="authWorkspaceGrid">
+            <div>
+              <strong>Files</strong>
+              <p>Browse generated app files, open tabs, edit code, and keep project structure visible.</p>
+            </div>
+            <div>
+              <strong>Preview</strong>
+              <p>Run the app preview, inspect page health, and catch layout or runtime problems before shipping.</p>
+            </div>
+            <div>
+              <strong>Terminal actions</strong>
+              <p>Let the agent request installs, builds, tests, and scripts while actions stay separated from chat output.</p>
+            </div>
+            <div>
+              <strong>Checkpoints</strong>
+              <p>Track patch metadata and repair attempts so larger tasks do not feel like blind one-shot generations.</p>
+            </div>
+          </div>
+        </section>
+
         <section id="tutorial" className="authInfoBand" aria-label="Tutorial">
           <div className="authSectionHeader">
             <span>Tutorial</span>

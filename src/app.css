@@ -2284,6 +2284,94 @@ a {
   font-size: 13px;
 }
 
+.authCapabilityGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.authCapabilityGrid div {
+  min-height: 190px;
+  display: grid;
+  align-content: end;
+  gap: 10px;
+  padding: 20px;
+  border-radius: 10px;
+  border: 1px solid rgba(229, 231, 235, 0.1);
+  background:
+    linear-gradient(180deg, rgba(125, 211, 252, 0.08), transparent 58%),
+    rgba(255, 255, 255, 0.032);
+}
+
+.authCapabilityGrid .wide {
+  grid-column: span 2;
+}
+
+.authCapabilityGrid strong,
+.authAgentGrid strong,
+.authWorkspaceGrid strong {
+  color: var(--text);
+  font-size: 15px;
+}
+
+.authCapabilityGrid p,
+.authAgentGrid p,
+.authWorkspaceGrid p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.65;
+  font-size: 13px;
+}
+
+.authAgentGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.authAgentGrid div {
+  min-height: 220px;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 18px;
+  border-radius: 10px;
+  border: 1px solid rgba(229, 231, 235, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.authAgentGrid span {
+  width: fit-content;
+  padding: 5px 8px;
+  border-radius: 999px;
+  color: #7dd3fc;
+  background: rgba(125, 211, 252, 0.1);
+  border: 1px solid rgba(125, 211, 252, 0.16);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.authWorkspaceGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border-radius: 10px;
+  border: 1px solid rgba(229, 231, 235, 0.1);
+  background: rgba(229, 231, 235, 0.08);
+}
+
+.authWorkspaceGrid div {
+  min-height: 178px;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 18px;
+  background: #0d1016;
+}
+
 .authDocsGrid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -3334,6 +3422,16 @@ a {
     grid-template-columns: 1fr;
   }
 
+  .authCapabilityGrid,
+  .authAgentGrid,
+  .authWorkspaceGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .authCapabilityGrid .wide {
+    grid-column: span 2;
+  }
+
   .authDocsGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -3452,8 +3550,15 @@ a {
   }
 
   .authHeroSignalGrid,
+  .authCapabilityGrid,
+  .authAgentGrid,
+  .authWorkspaceGrid,
   .authDocsGrid {
     grid-template-columns: 1fr;
+  }
+
+  .authCapabilityGrid .wide {
+    grid-column: auto;
   }
 
   .authPreviewGrid {
