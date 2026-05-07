@@ -1891,6 +1891,7 @@ a {
 }
 
 .authLanding {
+  height: 100vh;
   min-height: 100vh;
   width: 100vw;
   overflow: auto;
@@ -3976,6 +3977,7 @@ a {
 
   .authLanding {
     overflow: auto;
+    height: 100vh;
     scroll-snap-type: none;
   }
 

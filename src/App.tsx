@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent, type MouseEvent as ReactMouseEvent } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { Toaster, toast } from "sonner";
 import { supabase } from "./lib/supabase";
@@ -788,19 +788,35 @@ export default function App() {
     }
   };
 
+  const scrollLandingTo = (event: ReactMouseEvent<HTMLAnchorElement>, sectionId: string) => {
+    event.preventDefault();
+    const scroller = document.querySelector<HTMLElement>(".authLanding");
+    const target = sectionId === "top" ? scroller : document.getElementById(sectionId);
+    if (!scroller || !target) return;
+
+    const top = sectionId === "top"
+      ? 0
+      : target.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop - 76;
+
+    scroller.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+    window.history.replaceState(null, "", `#${sectionId}`);
+  };
+
   // --- Renders ---
   const renderGoogleLoginGate = () => (
-    <div className="authLanding">
+    <div className="authLanding" id="top">
       <header className="authLandingNav">
         <div className="authBrand">
           <span className="authBrandMark">A</span>
           <span>Appora</span>
         </div>
         <nav className="authNavLinks" aria-label="Landing navigation">
-          <a href="#faq">FAQ</a>
-          <a href="#docs">Docs</a>
-          <a href="#tutorial">Tutorial</a>
-          <a href="#templates">Templates</a>
+          <a href="#build" onClick={(event) => scrollLandingTo(event, "build")}>Build</a>
+          <a href="#agents" onClick={(event) => scrollLandingTo(event, "agents")}>Agents</a>
+          <a href="#tutorial" onClick={(event) => scrollLandingTo(event, "tutorial")}>Tutorial</a>
+          <a href="#templates" onClick={(event) => scrollLandingTo(event, "templates")}>Templates</a>
+          <a href="#docs" onClick={(event) => scrollLandingTo(event, "docs")}>Docs</a>
+          <a href="#faq" onClick={(event) => scrollLandingTo(event, "faq")}>FAQ</a>
         </nav>
       </header>
 
@@ -917,7 +933,7 @@ export default function App() {
           </div>
         </section>
 
-        <section className="authInfoBand authCapabilityBand" aria-label="What Appora can build">
+        <section id="build" className="authInfoBand authCapabilityBand" aria-label="What Appora can build">
           <div className="authSectionHeader">
             <span>What you can build</span>
             <h2>Start with a real app shape, then let the agent push it toward something usable.</h2>
@@ -946,7 +962,7 @@ export default function App() {
           </div>
         </section>
 
-        <section className="authInfoBand authAgentBand" aria-label="Agent capabilities">
+        <section id="agents" className="authInfoBand authAgentBand" aria-label="Agent capabilities">
           <div className="authSectionHeader">
             <span>Agent capabilities</span>
             <h2>Clara builds autonomously. Raka helps when the user wants precise control.</h2>
@@ -1055,6 +1071,22 @@ export default function App() {
             <div>
               <strong>Preview confidence</strong>
               <p>Browser inspection catches blank pages, runtime errors, layout overflow, missing assets, and mobile breakage.</p>
+            </div>
+            <div>
+              <strong>Workspace lifecycle</strong>
+              <p>Create projects from templates, reopen saved work, switch modes, and keep memory attached to the active project.</p>
+            </div>
+            <div>
+              <strong>Action model</strong>
+              <p>Conversation, terminal actions, patches, tool calls, and preview checks stay separated so users can follow what happened.</p>
+            </div>
+            <div>
+              <strong>Serverless limits</strong>
+              <p>Designed for hosted usage first, with clear boundaries around terminal risk, provider rate limits, and durable storage.</p>
+            </div>
+            <div>
+              <strong>Extensibility</strong>
+              <p>MCP and skills give advanced users a path to connect external tools without making first-time users configure everything.</p>
             </div>
           </div>
         </section>
@@ -1220,15 +1252,17 @@ export default function App() {
         <div className="authFooterGrid">
           <div>
             <strong>Product</strong>
-            <a href="#templates">Templates</a>
-            <a href="#tutorial">Tutorial</a>
-            <a href="#providers">Providers</a>
+            <a href="#build" onClick={(event) => scrollLandingTo(event, "build")}>Build</a>
+            <a href="#agents" onClick={(event) => scrollLandingTo(event, "agents")}>Agents</a>
+            <a href="#templates" onClick={(event) => scrollLandingTo(event, "templates")}>Templates</a>
+            <a href="#tutorial" onClick={(event) => scrollLandingTo(event, "tutorial")}>Tutorial</a>
+            <a href="#providers" onClick={(event) => scrollLandingTo(event, "providers")}>Providers</a>
           </div>
           <div>
             <strong>Platform</strong>
-            <a href="#docs">Docs</a>
-            <a href="#faq">FAQ</a>
-            <a href="#top" onClick={(event) => { event.preventDefault(); document.querySelector(".authLanding")?.scrollTo({ top: 0, behavior: "smooth" }); }}>Back to top</a>
+            <a href="#docs" onClick={(event) => scrollLandingTo(event, "docs")}>Docs</a>
+            <a href="#faq" onClick={(event) => scrollLandingTo(event, "faq")}>FAQ</a>
+            <a href="#top" onClick={(event) => scrollLandingTo(event, "top")}>Back to top</a>
           </div>
           <div>
             <strong>Agents</strong>
