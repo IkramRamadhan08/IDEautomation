@@ -11,6 +11,7 @@ import {
   type AgentRunTrace,
   type PreviewAuditResult,
   type ProjectValidationRun,
+  type TerminalRunResult,
 } from "../api";
 import type { AgentAction, AgentAuditSnapshot, AgentChange, AgentLiveItem, BuildMode, FileBuffer } from "../types";
 import { buildRepairPrompt, buildVerifierRepairPrompt, getAgentRunPlan } from "./runtime";
@@ -24,6 +25,11 @@ type AgentStatus = "idle" | "thinking" | "error";
 type WorkflowToast = {
   kind: ToastKind;
   message: string;
+};
+
+type ShellActionRun = TerminalRunResult & {
+  command: string;
+  error?: string;
 };
 
 type WorkflowArgs = {
@@ -115,14 +121,47 @@ function formatValidationReport(validation: ProjectValidationRun, maxChars = 800
   return report.length > maxChars ? `${report.slice(0, maxChars)}\n…[truncated]` : report;
 }
 
+function formatShellActionReport(results: ShellActionRun[], maxChars = 8000) {
+  if (results.length === 0) return "";
+
+  const report = results
+    .map((result, index) => {
+      const chunks = [
+        `#${index + 1} ${result.command}`,
+        `status: ${result.ok ? "ok" : "failed"} (exit ${result.returncode})`,
+      ];
+
+      if (result.error?.trim()) chunks.push(`execution_error:\n${result.error.trim()}`);
+      if (result.stdout.trim()) chunks.push(`stdout:\n${result.stdout.trim()}`);
+      if (result.stderr.trim()) chunks.push(`stderr:\n${result.stderr.trim()}`);
+      if (typeof result.synced_files === "number") chunks.push(`synced_files: ${result.synced_files}`);
+
+      return chunks.join("\n");
+    })
+    .join("\n\n");
+
+  return report.length > maxChars ? `${report.slice(0, maxChars)}\n…[truncated]` : report;
+}
+
 function formatPreviewAuditReport(audit: PreviewAuditResult, maxChars = 4000) {
   const qualitySection = audit.quality_checks && audit.quality_checks.length > 0
     ? `quality_checks:\n- ${audit.quality_checks.map((check) => `${check.ok ? "ok" : "warn"}: ${check.label} - ${check.detail}`).join("\n- ")}`
     : null;
+  const browserDetails = [
+    audit.viewport?.width && audit.viewport?.height ? `desktop_viewport: ${audit.viewport.width}x${audit.viewport.height}` : null,
+    audit.mobile_viewport?.width && audit.mobile_viewport?.height ? `mobile_viewport: ${audit.mobile_viewport.width}x${audit.mobile_viewport.height}` : null,
+    typeof audit.interactive_count === "number" ? `interactive_count: ${audit.interactive_count}` : null,
+    audit.unlabeled_interactive?.length ? `unlabeled_interactive:\n- ${audit.unlabeled_interactive.join("\n- ")}` : null,
+    audit.mobile_text_overflow_nodes?.length ? `mobile_text_overflow:\n- ${audit.mobile_text_overflow_nodes.join("\n- ")}` : null,
+    audit.small_tap_targets?.length ? `small_tap_targets:\n- ${audit.small_tap_targets.join("\n- ")}` : null,
+    audit.broken_images?.length ? `broken_images:\n- ${audit.broken_images.join("\n- ")}` : null,
+    audit.mobile_fixed_overlays?.length ? `mobile_fixed_overlays:\n- ${audit.mobile_fixed_overlays.join("\n- ")}` : null,
+  ].filter(Boolean).join("\n");
 
   const sections = [
     `summary: ${audit.summary}`,
     `audit_mode: ${audit.audit_mode}`,
+    browserDetails || null,
     audit.title ? `title: ${audit.title}` : "title: (missing)",
     audit.meta_description ? `meta: ${audit.meta_description}` : "meta: (missing)",
     audit.headings.length > 0 ? `headings: ${audit.headings.join(" | ")}` : "headings: (missing)",
@@ -245,6 +284,19 @@ function verifierFailureSummary(trace: AgentRunTrace | undefined) {
   const failed = failedVerifierChecks(trace);
   if (failed.length === 0) return "";
   return failed.slice(0, 3).map((check) => `${check.name}: ${check.detail}`).join(" • ");
+}
+
+function retryActionsForFailedShell(results: ShellActionRun[]): AgentAction[] {
+  const seen = new Set<string>();
+  return results
+    .filter((result) => !result.ok && result.command.trim())
+    .map((result) => result.command.trim())
+    .filter((command) => {
+      if (seen.has(command)) return false;
+      seen.add(command);
+      return true;
+    })
+    .map((command) => ({ type: "shell", command }));
 }
 
 export async function runAgentWorkflow({
@@ -372,7 +424,17 @@ export async function runAgentWorkflow({
     const checkpoint = {
       created_at: new Date().toISOString(),
       project_root: selectedProject,
-      files: checkpointFiles,
+      apply_mode: "patch",
+      files: checkpointFiles.map((file) => {
+        const change = changes.find((item) => item.path === file.path);
+        return {
+          ...file,
+          patch: change?.diff || "",
+          old_sha256: change?.old_sha256 || null,
+          new_sha256: change?.new_sha256 || null,
+          old_exists: typeof change?.old_exists === "boolean" ? change.old_exists : file.previous_content !== null,
+        };
+      }),
     };
     const checkpointPath = checkpointPathForRun(selectedProject);
     pushAgentLiveItem({
@@ -383,13 +445,20 @@ export async function runAgentWorkflow({
     });
     await applyMany([
       { path: checkpointPath, content: JSON.stringify(checkpoint, null, 2) + "\n" },
-      ...changes.map((change) => ({ path: change.path, content: change.new_content })),
+      ...changes.map((change) => ({
+        path: change.path,
+        content: change.new_content,
+        expected_sha256: change.old_sha256 || null,
+        expected_exists: typeof change.old_exists === "boolean" ? change.old_exists : null,
+      })),
     ], true);
     syncBuffers(changes);
     await refreshExplorer();
   };
 
   const runShellActionsForPass = async (actions: AgentAction[]) => {
+    const results: ShellActionRun[] = [];
+
     for (const action of actions) {
       const actionType = String(action.type || "").trim().toLowerCase();
       if (action.type === "mcp") {
@@ -423,6 +492,7 @@ export async function runAgentWorkflow({
       pushAgentLiveItem({ role: "tool", tone: "working", text: "Aku jalanin command tambahan buat ngeberesin flow.", meta: action.command });
       try {
         const runRes = await terminalRun(action.command, selectedProject !== "." ? selectedProject : undefined);
+        results.push({ command: action.command, ...runRes });
         appendLogSection(runRes.ok ? "TERMINAL STDOUT" : "TERMINAL STDERR", runRes.ok ? runRes.stdout : runRes.stderr);
         pushAgentLiveItem({
           role: "tool",
@@ -430,11 +500,25 @@ export async function runAgentWorkflow({
           text: runRes.ok ? "Command-nya selesai tanpa masalah." : "Command-nya jalan, tapi keluar sinyal error yang perlu dicek.",
           meta: action.command,
         });
+        if (typeof runRes.synced_files === "number" && runRes.synced_files > 0) {
+          await refreshExplorer();
+        }
       } catch (error) {
-        appendLogSection("TERMINAL ERROR", errorMessage(error));
-        pushAgentLiveItem({ role: "tool", tone: "error", text: "Ada command yang gagal dieksekusi.", meta: errorMessage(error) });
+        const message = errorMessage(error);
+        results.push({
+          command: action.command,
+          ok: false,
+          stdout: "",
+          stderr: "",
+          returncode: 1,
+          error: message,
+        });
+        appendLogSection("TERMINAL ERROR", message);
+        pushAgentLiveItem({ role: "tool", tone: "error", text: "Ada command yang gagal dieksekusi.", meta: message });
       }
     }
+
+    return results;
   };
 
   const refreshPreviewSurface = async () => {
@@ -514,6 +598,7 @@ export async function runAgentWorkflow({
       const memoryParts = [];
       if (caps.memory.session_entries > 0) memoryParts.push(`${caps.memory.session_entries} memori session`);
       if (caps.memory.project_entries > 0) memoryParts.push(`${caps.memory.project_entries} memori project`);
+      if (caps.memory.has_project_profile) memoryParts.push("project profile aktif");
       const memoryLabel = memoryParts.length > 0 ? memoryParts.join(" + ") : "memory masih fresh";
       const memoryBackendLabel = caps.memory.retrieval_backend ? `rag: ${caps.memory.retrieval_backend}` : null;
       const memoryWarningLabel = caps.memory.supabase_warning || null;
@@ -542,6 +627,7 @@ export async function runAgentWorkflow({
               : null,
           caps.supports.vector_memory_retrieval ? "vector retrieval aktif" : null,
           caps.supports.preview_quality_checks ? "quality audit responsive+a11y+states aktif" : null,
+          caps.supports.provider_fallback_routing ? "provider fallback aktif" : null,
           memoryBackendLabel,
           memoryWarningLabel,
           ...stackBits,
@@ -632,9 +718,9 @@ export async function runAgentWorkflow({
       await applyChanges(changes);
     }
 
-    if (outputSafeToApply && actions.length > 0) {
-      await runShellActionsForPass(actions);
-    }
+    const shellResults = outputSafeToApply && actions.length > 0
+      ? await runShellActionsForPass(actions)
+      : [];
 
     const auditedPreviewUrl = outputSafeToApply && changes.length > 0 ? await refreshPreviewSurface() : currentPreviewUrl;
 
@@ -655,66 +741,120 @@ export async function runAgentWorkflow({
       previewAudit = await runPreviewAuditPass(auditedPreviewUrl, "PREVIEW AUDIT 1");
     }
 
-    const hasValidationIssues = Boolean(validation && !validation.ok);
-    const hasPreviewIssues = Boolean(previewAudit && previewAudit.issues.length > 0);
+    let latestValidation = validation;
+    let latestPreviewAudit = previewAudit;
+    let latestShellResults = shellResults;
+    let latestVerifierFailures = mainVerifierFailures;
+    const maxRepairPasses = friendlyFreeTierMode ? 1 : 2;
+    const needsRepair = () => {
+      const validationFailing = Boolean(latestValidation && !latestValidation.ok);
+      const shellFailing = latestShellResults.some((result) => !result.ok);
+      const previewFailing = Boolean(latestPreviewAudit && latestPreviewAudit.issues.length > 0);
+      return shellFailing || validationFailing || (!friendlyFreeTierMode && previewFailing);
+    };
+    const hasValidationIssues = Boolean(latestValidation && !latestValidation.ok);
+    const hasPreviewIssues = Boolean(latestPreviewAudit && latestPreviewAudit.issues.length > 0);
 
     if ((resolvedIntent.kind === "conversation" || resolvedIntent.kind === "inspection") && changes.length === 0 && actions.length === 0) {
       // pure read-only run, nothing else to do
-    } else if ((hasValidationIssues || (!friendlyFreeTierMode && hasPreviewIssues)) && changes.length > 0) {
-      setWorkingMsg("Memperbaiki hasil audit…");
-      setEditorStatus("Fixing preview and validation issues...");
+    } else if (needsRepair() && (changes.length > 0 || actions.length > 0)) {
+      let repairedPreviewUrl = auditedPreviewUrl;
 
-      const validationReport = validation && !validation.ok ? formatValidationReport(validation, 6000) : null;
-      const previewAuditReport = previewAudit && previewAudit.issues.length > 0 ? formatPreviewAuditReport(previewAudit, 3500) : null;
-
-      const repairRes = await runAgentPass(
-        buildRepairPrompt(buildMode, agentInput, validationReport, previewAuditReport),
-        "Fixing preview and validation issues...",
-      );
-
-      appendLogSection("REPAIR PASS", repairRes.log);
-      if (repairRes.spoken) setAgentReply(repairRes.spoken);
-      const repairTrace = repairRes.trace;
-      pushRunTrace(pushAgentLiveItem, repairTrace);
-      if (repairTrace) {
-        setAgentAuditTrail((prev) => [...prev, toAuditSnapshot("Repair pass", repairTrace, makeAgentLiveId)]);
-      }
-      const repairVerifierFailures = failedVerifierChecks(repairTrace);
-      if (repairVerifierFailures.length > 0) {
+      for (let pass = 1; pass <= maxRepairPasses && needsRepair(); pass += 1) {
+        setWorkingMsg(`Memperbaiki hasil audit, putaran ${pass}/${maxRepairPasses}…`);
+        setEditorStatus(`Fixing preview and validation issues (${pass}/${maxRepairPasses})...`);
         pushAgentLiveItem({
           role: "tool",
-          tone: "error",
-          text: `Verifier repair masih nemu ${repairVerifierFailures.length} masalah.`,
-          meta: verifierFailureSummary(repairTrace),
+          tone: "working",
+          text: `Repair loop ${pass}/${maxRepairPasses}: agent baca output terbaru lalu coba benerin lagi.`,
+          meta: friendlyFreeTierMode ? "free-tier guard: maksimal 1 repair" : "bounded loop: maksimal 2 repair",
         });
+
+        const validationReport = latestValidation && !latestValidation.ok ? formatValidationReport(latestValidation, 6000) : null;
+        const shellReport = latestShellResults.some((result) => !result.ok) ? formatShellActionReport(latestShellResults, 6000) : null;
+        const previewAuditReport = latestPreviewAudit && latestPreviewAudit.issues.length > 0 ? formatPreviewAuditReport(latestPreviewAudit, 3500) : null;
+
+        const repairRes = await runAgentPass(
+          buildRepairPrompt(buildMode, agentInput, validationReport, previewAuditReport, shellReport, pass, maxRepairPasses),
+          `Fixing preview and validation issues (${pass}/${maxRepairPasses})...`,
+        );
+
+        appendLogSection(`REPAIR PASS ${pass}`, repairRes.log);
+        if (repairRes.spoken) setAgentReply(repairRes.spoken);
+        const repairTrace = repairRes.trace;
+        pushRunTrace(pushAgentLiveItem, repairTrace);
+        if (repairTrace) {
+          setAgentAuditTrail((prev) => [...prev, toAuditSnapshot(`Repair pass ${pass}`, repairTrace, makeAgentLiveId)]);
+        }
+        latestVerifierFailures = failedVerifierChecks(repairTrace);
+        if (latestVerifierFailures.length > 0) {
+          pushAgentLiveItem({
+            role: "tool",
+            tone: "error",
+            text: `Verifier repair masih nemu ${latestVerifierFailures.length} masalah.`,
+            meta: verifierFailureSummary(repairTrace),
+          });
+        }
+
+        const repairChanges: AgentChange[] = repairRes.changes || [];
+        const repairActions: AgentAction[] = repairRes.actions || [];
+        combinedActions = [...combinedActions, ...repairActions];
+        setAgentActions(combinedActions);
+
+        if (repairChanges.length === 0 && repairActions.length === 0) {
+          pushAgentLiveItem({
+            role: "tool",
+            tone: "error",
+            text: "Repair pass tidak menghasilkan perubahan atau command baru.",
+            meta: "Loop dihentikan supaya tidak buang limit.",
+          });
+          break;
+        }
+
+        const retryFailedShellActions = retryActionsForFailedShell(latestShellResults);
+
+        if (repairChanges.length > 0) {
+          await applyChanges(repairChanges, "Applying repair");
+        }
+        const shellActionsToRun = repairActions.length > 0
+          ? repairActions
+          : repairChanges.length > 0
+            ? retryFailedShellActions
+            : [];
+        if (repairActions.length === 0 && shellActionsToRun.length > 0) {
+          pushAgentLiveItem({
+            role: "tool",
+            tone: "working",
+            text: "Repair sudah diterapkan, sekarang rerun command yang sebelumnya gagal.",
+            meta: shellActionsToRun.map((action) => String(action.command || "")).join(" • "),
+          });
+        }
+        latestShellResults = shellActionsToRun.length > 0
+          ? await runShellActionsForPass(shellActionsToRun)
+          : [];
+
+        repairedPreviewUrl = repairChanges.length > 0 ? await refreshPreviewSurface() : repairedPreviewUrl;
+        latestValidation = shouldRunValidation ? await runValidationPass(`VALIDATION PASS ${pass + 1}`) : latestValidation;
+        latestPreviewAudit = repairedPreviewUrl && shouldAuditPreview ? await runPreviewAuditPass(repairedPreviewUrl, `PREVIEW AUDIT ${pass + 1}`) : latestPreviewAudit;
       }
 
-      const repairChanges: AgentChange[] = repairRes.changes || [];
-      const repairActions: AgentAction[] = repairRes.actions || [];
-      combinedActions = [...combinedActions, ...repairActions];
-      setAgentActions(combinedActions);
+      const validationStillFailing = Boolean(latestValidation && !latestValidation.ok);
+      const shellStillFailing = latestShellResults.some((result) => !result.ok);
+      const previewStillFailing = Boolean(latestPreviewAudit && latestPreviewAudit.issues.length > 0);
+      const verifierStillFailing = latestVerifierFailures.length > 0;
 
-      if (repairChanges.length > 0) {
-        await applyChanges(repairChanges, "Applying repair");
-      }
-      if (repairActions.length > 0) {
-        await runShellActionsForPass(repairActions);
-      }
-
-      const repairedPreviewUrl = repairChanges.length > 0 ? await refreshPreviewSurface() : auditedPreviewUrl;
-      const revalidation = shouldRunValidation ? await runValidationPass("VALIDATION PASS 2") : null;
-      const reaudit = repairedPreviewUrl && shouldAuditPreview ? await runPreviewAuditPass(repairedPreviewUrl, "PREVIEW AUDIT 2") : null;
-
-      const validationStillFailing = Boolean(revalidation && !revalidation.ok);
-      const previewStillFailing = Boolean(reaudit && reaudit.issues.length > 0);
-      const verifierStillFailing = repairVerifierFailures.length > 0;
-
-      if (!validationStillFailing && !previewStillFailing && !verifierStillFailing) {
+      if (!shellStillFailing && !validationStillFailing && !previewStillFailing && !verifierStillFailing) {
         finalStatus = "Agent task finished, validated, and preview-audited";
         finalToast = { kind: "success", message: "Tugas selesai, lolos validasi, dan preview lebih rapi" };
       } else {
-        finalStatus = verifierStillFailing ? "Agent verifier still found issues" : previewStillFailing ? "Preview audit still found issues" : "Validation still failing";
-        finalToast = { kind: "warning", message: "Perubahan diterapkan, tapi masih ada temuan verifier/audit yang perlu dicek" };
+        finalStatus = verifierStillFailing
+          ? "Agent verifier still found issues"
+          : shellStillFailing
+            ? "Agent shell command still failing"
+            : previewStillFailing
+              ? "Preview audit still found issues"
+              : "Validation still failing";
+        finalToast = { kind: "warning", message: "Perubahan diterapkan, tapi masih ada temuan command/verifier/audit yang perlu dicek" };
       }
     } else if (!hasValidationIssues && !hasPreviewIssues && (validation || previewAudit)) {
       finalStatus = previewAudit ? "Agent task finished, validated, and preview-audited" : "Agent task finished and validated";

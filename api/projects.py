@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel, field_validator
 
 from api.settings import ROOT
+from api.project_templates import get_project_template, list_project_templates, render_project_template
 from api.supabase_store import archive_project as supabase_archive_project
 from api.supabase_store import has_supabase, insert_project, list_projects as supabase_list_projects, update_project_name, upsert_project_files
 
@@ -46,6 +47,7 @@ class ProjectRecord(BaseModel):
 class ProjectCreateReq(BaseModel):
     name: str
     slug: str | None = None
+    template_id: str | None = None
 
 
 class ProjectRenameReq(BaseModel):
@@ -60,6 +62,11 @@ class ProjectListResp(BaseModel):
 class ProjectResp(BaseModel):
     ok: bool = True
     project: ProjectRecord
+
+
+class ProjectTemplateListResp(BaseModel):
+    ok: bool = True
+    templates: list[dict[str, Any]]
 
 
 PROJECTS_STATE_PATH = ROOT / ".voiceide-projects.json"
@@ -154,6 +161,8 @@ def create_project(*, workspace_root: Path, owner_id: str, req: ProjectCreateReq
 
     slug = _available_project_slug(workspace_root=workspace_root, owner_id=owner_id, base_slug=_slugify(req.slug or name))
     root = _project_root(workspace_root, slug)
+    if req.template_id and req.template_id.strip() not in {"", "blank"} and not get_project_template(req.template_id):
+        raise HTTPException(400, "Unknown project template")
 
     root.mkdir(parents=True, exist_ok=True)
     now = int(time.time())
@@ -168,12 +177,24 @@ def create_project(*, workspace_root: Path, owner_id: str, req: ProjectCreateReq
         archived=False,
     )
 
-    readme = root / "README.md"
-    if not readme.exists():
-        readme.write_text(f"# {name}\n\nCreated by Voice IDE project setup.\n", encoding="utf-8")
+    template_files = render_project_template(template_id=req.template_id, project_root=slug, project_name=name)
+    if template_files:
+        for rel, content in template_files.items():
+            target = root / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+    else:
+        readme = root / "README.md"
+        if not readme.exists():
+            readme.write_text(f"# {name}\n\nCreated by Voice IDE project setup.\n", encoding="utf-8")
+        template_files = {"README.md": readme.read_text(encoding="utf-8")}
 
     if has_supabase():
-        upsert_project_files(owner_id=owner_id, project_root=slug, files=[{"path": "README.md", "content": readme.read_text(encoding="utf-8")}])
+        upsert_project_files(
+            owner_id=owner_id,
+            project_root=slug,
+            files=[{"path": rel, "content": content} for rel, content in template_files.items()],
+        )
         remote = insert_project(owner_id=owner_id, name=name, slug=slug, root=slug)
         if remote:
             return ProjectRecord(**remote)
@@ -184,6 +205,10 @@ def create_project(*, workspace_root: Path, owner_id: str, req: ProjectCreateReq
     state["projects"] = projects
     _write_state(state)
     return rec
+
+
+def available_project_templates() -> list[dict[str, Any]]:
+    return [{"id": "blank", "name": "Blank", "category": "Starter", "description": "Minimal project with a README only.", "best_for": "Manual setup or fully custom agent builds.", "tags": ["blank"]}, *list_project_templates()]
 
 
 def rename_project(*, owner_id: str, project_id: str, req: ProjectRenameReq) -> ProjectRecord:

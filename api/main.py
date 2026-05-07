@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path, PurePosixPath
 from typing import Literal
+import hashlib
 import os
 import shutil
 import threading
@@ -47,6 +48,10 @@ from api.agent_tools import list_local_tools
 
 
 app = FastAPI(title="Voice IDE Backend", version="0.1.0")
+
+
+def _sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 @app.exception_handler(ValueError)
@@ -540,7 +545,7 @@ def _project_uses_playwright(project_dir: Path) -> bool:
 
 
 def _browser_preview_audit_ready(project_dir: Path) -> bool:
-    return bool(_resolve_node_binary() and _playwright_audit_script().exists() and _project_uses_playwright(project_dir))
+    return bool(_resolve_node_binary() and _playwright_audit_script().exists())
 
 
 def _normalize_preview_url(preview_url: str) -> str:
@@ -612,6 +617,11 @@ def _build_quality_checks(snapshot: dict, *, project_signals: dict[str, bool] | 
     input_count = max(0, int(snapshot.get("input_count") or 0))
     labeled_input_count = max(0, int(snapshot.get("labeled_input_count") or 0))
     mobile_overflow = bool(snapshot.get("mobile_overflow_x"))
+    unlabeled_interactive = [str(item) for item in (snapshot.get("unlabeled_interactive") or []) if str(item).strip()]
+    mobile_small_tap_targets = [str(item) for item in (snapshot.get("mobile_small_tap_targets") or snapshot.get("small_tap_targets") or []) if str(item).strip()]
+    mobile_text_overflow_nodes = [str(item) for item in (snapshot.get("mobile_text_overflow_nodes") or snapshot.get("text_overflow_nodes") or []) if str(item).strip()]
+    broken_images = [str(item) for item in (snapshot.get("broken_images") or []) if str(item).strip()]
+    fixed_overlays = [str(item) for item in (snapshot.get("mobile_fixed_overlays") or snapshot.get("fixed_overlays") or []) if str(item).strip()]
     checks: list[dict[str, str | bool]] = []
     checks.append({
         "id": "responsive-foundation",
@@ -644,6 +654,36 @@ def _build_quality_checks(snapshot: dict, *, project_signals: dict[str, bool] | 
         "detail": "Field form terlihat punya label/aria yang cukup." if (input_count == 0 or labeled_input_count >= input_count or project_signals.get("labels")) else "Field form belum kelihatan punya label/aria yang rapi.",
     })
     checks.append({
+        "id": "a11y-interactive-labels",
+        "label": "Interactive labels",
+        "ok": len(unlabeled_interactive) == 0,
+        "detail": "Elemen interaktif yang ke-detect punya label teks/aria." if not unlabeled_interactive else f"Elemen interaktif tanpa label: {', '.join(unlabeled_interactive[:4])}.",
+    })
+    checks.append({
+        "id": "mobile-tap-targets",
+        "label": "Mobile tap targets",
+        "ok": len(mobile_small_tap_targets) == 0,
+        "detail": "Target tap mobile terlihat cukup besar." if not mobile_small_tap_targets else f"Target tap terlalu kecil: {', '.join(mobile_small_tap_targets[:4])}.",
+    })
+    checks.append({
+        "id": "mobile-text-fit",
+        "label": "Mobile text fit",
+        "ok": len(mobile_text_overflow_nodes) == 0,
+        "detail": "Tidak ada text overflow penting yang ke-detect di viewport mobile." if not mobile_text_overflow_nodes else f"Text overflow mobile: {', '.join(mobile_text_overflow_nodes[:4])}.",
+    })
+    checks.append({
+        "id": "image-loads",
+        "label": "Image loading",
+        "ok": len(broken_images) == 0,
+        "detail": "Gambar yang ke-detect berhasil load." if not broken_images else f"Gambar gagal load: {', '.join(broken_images[:4])}.",
+    })
+    checks.append({
+        "id": "blocking-overlays",
+        "label": "Blocking overlays",
+        "ok": len(fixed_overlays) == 0,
+        "detail": "Tidak ada overlay fixed besar yang terlihat memblokir viewport." if not fixed_overlays else f"Overlay fixed besar terdeteksi: {', '.join(fixed_overlays[:3])}.",
+    })
+    checks.append({
         "id": "state-loading",
         "label": "Loading state",
         "ok": bool(project_signals.get("loading")),
@@ -673,6 +713,9 @@ def _build_preview_audit_result(
     runtime_warnings: list[str] | None = None,
     project_signals: dict[str, bool] | None = None,
 ) -> dict:
+    def list_field(name: str, limit: int = 8, chars: int = 180) -> list[str]:
+        return [str(item).strip()[:chars] for item in (snapshot.get(name) or []) if str(item).strip()][:limit]
+
     title = str(snapshot.get("title") or "").strip()
     meta_description = str(snapshot.get("meta_description") or "").strip()
     headings = [str(item).strip()[:160] for item in (snapshot.get("headings") or []) if str(item).strip()][:3]
@@ -685,6 +728,14 @@ def _build_preview_audit_result(
     word_count = max(0, int(snapshot.get("word_count") or 0))
     image_count = max(0, int(snapshot.get("image_count") or 0))
     images_missing_alt = max(0, int(snapshot.get("images_missing_alt") or 0))
+    interactive_count = max(0, int(snapshot.get("interactive_count") or 0))
+    unlabeled_interactive = list_field("unlabeled_interactive")
+    small_tap_targets = list_field("small_tap_targets")
+    text_overflow_nodes = list_field("text_overflow_nodes")
+    mobile_text_overflow_nodes = list_field("mobile_text_overflow_nodes")
+    broken_images = list_field("broken_images", 6)
+    fixed_overlays = list_field("fixed_overlays", 4)
+    mobile_fixed_overlays = list_field("mobile_fixed_overlays", 4)
     console_errors = [str(item).strip()[:240] for item in (snapshot.get("console_errors") or []) if str(item).strip()][:8]
     page_errors = [str(item).strip()[:240] for item in (snapshot.get("page_errors") or []) if str(item).strip()][:6]
     quality_checks = _build_quality_checks(snapshot, project_signals=project_signals)
@@ -703,6 +754,14 @@ def _build_preview_audit_result(
         issues.append("Preview has very little obvious interaction or navigation.")
     if images_missing_alt > 0:
         issues.append(f"Preview has {images_missing_alt} image(s) without useful alt text.")
+    if broken_images:
+        issues.append(f"Preview has {len(broken_images)} broken image(s): {', '.join(broken_images[:3])}.")
+    if unlabeled_interactive:
+        issues.append(f"Preview has {len(unlabeled_interactive)} unlabeled interactive element(s).")
+    if mobile_text_overflow_nodes:
+        issues.append(f"Preview has {len(mobile_text_overflow_nodes)} mobile text overflow issue(s).")
+    if fixed_overlays or mobile_fixed_overlays:
+        issues.append("Preview has large fixed overlay(s) that may block interaction.")
     if page_errors:
         issues.append(f"Preview threw {len(page_errors)} runtime browser error(s).")
     if console_errors:
@@ -717,6 +776,7 @@ def _build_preview_audit_result(
         f"buttons={len(buttons)}",
         f"links={len(links)}",
         f"forms={form_count}",
+        f"interactive={interactive_count}",
         f"words={word_count}",
         f"quality_failures={len(quality_failures)}",
     ]
@@ -733,9 +793,19 @@ def _build_preview_audit_result(
         "links": links,
         "form_count": form_count,
         "input_count": input_count,
+        "interactive_count": interactive_count,
         "word_count": word_count,
         "image_count": image_count,
         "images_missing_alt": images_missing_alt,
+        "broken_images": broken_images,
+        "unlabeled_interactive": unlabeled_interactive,
+        "small_tap_targets": small_tap_targets,
+        "text_overflow_nodes": text_overflow_nodes,
+        "mobile_text_overflow_nodes": mobile_text_overflow_nodes,
+        "fixed_overlays": fixed_overlays,
+        "mobile_fixed_overlays": mobile_fixed_overlays,
+        "viewport": snapshot.get("viewport") if isinstance(snapshot.get("viewport"), dict) else {},
+        "mobile_viewport": snapshot.get("mobile_viewport") if isinstance(snapshot.get("mobile_viewport"), dict) else {},
         "console_errors": console_errors,
         "page_errors": page_errors,
         "runtime_warnings": runtime_warnings or [],
@@ -794,10 +864,20 @@ def _extract_preview_snapshot_from_html(html: str, max_excerpt_chars: int = 800)
         "landmark_count": len(re.findall(r"<(main|nav|header|footer|aside)\b", html, flags=re.IGNORECASE)),
         "main_count": len(re.findall(r"<main\b", html, flags=re.IGNORECASE)),
         "button_count": len(re.findall(r"<button\b", html, flags=re.IGNORECASE)),
+        "interactive_count": len(re.findall(r"<(button|a|input|textarea|select|summary)\b", html, flags=re.IGNORECASE)),
+        "unlabeled_interactive": [],
+        "small_tap_targets": [],
+        "text_overflow_nodes": [],
+        "mobile_text_overflow_nodes": [],
+        "fixed_overlays": [],
+        "mobile_fixed_overlays": [],
         "mobile_overflow_x": False,
         "word_count": len(re.findall(r"\b\w+\b", body_text)),
         "image_count": len(image_tags),
         "images_missing_alt": images_missing_alt,
+        "broken_images": [],
+        "viewport": {},
+        "mobile_viewport": {},
         "console_errors": [],
         "page_errors": [],
         "excerpt": excerpt,
@@ -1653,6 +1733,8 @@ def fs_write(req: WriteReq):
 class WriteOp(BaseModel):
     path: str
     content: str
+    expected_sha256: str | None = None
+    expected_exists: bool | None = None
 
 
 class ApplyManyReq(BaseModel):
@@ -1668,7 +1750,24 @@ def fs_apply_many(req: ApplyManyReq):
     # preflight
     for op in req.ops:
         p = safe_join(root, op.path)
-        if p.exists() and not req.overwrite:
+        if op.expected_exists is not None:
+            exists = p.exists()
+            if op.expected_exists is False and exists:
+                conflicts.append(f"{op.path} changed: expected file to be absent")
+                continue
+            if op.expected_exists is True and not exists:
+                conflicts.append(f"{op.path} changed: expected file to exist")
+                continue
+            if exists and op.expected_sha256:
+                try:
+                    current_hash = _sha256_text(p.read_text(encoding="utf-8"))
+                except UnicodeDecodeError:
+                    conflicts.append(f"{op.path} changed: current file is not UTF-8 text")
+                    continue
+                if current_hash != op.expected_sha256:
+                    conflicts.append(f"{op.path} changed since agent prepared the patch")
+                    continue
+        elif p.exists() and not req.overwrite:
             conflicts.append(op.path)
 
     if conflicts:
@@ -1990,6 +2089,7 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "native_provider_token_streaming": False,
             "friendly_free_tier_mode": friendly_free_tier,
             "context_budget_chars": context_budget,
+            "provider_fallback_routing": True,
         },
         "boundaries": {
             "project_root": proj_root,
@@ -2010,6 +2110,8 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "project_entries": memory_overview.project_entries,
             "latest_session_ts": memory_overview.latest_session_ts,
             "latest_project_ts": memory_overview.latest_project_ts,
+            "has_project_profile": memory_overview.has_project_profile,
+            "project_profile_updated_at": memory_overview.project_profile_updated_at,
             "retrieval_backend": memory_backend,
             "supabase_rag_status": supabase_rag_status,
             "supabase_warning": supabase_warning,
@@ -2190,15 +2292,17 @@ def _run_agent_impl(req: AgentReq, event_cb=None):
             if not p or not isinstance(nc, str):
                 continue
 
-            try:
-                old = read_text(ws_root, p)
-            except FileNotFoundError:
-                old = ""
+            target = safe_join(ws_root, p)
+            old_exists = target.exists()
+            old = target.read_text(encoding="utf-8") if old_exists else ""
 
             out_changes.append({
                 "path": p,
                 "new_content": nc,
                 "diff": diff_text(old, nc, filename=p),
+                "old_sha256": _sha256_text(old),
+                "new_sha256": _sha256_text(nc),
+                "old_exists": old_exists,
             })
 
         result = {

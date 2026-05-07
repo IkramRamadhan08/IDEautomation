@@ -76,6 +76,8 @@ class AgentMemoryOverview:
     project_entries: int
     latest_session_ts: int | None
     latest_project_ts: int | None
+    has_project_profile: bool = False
+    project_profile_updated_at: int | None = None
 
 
 def _tokenize(text: str) -> set[str]:
@@ -163,6 +165,211 @@ def _project_memory_path(ws_root: Path, *, user_id: str, project_root: str) -> P
     return _memory_root(ws_root) / "project-short" / user_id / f"{_project_memory_key(project_root)}.jsonl"
 
 
+def _project_profile_path(ws_root: Path, *, user_id: str, project_root: str) -> Path:
+    return _memory_root(ws_root) / "project-profile" / user_id / f"{_project_memory_key(project_root)}.json"
+
+
+def _safe_project_dir(ws_root: Path, project_root: str) -> Path | None:
+    try:
+        root = ws_root.resolve()
+        project_dir = (root / (project_root or ".")).resolve()
+        project_dir.relative_to(root)
+        return project_dir
+    except Exception:
+        return None
+
+
+def _read_project_profile(ws_root: Path, *, user_id: str, project_root: str) -> dict[str, Any]:
+    path = _project_profile_path(ws_root, user_id=user_id, project_root=project_root)
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _write_project_profile(ws_root: Path, *, user_id: str, project_root: str, profile: dict[str, Any]) -> None:
+    path = _project_profile_path(ws_root, user_id=user_id, project_root=project_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(profile, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _detect_project_stack(project_dir: Path | None) -> list[str]:
+    if not project_dir or not project_dir.exists():
+        return []
+    signals: list[str] = []
+    package_json = project_dir / "package.json"
+    package_data: dict[str, Any] = {}
+    if package_json.exists():
+        try:
+            parsed = json.loads(package_json.read_text(encoding="utf-8"))
+            package_data = parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            package_data = {}
+    deps: dict[str, Any] = {}
+    for bucket in ("dependencies", "devDependencies"):
+        raw = package_data.get(bucket)
+        if isinstance(raw, dict):
+            deps.update(raw)
+    dep_names = {str(name).lower() for name in deps.keys()}
+    if "react" in dep_names:
+        signals.append("React")
+    if "vite" in dep_names or (project_dir / "vite.config.ts").exists() or (project_dir / "vite.config.js").exists():
+        signals.append("Vite")
+    if "next" in dep_names:
+        signals.append("Next.js")
+    if "@supabase/supabase-js" in dep_names:
+        signals.append("Supabase client")
+    if "react-router-dom" in dep_names:
+        signals.append("React Router")
+    if "tailwindcss" in dep_names:
+        signals.append("Tailwind CSS")
+    src_dir = project_dir / "src"
+    has_tsx = src_dir.exists() and any(src_dir.glob("**/*.tsx"))
+    if (project_dir / "tsconfig.json").exists() or has_tsx:
+        signals.append("TypeScript")
+    if (project_dir / "src" / "app.css").exists() or (project_dir / "src" / "App.css").exists():
+        signals.append("CSS modules/global CSS")
+    out: list[str] = []
+    seen: set[str] = set()
+    for signal in signals:
+        if signal in seen:
+            continue
+        seen.add(signal)
+        out.append(signal)
+    return out[:12]
+
+
+def _infer_project_conventions(entry: dict[str, Any], change_paths: list[str], actions: list[dict[str, Any]]) -> list[str]:
+    text = " ".join([
+        str(entry.get("input") or ""),
+        str(entry.get("spoken") or ""),
+        " ".join(change_paths),
+        " ".join(str(action.get("command") or "") for action in actions if isinstance(action, dict)),
+    ]).lower()
+    conventions: list[str] = []
+    if any(token in text for token in ["minimalist", "minimalis", "elegant", "elegan"]):
+        conventions.append("Design direction: minimalist, elegant, restrained UI.")
+    if any(token in text for token in ["cursor", "antigravity", "ide", "hybrid"]):
+        conventions.append("IDE surfaces should feel like a serious coding workspace: dense, clear, and tool-focused.")
+    if "vercel" in text or "serverless" in text:
+        conventions.append("Deployment target: Vercel/serverless, avoid local-only assumptions.")
+    if "supabase" in text:
+        conventions.append("Persistence/auth target: Supabase-backed hosted workflow.")
+    if any(path.endswith(".css") for path in change_paths):
+        conventions.append("Styling changes are kept in project CSS files alongside the existing UI structure.")
+    if any(path.endswith((".tsx", ".jsx")) for path in change_paths):
+        conventions.append("UI behavior is implemented in React component files; preserve existing component boundaries when possible.")
+    if any("package.json" in path for path in change_paths):
+        conventions.append("Dependency/script changes should be validated through package manager commands.")
+    return conventions
+
+
+def _append_unique_capped(existing: list[Any], new_items: list[Any], *, cap: int) -> list[Any]:
+    out: list[Any] = []
+    seen: set[str] = set()
+    for item in [*existing, *new_items]:
+        key = json.dumps(item, sort_keys=True, ensure_ascii=False) if isinstance(item, (dict, list)) else str(item)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out[-cap:]
+
+
+def _update_project_profile(
+    ws_root: Path,
+    *,
+    user_id: str,
+    project_root: str,
+    entry: dict[str, Any],
+    changes: list[dict[str, Any]],
+    actions: list[dict[str, Any]],
+) -> None:
+    profile = _read_project_profile(ws_root, user_id=user_id, project_root=project_root)
+    now = int(time.time())
+    change_paths = [str(item.get("path") or "").strip() for item in changes if isinstance(item, dict) and str(item.get("path") or "").strip()]
+    project_dir = _safe_project_dir(ws_root, project_root)
+    detected_stack = _detect_project_stack(project_dir)
+
+    files_touched = profile.get("files_touched") if isinstance(profile.get("files_touched"), dict) else {}
+    for path in change_paths:
+        files_touched[path] = int(files_touched.get(path) or 0) + 1
+    files_touched = dict(sorted(files_touched.items(), key=lambda item: int(item[1]), reverse=True)[:80])
+
+    decision = None
+    if change_paths or actions:
+        decision = {
+            "ts": now,
+            "task": str(entry.get("input") or "").strip()[:240],
+            "summary": str(entry.get("spoken") or "").strip()[:320],
+            "files": change_paths[:8],
+            "actions": [str(item.get("type") or "").strip() for item in actions if isinstance(item, dict)][:8],
+        }
+
+    recent_task = {
+        "ts": now,
+        "kind": str(entry.get("interaction_kind") or "command"),
+        "task": str(entry.get("input") or "").strip()[:220],
+        "files": change_paths[:6],
+    }
+
+    profile.update({
+        "schema_version": 1,
+        "project_root": project_root,
+        "updated_at": now,
+        "stack": _append_unique_capped(list(profile.get("stack") or []), detected_stack, cap=16),
+        "conventions": _append_unique_capped(list(profile.get("conventions") or []), _infer_project_conventions(entry, change_paths, actions), cap=18),
+        "files_touched": files_touched,
+        "recent_tasks": _append_unique_capped(list(profile.get("recent_tasks") or []), [recent_task], cap=20),
+    })
+    if decision:
+        profile["decisions"] = _append_unique_capped(list(profile.get("decisions") or []), [decision], cap=16)
+
+    _write_project_profile(ws_root, user_id=user_id, project_root=project_root, profile=profile)
+
+
+def _format_project_profile(profile: dict[str, Any]) -> str:
+    if not profile:
+        return ""
+    stack = [str(item) for item in (profile.get("stack") or []) if str(item).strip()][:12]
+    conventions = [str(item) for item in (profile.get("conventions") or []) if str(item).strip()][:10]
+    files_touched = profile.get("files_touched") if isinstance(profile.get("files_touched"), dict) else {}
+    hot_files = [f"{path} ({count}x)" for path, count in list(files_touched.items())[:8]]
+    decisions = [
+        item for item in (profile.get("decisions") or [])
+        if isinstance(item, dict) and (str(item.get("task") or "").strip() or str(item.get("summary") or "").strip())
+    ][-6:]
+    recent_tasks = [
+        item for item in (profile.get("recent_tasks") or [])
+        if isinstance(item, dict) and str(item.get("task") or "").strip()
+    ][-6:]
+
+    lines = ["PROJECT MEMORY PROFILE (stable project context):"]
+    if stack:
+        lines.append("- Stack: " + ", ".join(stack))
+    if conventions:
+        lines.append("- Conventions:")
+        lines.extend(f"  - {item}" for item in conventions)
+    if hot_files:
+        lines.append("- Frequently touched files: " + ", ".join(hot_files))
+    if decisions:
+        lines.append("- Recent implementation decisions:")
+        for item in decisions:
+            files = item.get("files") if isinstance(item.get("files"), list) else []
+            file_text = f" files={', '.join(str(path) for path in files[:4])}" if files else ""
+            lines.append(f"  - {str(item.get('task') or '').strip()[:160]} -> {str(item.get('summary') or '').strip()[:180]}{file_text}")
+    if recent_tasks:
+        lines.append("- Recent project tasks:")
+        for item in recent_tasks:
+            files = item.get("files") if isinstance(item.get("files"), list) else []
+            file_text = f" ({', '.join(str(path) for path in files[:3])})" if files else ""
+            lines.append(f"  - {str(item.get('kind') or 'task')}: {str(item.get('task') or '').strip()[:180]}{file_text}")
+    return "\n".join(lines)
+
+
 def _ltm_candidate_paths(project_dir: Path) -> list[Path]:
     candidates: list[Path] = []
     direct = [
@@ -238,6 +445,14 @@ def remember_agent_run(
     }
     _append_memory_entry(session_path, entry)
     _append_memory_entry(project_path, entry)
+    _update_project_profile(
+        ws_root,
+        user_id=user_id,
+        project_root=project_root,
+        entry=entry,
+        changes=changes,
+        actions=actions,
+    )
 
 
 def _build_short_hits(
@@ -495,6 +710,8 @@ def retrieve_agent_memory(
     session_id = CURRENT_SESSION_ID.get()
     session_rows = _read_memory_rows(_session_memory_path(ws_root, user_id=user_id, session_id=session_id))
     project_rows = _read_memory_rows(_project_memory_path(ws_root, user_id=user_id, project_root=project_root))
+    project_profile = _read_project_profile(ws_root, user_id=user_id, project_root=project_root)
+    project_profile_text = _format_project_profile(project_profile)
 
     short_hits = _build_short_hits(
         query_tokens,
@@ -512,6 +729,14 @@ def retrieve_agent_memory(
             interaction_kind=interaction_kind,
         )
     )
+    if project_profile_text:
+        short_hits.append(MemoryHit(
+            kind="profile",
+            source="project-profile",
+            title="Project memory profile",
+            text=project_profile_text[:1800],
+            score=99.0,
+        ))
 
     deduped_short: list[MemoryHit] = []
     seen_short: set[tuple[str, str]] = set()
@@ -621,11 +846,19 @@ def get_agent_memory_overview(ws_root: Path, *, project_root: str) -> AgentMemor
     session_id = CURRENT_SESSION_ID.get()
     session_rows = _read_memory_rows(_session_memory_path(ws_root, user_id=user_id, session_id=session_id))
     project_rows = _read_memory_rows(_project_memory_path(ws_root, user_id=user_id, project_root=project_root))
+    project_profile = _read_project_profile(ws_root, user_id=user_id, project_root=project_root)
     latest_session_ts = int(session_rows[-1].get("ts")) if session_rows else None
     latest_project_ts = int(project_rows[-1].get("ts")) if project_rows else None
+    profile_updated_at = None
+    try:
+        profile_updated_at = int(project_profile.get("updated_at")) if project_profile else None
+    except Exception:
+        profile_updated_at = None
     return AgentMemoryOverview(
         session_entries=len(session_rows),
         project_entries=len(project_rows),
         latest_session_ts=latest_session_ts,
         latest_project_ts=latest_project_ts,
+        has_project_profile=bool(project_profile),
+        project_profile_updated_at=profile_updated_at,
     )

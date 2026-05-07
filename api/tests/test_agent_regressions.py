@@ -10,15 +10,18 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api.agent_intent import classify_agent_intent
+from api import agent as agent_mod
 from api.agent_mcp import MCPServerInfo, MCPToolCallResult, MCPToolInfo, discover_mcp_servers, execute_mcp_tool, suggest_mcp_actions
-from api.agent_memory import retrieve_agent_memory
+from api.agent_memory import get_agent_memory_overview, remember_agent_run, retrieve_agent_memory
 from api.agent_skills import detect_project_stack, resolve_agent_skills
 from api.agent_tools import execute_local_tool
 from api.auth_identity import AuthenticatedUser
 from api.auth_policy import require_hosted_user
 from api.fs import safe_join
 from api.hybrid import build_hybrid_seed
-from api.main import _build_quality_checks, _extract_preview_snapshot_from_html, agent_capabilities, app as main_app, supabase_rag_status
+from api.project_templates import list_project_templates, render_project_template
+from api.projects import ProjectCreateReq, create_project
+from api.main import ApplyManyReq, WriteOp, _browser_preview_audit_ready, _build_quality_checks, _extract_preview_snapshot_from_html, _sha256_text, agent_capabilities, app as main_app, fs_apply_many, supabase_rag_status
 from api.preferences import UserPreferencesRecord
 from api.preferences_router import build_preferences_router
 from api.secrets_store import get_provider_secret, has_provider_secret
@@ -128,6 +131,54 @@ class MemoryRetrievalRegressionTests(unittest.TestCase):
         self.assertEqual(hits.long_term[0].source, "docs/remote.md")
         self.assertIn("LONG-TERM MEMORY (supabase-hash-vector-chunks)", hits.prompt)
 
+    def test_project_profile_memory_is_persisted_and_retrieved(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            src_dir = project_dir / "src"
+            src_dir.mkdir(parents=True)
+            (project_dir / "package.json").write_text(
+                json.dumps({"dependencies": {"react": "^19.0.0", "vite": "^7.0.0", "@supabase/supabase-js": "^2.0.0"}}),
+                encoding="utf-8",
+            )
+            (project_dir / "tsconfig.json").write_text("{}", encoding="utf-8")
+            (src_dir / "app.css").write_text(":root { color-scheme: light; }", encoding="utf-8")
+
+            remember_agent_run(
+                ws_root,
+                project_root="demo",
+                build_mode="full-agent",
+                interaction_kind="command",
+                user_input="Bikin UI minimalist elegant buat deploy Vercel dan Supabase",
+                spoken="Updated the hosted app shell.",
+                changes=[
+                    {"path": "demo/src/App.tsx", "new_content": "export default function App() { return null }"},
+                    {"path": "demo/src/app.css", "new_content": "body { margin: 0 }"},
+                ],
+                actions=[{"type": "shell", "command": "npm run build"}],
+            )
+
+            with patch("api.agent_memory.has_supabase", return_value=False):
+                hits = retrieve_agent_memory(
+                    ws_root,
+                    project_dir=project_dir,
+                    project_root="demo",
+                    interaction_kind="command",
+                    query="lanjut polish UI supabase vercel",
+                    active_rel="src/App.tsx",
+                    open_files=["src/App.tsx"],
+                    limit_short=4,
+                    limit_long=0,
+                )
+
+            overview = get_agent_memory_overview(ws_root, project_root="demo")
+            self.assertTrue(overview.has_project_profile)
+            self.assertIsNotNone(overview.project_profile_updated_at)
+            self.assertIn("PROJECT MEMORY PROFILE", hits.prompt)
+            self.assertIn("React", hits.prompt)
+            self.assertIn("Supabase-backed hosted workflow", hits.prompt)
+            self.assertIn("minimalist, elegant", hits.prompt)
+
 
 class PreviewAuditRegressionTests(unittest.TestCase):
     def test_quality_checks_cover_responsive_a11y_and_states(self) -> None:
@@ -161,6 +212,39 @@ class PreviewAuditRegressionTests(unittest.TestCase):
         self.assertTrue(by_id["state-loading"]["ok"])
         self.assertTrue(by_id["state-empty"]["ok"])
         self.assertFalse(by_id["state-error"]["ok"])
+
+    def test_browser_quality_checks_flag_actionable_dom_issues(self) -> None:
+        snapshot = {
+            "viewport_meta": True,
+            "document_lang": "en",
+            "main_count": 1,
+            "landmark_count": 3,
+            "input_count": 0,
+            "labeled_input_count": 0,
+            "images_missing_alt": 0,
+            "mobile_overflow_x": True,
+            "unlabeled_interactive": ["button.icon-only"],
+            "mobile_small_tap_targets": ["a.nav (18x20)"],
+            "mobile_text_overflow_nodes": ["h1.hero \"Very long heading\""],
+            "broken_images": ["hero.png"],
+            "mobile_fixed_overlays": ["div.modal"],
+        }
+        checks = _build_quality_checks(snapshot, project_signals={"loading": True, "error": True, "empty": True})
+        by_id = {str(item["id"]): item for item in checks}
+
+        self.assertFalse(by_id["responsive-overflow"]["ok"])
+        self.assertFalse(by_id["a11y-interactive-labels"]["ok"])
+        self.assertFalse(by_id["mobile-tap-targets"]["ok"])
+        self.assertFalse(by_id["mobile-text-fit"]["ok"])
+        self.assertFalse(by_id["image-loads"]["ok"])
+        self.assertFalse(by_id["blocking-overlays"]["ok"])
+
+    def test_browser_audit_is_runtime_capability_not_project_dependency(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp)
+            (project_dir / "package.json").write_text('{"dependencies":{}}', encoding="utf-8")
+
+            self.assertTrue(_browser_preview_audit_ready(project_dir))
 
 
 class MCPHintRegressionTests(unittest.TestCase):
@@ -848,6 +932,67 @@ class ProviderCatalogRegressionTests(unittest.TestCase):
         self.assertTrue(catalog["gemini"]["free_tier_models"])
         self.assertTrue(catalog["cerebras"]["free_tier_models"])
 
+    def test_free_tier_fallback_order_prefers_connected_free_routing(self) -> None:
+        snapshot = {
+            "openai": {"connected": True},
+            "openrouter": {"connected": True},
+            "gemini": {"connected": True},
+            "groq": {"connected": False},
+        }
+        with patch.object(agent_mod.settings_mod.settings, "friendly_free_tier_mode", True), \
+            patch("api.agent.auth_snapshot", return_value=snapshot), \
+            patch("api.agent.get_provider_cooldown_remaining", return_value=0):
+            order = agent_mod._fallback_provider_order("openai")
+
+        self.assertEqual(order[:3], ["openai", "openrouter", "gemini"])
+
+    def test_generate_json_falls_back_to_connected_provider_on_rate_limit(self) -> None:
+        snapshot = {
+            "openai": {"connected": True},
+            "openrouter": {"connected": True},
+        }
+
+        def fake_once(provider: str, model: str, *, system: str, user: str):
+            if provider == "openai":
+                raise RuntimeError("OpenAI sedang kena rate limit.")
+            return {"spoken": "ok", "changes": [], "actions": []}
+
+        with patch.object(agent_mod.settings_mod.settings, "llm_provider", "openai"), \
+            patch.object(agent_mod.settings_mod.settings, "openai_model", "gpt-5.5"), \
+            patch.object(agent_mod.settings_mod.settings, "openrouter_model", "openrouter/free"), \
+            patch.object(agent_mod.settings_mod.settings, "friendly_free_tier_mode", True), \
+            patch("api.agent.auth_snapshot", return_value=snapshot), \
+            patch("api.agent.require_provider_connected", return_value=None), \
+            patch("api.agent.get_provider_cooldown_remaining", return_value=0), \
+            patch("api.agent._throttle_llm_calls", return_value=None), \
+            patch("api.agent._generate_json_once", side_effect=fake_once):
+            provider, model, data = agent_mod._generate_json(system="system", user="user")
+
+        self.assertEqual(provider, "openrouter")
+        self.assertEqual(model, "openrouter/free")
+        self.assertEqual(data["spoken"], "ok")
+        self.assertEqual(data["_voiceide_provider_fallback"]["selected_provider"], "openai")
+
+    def test_generate_json_can_use_connected_provider_when_none_selected(self) -> None:
+        snapshot = {
+            "openrouter": {"connected": True},
+            "gemini": {"connected": False},
+        }
+
+        with patch.object(agent_mod.settings_mod.settings, "llm_provider", None), \
+            patch.object(agent_mod.settings_mod.settings, "openrouter_model", "openrouter/free"), \
+            patch.object(agent_mod.settings_mod.settings, "friendly_free_tier_mode", True), \
+            patch("api.agent.auth_snapshot", return_value=snapshot), \
+            patch("api.agent.require_provider_connected", return_value=None), \
+            patch("api.agent.get_provider_cooldown_remaining", return_value=0), \
+            patch("api.agent._throttle_llm_calls", return_value=None), \
+            patch("api.agent._generate_json_once", return_value={"spoken": "ok", "changes": [], "actions": []}):
+            provider, model, data = agent_mod._generate_json(system="system", user="user")
+
+        self.assertEqual(provider, "openrouter")
+        self.assertEqual(model, "openrouter/free")
+        self.assertEqual(data["spoken"], "ok")
+
 
 class WorkspaceBoundaryRegressionTests(unittest.TestCase):
     def test_safe_join_rejects_prefix_sibling_escape(self) -> None:
@@ -868,6 +1013,100 @@ class WorkspaceBoundaryRegressionTests(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 401)
         self.assertIn("verified login", resp.text)
+
+
+class ProjectTemplateRegressionTests(unittest.TestCase):
+    def test_template_registry_renders_runnable_react_project(self) -> None:
+        templates = list_project_templates()
+        template_ids = {item["id"] for item in templates}
+
+        self.assertIn("saas-dashboard", template_ids)
+        self.assertIn("landing-pricing", template_ids)
+        self.assertIn("admin-crud", template_ids)
+        self.assertIn("ai-tool-app", template_ids)
+
+        files = render_project_template(template_id="ai-tool-app", project_root="demo", project_name="Demo AI")
+
+        self.assertIn("package.json", files)
+        self.assertIn("index.html", files)
+        self.assertIn("src/App.tsx", files)
+        self.assertIn("src/main.tsx", files)
+        self.assertIn("README.md", files)
+        self.assertIn(".voiceide/memory/project.md", files)
+        self.assertIn("react-router-dom", files["package.json"])
+        self.assertIn("Template: AI Tool App", files[".voiceide/memory/project.md"])
+
+    def test_create_project_uses_selected_template(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+
+            with patch("api.projects.has_supabase", return_value=False):
+                project = create_project(
+                    workspace_root=workspace,
+                    owner_id="user-1",
+                    req=ProjectCreateReq(name="Ops Console", template_id="admin-crud"),
+                )
+
+            root = workspace / project.root
+            self.assertTrue((root / "package.json").exists())
+            self.assertTrue((root / "src" / "App.tsx").exists())
+            self.assertIn("Admin CRUD", (root / "README.md").read_text(encoding="utf-8"))
+            self.assertIn("Template: Admin CRUD", (root / ".voiceide" / "memory" / "project.md").read_text(encoding="utf-8"))
+
+
+class PatchApplyRegressionTests(unittest.TestCase):
+    def test_apply_many_rejects_stale_agent_patch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "src" / "App.tsx"
+            target.parent.mkdir(parents=True)
+            target.write_text("old\n", encoding="utf-8")
+            stale_hash = _sha256_text("old\n")
+            target.write_text("user edit\n", encoding="utf-8")
+
+            req = ApplyManyReq(
+                overwrite=True,
+                ops=[
+                    WriteOp(
+                        path="src/App.tsx",
+                        content="agent edit\n",
+                        expected_sha256=stale_hash,
+                        expected_exists=True,
+                    )
+                ],
+            )
+
+            with patch("api.main._ws", return_value=root):
+                with self.assertRaises(Exception) as raised:
+                    fs_apply_many(req)
+
+            self.assertEqual(getattr(raised.exception, "status_code", None), 409)
+            self.assertEqual(target.read_text(encoding="utf-8"), "user edit\n")
+
+    def test_apply_many_accepts_matching_agent_patch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "src" / "App.tsx"
+            target.parent.mkdir(parents=True)
+            target.write_text("old\n", encoding="utf-8")
+
+            req = ApplyManyReq(
+                overwrite=True,
+                ops=[
+                    WriteOp(
+                        path="src/App.tsx",
+                        content="agent edit\n",
+                        expected_sha256=_sha256_text("old\n"),
+                        expected_exists=True,
+                    )
+                ],
+            )
+
+            with patch("api.main._ws", return_value=root), patch("api.main._persist_hosted_file", return_value=None):
+                result = fs_apply_many(req)
+
+            self.assertEqual(result["count"], 1)
+            self.assertEqual(target.read_text(encoding="utf-8"), "agent edit\n")
 
 
 class TranscriptPurityRegressionTests(unittest.TestCase):

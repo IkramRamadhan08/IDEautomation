@@ -12,6 +12,14 @@ export type HostedProject = {
   updated_at: number;
   archived: boolean;
 };
+export type ProjectTemplate = {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  best_for: string;
+  tags: string[];
+};
 export type IdentityInfo = {
   user_id: string;
   display_name: string | null;
@@ -210,7 +218,13 @@ export async function listHostedProjects(): Promise<{ ok: boolean; projects: Hos
   return r.json();
 }
 
-export async function createHostedProject(payload: { name: string; slug?: string | null }): Promise<{ ok: boolean; project: HostedProject }> {
+export async function listProjectTemplates(): Promise<{ ok: boolean; templates: ProjectTemplate[] }> {
+  const r = await apiFetch(`/api/projects/templates`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function createHostedProject(payload: { name: string; slug?: string | null; template_id?: string | null }): Promise<{ ok: boolean; project: HostedProject }> {
   const r = await apiFetch(`/api/projects`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -417,7 +431,7 @@ export async function updateSettings(patch: SettingsUpdate): Promise<{ ok: boole
 }
 
 export async function applyMany(
-  ops: Array<{ path: string; content: string }>,
+  ops: Array<{ path: string; content: string; expected_sha256?: string | null; expected_exists?: boolean | null }>,
   overwrite = false
 ): Promise<{ ok: boolean; count: number }> {
   const r = await apiFetch(`/api/fs/apply_many`, {
@@ -499,9 +513,19 @@ export type PreviewAuditResult = {
   links: string[];
   form_count: number;
   input_count: number;
+  interactive_count?: number;
   word_count: number;
   image_count: number;
   images_missing_alt: number;
+  broken_images?: string[];
+  unlabeled_interactive?: string[];
+  small_tap_targets?: string[];
+  text_overflow_nodes?: string[];
+  mobile_text_overflow_nodes?: string[];
+  fixed_overlays?: string[];
+  mobile_fixed_overlays?: string[];
+  viewport?: { width?: number; height?: number };
+  mobile_viewport?: { width?: number; height?: number };
   console_errors: string[];
   page_errors: string[];
   runtime_warnings: string[];
@@ -546,7 +570,15 @@ export async function validateProject(project_root: string, max_commands = 4): P
   return r.json();
 }
 
-export async function terminalRun(command: string, cwd?: string): Promise<{ ok: boolean; stdout: string; stderr: string; returncode: number; synced_files?: number }> {
+export type TerminalRunResult = {
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+  returncode: number;
+  synced_files?: number;
+};
+
+export async function terminalRun(command: string, cwd?: string): Promise<TerminalRunResult> {
   const r = await apiFetch(`/api/terminal/run`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -568,7 +600,14 @@ export async function uploadImageAsset(project_root: string, file: File): Promis
   return r.json();
 }
 
-export type AgentChange = { path: string; new_content: string; diff: string };
+export type AgentChange = {
+  path: string;
+  new_content: string;
+  diff: string;
+  old_sha256?: string;
+  new_sha256?: string;
+  old_exists?: boolean;
+};
 export type AgentIntent = {
   kind: "command" | "conversation" | "mixed" | "inspection";
   confidence: number;
@@ -657,6 +696,7 @@ export type AgentCapabilities = {
     browser_dom_audit?: boolean;
     preview_quality_checks?: boolean;
     preview_audit_mode?: "browser" | "html";
+    provider_fallback_routing?: boolean;
     tool_actions: string[];
     streaming_transport: boolean;
     native_provider_token_streaming: boolean;
@@ -674,6 +714,8 @@ export type AgentCapabilities = {
     project_entries: number;
     latest_session_ts: number | null;
     latest_project_ts: number | null;
+    has_project_profile?: boolean;
+    project_profile_updated_at?: number | null;
     retrieval_backend?: string;
     supabase_rag_status?: "ready" | "missing" | "error" | "unconfigured";
     supabase_warning?: string | null;

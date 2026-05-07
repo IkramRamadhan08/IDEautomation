@@ -25,10 +25,12 @@ import {
   importBrowserFolder,
   uploadImageAsset,
   listHostedProjects,
+  listProjectTemplates,
   createHostedProject,
   listCheckpoints,
   restoreCheckpoint,
   type HostedProject,
+  type ProjectTemplate,
   type UserPreferences,
 } from "./api";
 
@@ -98,6 +100,8 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
+  const [projectTemplates, setProjectTemplates] = useState<ProjectTemplate[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("saas-dashboard");
   const [newProjectSaving, setNewProjectSaving] = useState(false);
   const [settings, setSettings] = useState<SettingsInfo | null>(null);
   const [llmProviderDraft, setLlmProviderDraft] = useState<ProviderChoice>("");
@@ -365,15 +369,18 @@ export default function App() {
   // --- Workspace & Files ---
   const refreshProjects = async () => {
     try {
-      const [detected, hosted] = await Promise.all([
+      const [detected, hosted, templates] = await Promise.all([
         detectProjects().catch(() => ({ ok: true, projects: [] as ProjectInfo[] })),
         hasVerifiedHostedAuth ? listHostedProjects().catch(() => ({ ok: true, projects: [] as HostedProject[] })) : Promise.resolve({ ok: true, projects: [] as HostedProject[] }),
+        hasVerifiedHostedAuth ? listProjectTemplates().catch(() => ({ ok: true, templates: [] as ProjectTemplate[] })) : Promise.resolve({ ok: true, templates: [] as ProjectTemplate[] }),
       ]);
       setProjects(detected.projects || []);
       setHostedProjects(hosted.projects || []);
+      setProjectTemplates(templates.templates || []);
     } catch {
       setProjects([]);
       setHostedProjects([]);
+      setProjectTemplates([]);
     }
   };
 
@@ -575,7 +582,7 @@ export default function App() {
         setWs(provisioned.path);
       }
 
-      const res = await createHostedProject({ name });
+      const res = await createHostedProject({ name, template_id: selectedTemplateId || "blank" });
       if (hasVerifiedHostedAuth) {
         await updateProjectPreferences(res.project.id, { build_mode: buildModeDraft });
       }
@@ -583,6 +590,7 @@ export default function App() {
       setSelectedProject(res.project.root);
       setEditorStatus(`Project ready: ${res.project.name}`);
       setNewProjectName("");
+      setSelectedTemplateId("saas-dashboard");
       setNewProjectOpen(false);
       toast.success(`Project created: ${res.project.name}`);
     } catch (e) {
@@ -786,19 +794,30 @@ export default function App() {
           <span className="authBrandMark">V</span>
           <span>Voice IDE</span>
         </div>
+        <nav className="authNavLinks" aria-label="Landing navigation">
+          <a href="#workflow">Workflow</a>
+          <a href="#templates">Templates</a>
+          <a href="#providers">Providers</a>
+        </nav>
         <button className="btn subtleBtn" onClick={startGoogleLogin}>Sign in</button>
       </header>
 
       <main className="authLandingMain">
-        <section className="authHeroCopy">
-          <div className="workspaceGateKicker">Agentic web builder</div>
-          <h1 className="authHeroTitle">Build apps by talking, refine them like an IDE.</h1>
+        <section className="authHeroSection">
+          <div className="authHeroCopy">
+          <div className="workspaceGateKicker">Agentic web builder for everyone</div>
+          <h1 className="authHeroTitle">Voice IDE</h1>
           <p className="authHeroSubtitle">
-            A hosted coding workspace for non-coders and builders: paste an API key, describe the product, then let Clara or Raka turn it into a working web app.
+            Create web apps by talking to Clara, then refine the result in a browser IDE with files, terminal actions, preview checks, project memory, and provider fallback.
           </p>
           <div className="authHeroActions">
             <button className="btn primary authPrimaryCta" onClick={startGoogleLogin}>Continue with Google</button>
-            <span className="authHeroNote">Vercel serverless. Supabase-backed projects. BYOK models.</span>
+            <span className="authHeroNote">Hosted on Vercel. Supabase projects. Bring your own model key.</span>
+          </div>
+          <div className="authHeroBullets">
+            <span>Start from production-ready templates</span>
+            <span>Let the agent run, inspect, repair, and remember</span>
+            <span>Use OpenRouter, Gemini, Groq, OpenAI, and more</span>
           </div>
           <div className="authMetricRow">
             <div>
@@ -814,7 +833,7 @@ export default function App() {
               <span>local setup</span>
             </div>
           </div>
-        </section>
+          </div>
 
         <section className="authProductPreview" aria-label="Voice IDE workspace preview">
           <div className="authPreviewChrome">
@@ -828,11 +847,11 @@ export default function App() {
               <div className="authPreviewRailTitle">Files</div>
               <div className="authPreviewFile active">src/App.tsx</div>
               <div className="authPreviewFile">src/app.css</div>
-              <div className="authPreviewFile">api/agent.py</div>
-              <div className="authPreviewFile">README.md</div>
+              <div className="authPreviewFile">.voiceide/memory</div>
+              <div className="authPreviewFile">package.json</div>
             </div>
             <div className="authPreviewEditor">
-              <div className="authPreviewTab">App.tsx</div>
+              <div className="authPreviewTab">Clara is building a SaaS dashboard</div>
               <div className="authCodeLine w80" />
               <div className="authCodeLine w60" />
               <div className="authCodeLine w90" />
@@ -842,11 +861,59 @@ export default function App() {
               <div className="authCodeLine w52" />
             </div>
             <div className="authPreviewAssist">
-              <div className="authAssistLabel">Raka</div>
-              <div className="authAssistBubble">Refining layout, states, and component copy...</div>
-              <div className="authAssistTrace">validate: responsive pass</div>
-              <div className="authAssistTrace">write: src/app.css</div>
+              <div className="authAssistLabel">Live agent</div>
+              <div className="authAssistBubble">Clara applied 6 patches, ran build, checked mobile preview, and repaired a layout overflow.</div>
+              <div className="authAssistTrace">template: SaaS Dashboard</div>
+              <div className="authAssistTrace">terminal: npm run build</div>
+              <div className="authAssistTrace">browser audit: passed</div>
             </div>
+          </div>
+        </section>
+        </section>
+
+        <section id="workflow" className="authInfoBand" aria-label="Workflow">
+          <div className="authSectionHeader">
+            <span>How it works</span>
+            <h2>From blank idea to working app without setting up a repo.</h2>
+          </div>
+          <div className="authFeatureGrid">
+            <div className="authFeatureCard">
+              <strong>1. Pick a starter</strong>
+              <p>Choose SaaS, landing, admin CRUD, or AI tool templates with real routes, states, and project memory.</p>
+            </div>
+            <div className="authFeatureCard">
+              <strong>2. Talk to Clara</strong>
+              <p>Describe the product in plain language. Clara plans, edits files, runs commands, and repairs failures.</p>
+            </div>
+            <div className="authFeatureCard">
+              <strong>3. Refine in the IDE</strong>
+              <p>Use Raka for focused edits while preview audit, checkpoints, and Supabase persistence keep the work grounded.</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="templates" className="authInfoBand authTemplateShowcase" aria-label="Templates">
+          <div className="authSectionHeader">
+            <span>Starter library</span>
+            <h2>Production-oriented templates, not empty demo folders.</h2>
+          </div>
+          <div className="authTemplateList">
+            <span>SaaS Dashboard</span>
+            <span>Landing + Pricing</span>
+            <span>Admin CRUD</span>
+            <span>AI Tool App</span>
+          </div>
+        </section>
+
+        <section id="providers" className="authInfoBand authProviderBand" aria-label="Providers">
+          <div className="authSectionHeader">
+            <span>BYOK model routing</span>
+            <h2>Paste the key you already have. Voice IDE can route and fallback when limits hit.</h2>
+          </div>
+          <div className="authProviderList">
+            {["OpenRouter", "Gemini", "Groq", "OpenAI", "Anthropic", "Together", "Cerebras", "xAI"].map((provider) => (
+              <span key={provider}>{provider}</span>
+            ))}
           </div>
         </section>
       </main>
@@ -877,6 +944,32 @@ export default function App() {
               autoFocus
             />
           </label>
+          <div className="newProjectTemplateSection">
+            <div className="newProjectTemplateHeader">
+              <span>Starter template</span>
+              <small>{projectTemplates.length > 0 ? "Production-ready starting point" : "Loading templates..."}</small>
+            </div>
+            <div className="newProjectTemplateGrid">
+              {(projectTemplates.length > 0 ? projectTemplates : [
+                { id: "saas-dashboard", name: "SaaS Dashboard", category: "Dashboard", description: "Auth-ready dashboard starter.", best_for: "SaaS MVPs and portals.", tags: ["dashboard"] },
+              ]).map((template) => (
+                <button
+                  key={template.id}
+                  className={`templateChoice ${selectedTemplateId === template.id ? "selected" : ""}`}
+                  type="button"
+                  disabled={newProjectSaving}
+                  onClick={() => setSelectedTemplateId(template.id)}
+                >
+                  <span className="templateChoiceTop">
+                    <strong>{template.name}</strong>
+                    <em>{template.category}</em>
+                  </span>
+                  <span className="templateChoiceDescription">{template.description}</span>
+                  <span className="templateChoiceBest">{template.best_for}</span>
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="newProjectModalActions">
             <button className="btn" type="button" disabled={newProjectSaving} onClick={() => setNewProjectOpen(false)}>Cancel</button>
             <button className="btn primary" type="submit" disabled={!newProjectName.trim() || newProjectSaving}>

@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 
 from api.auth_policy import require_hosted_user
-from api.projects import ProjectCreateReq, ProjectListResp, ProjectRenameReq, ProjectResp, archive_project, create_project, list_projects, rename_project
+from api.projects import ProjectCreateReq, ProjectListResp, ProjectRenameReq, ProjectResp, ProjectTemplateListResp, archive_project, available_project_templates, create_project, list_projects, rename_project
 
 
 def build_projects_router(*, session_state, ensure_workspace=None):
@@ -13,6 +13,11 @@ def build_projects_router(*, session_state, ensure_workspace=None):
     def get_projects(user=Depends(require_hosted_user)):
         ws_root = session_state().get("workspace")
         return ProjectListResp(projects=list_projects(workspace_root=ws_root, owner_id=user.user_id))
+
+    @router.get("/templates", response_model=ProjectTemplateListResp)
+    def get_project_templates(user=Depends(require_hosted_user)):
+        _ = user
+        return ProjectTemplateListResp(templates=available_project_templates())
 
     @router.post("", response_model=ProjectResp)
     def create_project_route(req: ProjectCreateReq, user=Depends(require_hosted_user)):

@@ -187,7 +187,14 @@ export type ProjectPreferences = {
   preview_entry: string | null;
   default_prompt_style: string | null;
 };
-export type AgentChange = { path: string; new_content: string; diff: string };
+export type AgentChange = {
+  path: string;
+  new_content: string;
+  diff: string;
+  old_sha256?: string;
+  new_sha256?: string;
+  old_exists?: boolean;
+};
 export type UploadedImageAsset = {
   ok: boolean;
   path: string;

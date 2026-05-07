@@ -46,6 +46,23 @@ try {
 
   const collectSnapshot = async () => page.evaluate(() => {
     const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+    const cssPath = (node) => {
+      if (!node || !node.tagName) return '';
+      const parts = [];
+      let current = node;
+      while (current && current.nodeType === Node.ELEMENT_NODE && parts.length < 4) {
+        const tag = current.tagName.toLowerCase();
+        const id = current.getAttribute('id');
+        if (id) {
+          parts.unshift(`${tag}#${id}`);
+          break;
+        }
+        const cls = clean(current.getAttribute('class') || '').split(/\s+/).filter(Boolean).slice(0, 2).join('.');
+        parts.unshift(cls ? `${tag}.${cls}` : tag);
+        current = current.parentElement;
+      }
+      return parts.join(' > ');
+    };
     const listText = (selector, limit = 8) => Array.from(document.querySelectorAll(selector))
       .map((node) => clean(node.textContent || node.getAttribute?.('aria-label') || ''))
       .filter(Boolean)
@@ -63,6 +80,11 @@ try {
     const metaDescription = document.querySelector('meta[name="description"]')?.getAttribute('content') || '';
     const imageNodes = Array.from(document.querySelectorAll('img'));
     const imagesMissingAlt = imageNodes.filter((img) => !clean(img.getAttribute('alt') || '')).length;
+    const brokenImages = imageNodes
+      .filter((img) => img.complete && img.naturalWidth === 0)
+      .map((img) => clean(img.getAttribute('src') || cssPath(img)))
+      .filter(Boolean)
+      .slice(0, 6);
     const formFields = Array.from(document.querySelectorAll('input, textarea, select'));
     const labeledInputCount = formFields.filter((field) => {
       const id = clean(field.getAttribute('id') || '');
@@ -72,6 +94,34 @@ try {
       const explicitLabel = id ? document.querySelector(`label[for="${id}"]`) : null;
       return Boolean(ariaLabel || labelledBy || nestedLabel || explicitLabel);
     }).length;
+    const interactiveNodes = Array.from(document.querySelectorAll('button, [role="button"], a[href], input, textarea, select, summary, [tabindex]:not([tabindex="-1"])'));
+    const unlabeledInteractive = interactiveNodes
+      .filter((node) => {
+        const label = clean(node.textContent || node.getAttribute('aria-label') || node.getAttribute('title') || node.getAttribute('value') || node.getAttribute('alt') || '');
+        return !label;
+      })
+      .map(cssPath)
+      .filter(Boolean)
+      .slice(0, 8);
+    const smallTapTargets = interactiveNodes
+      .map((node) => ({ node, rect: node.getBoundingClientRect() }))
+      .filter(({ rect }) => rect.width > 0 && rect.height > 0 && (rect.width < 32 || rect.height < 32))
+      .map(({ node, rect }) => `${cssPath(node)} (${Math.round(rect.width)}x${Math.round(rect.height)})`)
+      .slice(0, 8);
+    const fixedOverlays = Array.from(document.querySelectorAll('*'))
+      .filter((node) => {
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.position === 'fixed' && rect.width > window.innerWidth * 0.8 && rect.height > window.innerHeight * 0.8 && style.pointerEvents !== 'none';
+      })
+      .map(cssPath)
+      .filter(Boolean)
+      .slice(0, 4);
+    const textOverflowNodes = Array.from(document.querySelectorAll('button, a, h1, h2, h3, p, span, label, input'))
+      .filter((node) => node.scrollWidth > node.clientWidth + 4 && node.clientWidth > 0)
+      .map((node) => `${cssPath(node)} "${clean(node.textContent || node.getAttribute('value') || '').slice(0, 60)}"`)
+      .filter(Boolean)
+      .slice(0, 8);
 
     return {
       title: clean(document.title || ''),
@@ -88,11 +138,18 @@ try {
       landmark_count: document.querySelectorAll('main, nav, header, footer, aside, section[aria-label], [role="main"], [role="navigation"], [role="contentinfo"]').length,
       main_count: document.querySelectorAll('main, [role="main"]').length,
       button_count: buttonNodes.length,
+      interactive_count: interactiveNodes.length,
+      unlabeled_interactive: unlabeledInteractive,
+      small_tap_targets: smallTapTargets,
+      fixed_overlays: fixedOverlays,
+      text_overflow_nodes: textOverflowNodes,
       word_count: bodyText ? bodyText.split(/\s+/).filter(Boolean).length : 0,
       image_count: imageNodes.length,
       images_missing_alt: imagesMissingAlt,
+      broken_images: brokenImages,
       scroll_width: Math.max(document.documentElement?.scrollWidth || 0, document.body?.scrollWidth || 0),
       viewport_width: window.innerWidth || document.documentElement?.clientWidth || 0,
+      viewport_height: window.innerHeight || document.documentElement?.clientHeight || 0,
       excerpt: bodyText.slice(0, 1200),
     };
   });
@@ -103,6 +160,15 @@ try {
   const mobileSnapshot = await collectSnapshot();
   const snapshot = {
     ...desktopSnapshot,
+    viewport: { width: desktopSnapshot.viewport_width, height: desktopSnapshot.viewport_height },
+    mobile_viewport: { width: mobileSnapshot.viewport_width, height: mobileSnapshot.viewport_height },
+    mobile_headings: limitList(mobileSnapshot.headings, 3),
+    mobile_buttons: limitList(mobileSnapshot.buttons, 8),
+    mobile_links: limitList(mobileSnapshot.links, 8),
+    mobile_unlabeled_interactive: limitList(mobileSnapshot.unlabeled_interactive, 8),
+    mobile_small_tap_targets: limitList(mobileSnapshot.small_tap_targets, 8),
+    mobile_text_overflow_nodes: limitList(mobileSnapshot.text_overflow_nodes, 8),
+    mobile_fixed_overlays: limitList(mobileSnapshot.fixed_overlays, 4),
     mobile_scroll_width: mobileSnapshot.scroll_width,
     mobile_viewport_width: mobileSnapshot.viewport_width,
     mobile_overflow_x: mobileSnapshot.scroll_width > mobileSnapshot.viewport_width + 8,

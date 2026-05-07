@@ -32,6 +32,8 @@ from .oauth_runtime import (
     xai_generate_json,
     require_provider_connected,
     get_provider_cooldown_remaining,
+    auth_snapshot,
+    list_models,
 )
 
 _REF_CACHE: dict[str, tuple[float, str]] = {}
@@ -310,35 +312,98 @@ def _safe_fetch_reference(ref_url: str) -> str:
     return text
 
 
-def _provider_and_model() -> tuple[str, str]:
+def _model_for_provider(provider: str) -> str:
     s = settings_mod.settings
-    provider = (s.llm_provider or "").strip().lower()
-    if not provider:
-        raise RuntimeError("No provider selected yet. Open Settings, choose a provider, then save credentials first.")
-    require_provider_connected(provider)
     if provider == OPENAI_PROVIDER:
-        return provider, s.openai_model
+        return s.openai_model
     if provider == ANTHROPIC_PROVIDER:
-        return provider, s.anthropic_model
+        return s.anthropic_model
     if provider == OPENROUTER_PROVIDER:
-        return provider, s.openrouter_model
+        return s.openrouter_model
     if provider == GROQ_PROVIDER:
-        return provider, s.groq_model
+        return s.groq_model
     if provider == GEMINI_PROVIDER:
-        return provider, s.gemini_model
+        return s.gemini_model
     if provider == TOGETHER_PROVIDER:
-        return provider, s.together_model
+        return s.together_model
     if provider == CEREBRAS_PROVIDER:
-        return provider, s.cerebras_model
+        return s.cerebras_model
     if provider == XAI_PROVIDER:
-        return provider, s.xai_model
+        return s.xai_model
     raise RuntimeError(f"Unsupported provider: {provider}")
 
 
-def _generate_json(*, system: str, user: str) -> tuple[str, str, dict[str, Any]]:
-    provider, model = _provider_and_model()
-    _throttle_llm_calls(provider, _effective_min_gap_seconds())
+def _provider_and_model() -> tuple[str, str]:
+    provider = (settings_mod.settings.llm_provider or "").strip().lower()
+    if not provider:
+        raise RuntimeError("No provider selected yet. Open Settings, choose a provider, then save credentials first.")
+    require_provider_connected(provider)
+    return provider, _model_for_provider(provider)
 
+
+def _fallback_provider_order(selected_provider: str) -> list[str]:
+    free_first = [
+        OPENROUTER_PROVIDER,
+        GEMINI_PROVIDER,
+        GROQ_PROVIDER,
+        CEREBRAS_PROVIDER,
+        TOGETHER_PROVIDER,
+        XAI_PROVIDER,
+        OPENAI_PROVIDER,
+        ANTHROPIC_PROVIDER,
+    ]
+    quality_first = [
+        OPENAI_PROVIDER,
+        ANTHROPIC_PROVIDER,
+        OPENROUTER_PROVIDER,
+        GEMINI_PROVIDER,
+        TOGETHER_PROVIDER,
+        XAI_PROVIDER,
+        GROQ_PROVIDER,
+        CEREBRAS_PROVIDER,
+    ]
+    base = free_first if _friendly_free_tier_mode() else quality_first
+    ordered = [selected_provider, *base]
+    out: list[str] = []
+    seen: set[str] = set()
+    snapshot = auth_snapshot()
+    for provider in ordered:
+        if not provider or provider in seen:
+            continue
+        seen.add(provider)
+        status = snapshot.get(provider) or {}
+        if not status.get("connected"):
+            continue
+        if provider != selected_provider and get_provider_cooldown_remaining(provider) > 0:
+            continue
+        out.append(provider)
+    return out
+
+
+def _is_fallback_worthy_error(message: str) -> bool:
+    lowered = (message or "").lower()
+    return any(token in lowered for token in [
+        "rate limit",
+        "cooldown",
+        "quota",
+        "credit",
+        "billing",
+        "overloaded",
+        "temporarily",
+        "timeout",
+        "timed out",
+        "empty response",
+        "returned an empty",
+        "unavailable",
+        "error 429",
+        "error 500",
+        "error 502",
+        "error 503",
+        "error 504",
+    ])
+
+
+def _generate_json_once(provider: str, model: str, *, system: str, user: str) -> dict[str, Any]:
     if provider == OPENAI_PROVIDER:
         raw = openai_generate_json(model=model, system=system, user=user)
         text = str(raw.get("text") or "")
@@ -347,7 +412,7 @@ def _generate_json(*, system: str, user: str) -> tuple[str, str, dict[str, Any]]
             if err:
                 raise RuntimeError(err)
             raise RuntimeError("OpenAI returned an empty response")
-        return provider, model, _extract_json_object(text)
+        return _extract_json_object(text)
 
     if provider == ANTHROPIC_PROVIDER:
         raw = anthropic_generate_json(model=model, system=system, user=user)
@@ -357,7 +422,7 @@ def _generate_json(*, system: str, user: str) -> tuple[str, str, dict[str, Any]]
             if err:
                 raise RuntimeError(err)
             raise RuntimeError("Anthropic returned an empty response")
-        return provider, model, _extract_json_object(text)
+        return _extract_json_object(text)
 
     if provider == OPENROUTER_PROVIDER:
         raw = openrouter_generate_json(model=model, system=system, user=user)
@@ -367,7 +432,7 @@ def _generate_json(*, system: str, user: str) -> tuple[str, str, dict[str, Any]]
             if err:
                 raise RuntimeError(err)
             raise RuntimeError("OpenRouter returned an empty response")
-        return provider, model, _extract_json_object(text)
+        return _extract_json_object(text)
 
     if provider == GROQ_PROVIDER:
         raw = groq_generate_json(model=model, system=system, user=user)
@@ -377,7 +442,7 @@ def _generate_json(*, system: str, user: str) -> tuple[str, str, dict[str, Any]]
             if err:
                 raise RuntimeError(err)
             raise RuntimeError("Groq returned an empty response")
-        return provider, model, _extract_json_object(text)
+        return _extract_json_object(text)
 
     provider_generators = {
         GEMINI_PROVIDER: (gemini_generate_json, "Gemini"),
@@ -394,9 +459,64 @@ def _generate_json(*, system: str, user: str) -> tuple[str, str, dict[str, Any]]
             if err:
                 raise RuntimeError(err)
             raise RuntimeError(f"{label} returned an empty response")
-        return provider, model, _extract_json_object(text)
+        return _extract_json_object(text)
 
     raise RuntimeError(f"Unsupported provider: {provider}")
+
+
+def _generate_json(*, system: str, user: str) -> tuple[str, str, dict[str, Any]]:
+    selected_provider = (settings_mod.settings.llm_provider or "").strip().lower()
+    if not selected_provider:
+        snapshot = auth_snapshot()
+        for provider in _fallback_provider_order(OPENROUTER_PROVIDER):
+            if (snapshot.get(provider) or {}).get("connected"):
+                selected_provider = provider
+                break
+    if not selected_provider:
+        raise RuntimeError("No provider selected yet. Open Settings, choose a provider, then save credentials first.")
+    candidates = _fallback_provider_order(selected_provider)
+    if not candidates:
+        raise RuntimeError("Belum ada provider connected. Isi minimal satu API key di Settings.")
+
+    errors: list[str] = []
+    for index, provider in enumerate(candidates):
+        model = _model_for_provider(provider)
+        try:
+            require_provider_connected(provider)
+            _throttle_llm_calls(provider, _effective_min_gap_seconds() if index == 0 else 0.0)
+            data = _generate_json_once(provider, model, system=system, user=user)
+            if index > 0:
+                data["_voiceide_provider_fallback"] = {
+                    "selected_provider": selected_provider,
+                    "used_provider": provider,
+                    "used_model": model,
+                    "previous_errors": errors[-3:],
+                }
+            return provider, model, data
+        except Exception as exc:
+            message = str(exc)
+            errors.append(f"{provider}/{model}: {message}"[:500])
+            if index == 0 and len(candidates) > 1 and _is_fallback_worthy_error(message):
+                continue
+            if index > 0 and _is_fallback_worthy_error(message):
+                continue
+            if index < len(candidates) - 1 and _is_fallback_worthy_error(message):
+                continue
+            raise RuntimeError(message)
+
+    raise RuntimeError("Semua provider fallback gagal: " + " | ".join(errors[-4:]))
+
+
+def _provider_fallback_log(data: dict[str, Any]) -> str:
+    fallback = data.get("_voiceide_provider_fallback") if isinstance(data, dict) else None
+    if not isinstance(fallback, dict):
+        return ""
+    selected = str(fallback.get("selected_provider") or "").strip()
+    used = str(fallback.get("used_provider") or "").strip()
+    model = str(fallback.get("used_model") or "").strip()
+    if not selected or not used or selected == used:
+        return ""
+    return f" fallback_from={selected} fallback_to={used} fallback_model={model}".strip()
 
 
 def suggest(
@@ -459,6 +579,7 @@ def suggest(
     spoken = str(data.get("spoken") or ("I prepared the requested changes." if out_changes else "I reviewed the request but did not propose any file edits."))
     log = (
         f"provider={provider} model={model} files={len(out_changes)} actions={len(actions)} "
+        f"{_provider_fallback_log(data)} "
         f"prompt_chars={len(user)} prompt_tokens_est={_rough_token_estimate(user)} context_budget={context_budget} context_skipped={skipped_context}"
     )
     return AgentSuggestion(spoken=spoken, log=log, changes=out_changes, actions=actions)
@@ -498,7 +619,7 @@ def scaffold_webapp(*, name: str, goal: str, ref_url: str | None = None) -> Scaf
 
     result = ScaffoldResult(
         spoken=str(data.get("spoken") or f"I created a new app in {project_root}."),
-        log=f"provider={provider} model={model} files={len(ops)} actions={len(actions)}",
+        log=f"provider={provider} model={model} {_provider_fallback_log(data)} files={len(ops)} actions={len(actions)}",
         project_root=project_root,
         ops=ops,
         actions=actions,
@@ -526,7 +647,7 @@ def generate_prd(*, name: str, goal: str, ref_url: str | None = None) -> dict[st
     result = {
         "spoken": str(data.get("spoken") or "I drafted the PRD."),
         "prd_markdown": prd_markdown,
-        "log": f"provider={provider} model={model}",
+        "log": f"provider={provider} model={model} {_provider_fallback_log(data)}",
     }
     _PRD_CACHE[cache_key] = (time.time(), result)
     return result

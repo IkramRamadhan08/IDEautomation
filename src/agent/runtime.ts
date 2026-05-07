@@ -279,6 +279,9 @@ export function buildRepairPrompt(
   originalInput: string,
   validationReport?: string | null,
   previewAuditReport?: string | null,
+  shellReport?: string | null,
+  passNumber?: number,
+  maxPasses?: number,
 ): string {
   const profile = getBuildModeProfile(buildMode);
   const modeDirective = buildMode === "full-agent"
@@ -287,9 +290,21 @@ export function buildRepairPrompt(
 
   const sections = [originalInput.trim(), modeDirective];
 
+  if (passNumber && maxPasses) {
+    sections.push(
+      `Repair loop pass ${passNumber} of ${maxPasses}. Do not repeat the same failed approach; use the latest command/validation/audit output as ground truth.`
+    );
+  }
+
   if (validationReport?.trim()) {
     sections.push(
       `Validation failed after applying the draft. Fix only what is necessary so the project passes these checks.\n\nValidation results:\n${validationReport.trim()}`
+    );
+  }
+
+  if (shellReport?.trim()) {
+    sections.push(
+      `One or more project commands were executed after applying the draft. Read the command output, identify the actual blocker, and fix the project so the command succeeds on the next run.\n\nCommand results:\n${shellReport.trim()}`
     );
   }
 

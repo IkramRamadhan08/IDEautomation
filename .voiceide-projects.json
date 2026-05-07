@@ -1,0 +1,24 @@
+{
+  "projects": [
+    {
+      "id": "d5954b65-3cec-4185-8cd7-552ee59728b1",
+      "owner_id": "user-1",
+      "name": "Ops Console",
+      "slug": "ops-console",
+      "root": "ops-console",
+      "created_at": 1778141546,
+      "updated_at": 1778141546,
+      "archived": false
+    },
+    {
+      "id": "0f45d1dc-5de6-4cfd-8fd7-83a5e07f60df",
+      "owner_id": "user-1",
+      "name": "Ops Console",
+      "slug": "ops-console",
+      "root": "ops-console",
+      "created_at": 1778142028,
+      "updated_at": 1778142028,
+      "archived": false
+    }
+  ]
+}
