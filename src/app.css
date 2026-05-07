@@ -3954,45 +3954,34 @@ a {
 .apporaLanding {
   --appora-cursor-x: 72vw;
   --appora-cursor-y: 38vh;
+  --appora-lens-shift-x: 0px;
+  --appora-lens-shift-y: 0px;
   --appora-cursor-hot: 0;
-  --appora-bg: #071015;
-  --appora-bg-2: #0d1722;
-  --appora-surface: rgba(255, 255, 255, 0.07);
-  --appora-surface-strong: rgba(255, 255, 255, 0.11);
-  --appora-border: rgba(209, 250, 229, 0.14);
-  --appora-text: #effff8;
-  --appora-muted: rgba(239, 255, 248, 0.66);
-  --appora-soft: rgba(239, 255, 248, 0.44);
-  --appora-accent: #9cff5f;
-  --appora-cyan: #61e8ff;
-  --appora-pink: #ff7bd8;
-  --appora-violet: #9b8cff;
+  --appora-bg: #0b0c10;
+  --appora-bg-2: #121319;
+  --appora-surface: rgba(255, 255, 255, 0.055);
+  --appora-surface-strong: rgba(255, 255, 255, 0.095);
+  --appora-border: rgba(255, 255, 255, 0.13);
+  --appora-text: #f7f4ef;
+  --appora-muted: rgba(247, 244, 239, 0.62);
+  --appora-soft: rgba(247, 244, 239, 0.38);
+  --appora-accent: #9b6cff;
+  --appora-cyan: #77e7ff;
+  --appora-pink: #ff6fd8;
+  --appora-violet: #a78bfa;
   min-height: 100vh;
   color: var(--appora-text);
   background:
-    radial-gradient(circle at 9% 5%, rgba(156, 255, 95, 0.2), transparent 28%),
-    radial-gradient(circle at 88% 9%, rgba(97, 232, 255, 0.18), transparent 30%),
-    radial-gradient(circle at 72% 54%, rgba(155, 140, 255, 0.12), transparent 34%),
-    linear-gradient(180deg, var(--appora-bg) 0%, var(--appora-bg-2) 48%, #06090d 100%);
+    radial-gradient(circle at 78% 18%, rgba(155, 108, 255, 0.14), transparent 30%),
+    radial-gradient(circle at 18% 78%, rgba(119, 231, 255, 0.08), transparent 32%),
+    linear-gradient(180deg, #090a0d 0%, var(--appora-bg) 42%, var(--appora-bg-2) 100%);
   overflow-x: hidden;
   scroll-snap-type: none;
   position: relative;
 }
 
 :root[data-app-theme="light"] .apporaLanding {
-  --appora-bg: #f5f8ee;
-  --appora-bg-2: #eef8fa;
-  --appora-surface: rgba(255, 255, 255, 0.68);
-  --appora-surface-strong: rgba(255, 255, 255, 0.86);
-  --appora-border: rgba(18, 31, 38, 0.12);
-  --appora-text: #111717;
-  --appora-muted: rgba(17, 23, 23, 0.64);
-  --appora-soft: rgba(17, 23, 23, 0.42);
-  background:
-    radial-gradient(circle at 9% 5%, rgba(156, 255, 95, 0.42), transparent 27%),
-    radial-gradient(circle at 88% 9%, rgba(97, 232, 255, 0.35), transparent 30%),
-    radial-gradient(circle at 72% 54%, rgba(155, 140, 255, 0.18), transparent 34%),
-    linear-gradient(180deg, var(--appora-bg) 0%, var(--appora-bg-2) 52%, #f8f8f2 100%);
+  color-scheme: dark;
 }
 
 .apporaLanding::before {
@@ -4002,105 +3991,100 @@ a {
   z-index: 0;
   pointer-events: none;
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
-  background-size: 54px 54px;
-  mask-image: linear-gradient(180deg, black, transparent 72%);
+    linear-gradient(rgba(255, 255, 255, 0.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.028) 1px, transparent 1px);
+  background-size: 64px 64px;
+  mask-image: linear-gradient(180deg, black, transparent 78%);
 }
 
-.apporaCursorLiquid {
+.apporaGlassLens {
   position: fixed;
   left: var(--appora-cursor-x);
   top: var(--appora-cursor-y);
-  z-index: 0;
-  width: clamp(250px, 28vw, 440px);
+  z-index: 2;
+  width: clamp(180px, 20vw, 340px);
   aspect-ratio: 1;
   pointer-events: none;
   transform:
     translate3d(-50%, -50%, 0)
-    scale(calc(0.94 + (var(--appora-cursor-hot) * 0.08)));
+    scale(calc(0.92 + (var(--appora-cursor-hot) * 0.1)));
   transition:
-    left 620ms cubic-bezier(0.16, 1, 0.3, 1),
-    top 620ms cubic-bezier(0.16, 1, 0.3, 1),
+    left 520ms cubic-bezier(0.16, 1, 0.3, 1),
+    top 520ms cubic-bezier(0.16, 1, 0.3, 1),
     transform 420ms cubic-bezier(0.16, 1, 0.3, 1),
     opacity 240ms ease;
-  opacity: calc(0.58 + (var(--appora-cursor-hot) * 0.28));
-  filter: blur(0.2px) saturate(1.16);
-  mix-blend-mode: screen;
+  opacity: calc(0.72 + (var(--appora-cursor-hot) * 0.22));
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  border-radius: 45% 55% 50% 50% / 52% 47% 53% 48%;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 28% 22%, rgba(255, 255, 255, 0.7), transparent 15%),
+    radial-gradient(circle at 72% 72%, rgba(119, 231, 255, 0.16), transparent 32%),
+    rgba(255, 255, 255, 0.07);
+  box-shadow:
+    inset 18px 16px 42px rgba(255, 255, 255, 0.16),
+    inset -24px -28px 48px rgba(0, 0, 0, 0.28),
+    0 24px 88px rgba(119, 231, 255, 0.12),
+    0 0 0 1px rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(9px) saturate(1.45) contrast(1.22);
+  animation: apporaGlassMorph 9s ease-in-out infinite;
 }
 
-:root[data-app-theme="light"] .apporaCursorLiquid {
-  mix-blend-mode: multiply;
-  opacity: calc(0.34 + (var(--appora-cursor-hot) * 0.22));
+.apporaLensText {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  align-content: center;
+  gap: clamp(2px, 0.8vw, 12px);
+  padding: 0 clamp(18px, 7vw, 96px);
+  color: rgba(255, 255, 255, 0.96);
+  font-size: clamp(76px, 13.4vw, 218px);
+  font-weight: 760;
+  line-height: 0.74;
+  letter-spacing: -0.07em;
+  text-transform: uppercase;
+  transform:
+    translate3d(var(--appora-lens-shift-x), var(--appora-lens-shift-y), 0)
+    scale(1.16)
+    skewX(-3deg);
+  filter: blur(0.35px) contrast(1.34);
+  opacity: 0.62;
 }
 
-.apporaCursorCore,
-.apporaCursorBlob,
-.apporaCursorGlint {
+.apporaLensGlare,
+.apporaLensCaustic {
   position: absolute;
-  border-radius: 999px;
-  will-change: transform;
+  pointer-events: none;
 }
 
-.apporaCursorCore {
-  inset: 13%;
-  background:
-    radial-gradient(circle at 32% 24%, rgba(255, 255, 255, 0.72), transparent 18%),
-    radial-gradient(circle at 72% 68%, rgba(97, 232, 255, 0.28), transparent 30%),
-    linear-gradient(135deg, rgba(156, 255, 95, 0.72), rgba(97, 232, 255, 0.58) 48%, rgba(255, 123, 216, 0.48));
-  box-shadow:
-    inset -30px -34px 60px rgba(5, 17, 20, 0.24),
-    inset 22px 18px 54px rgba(255, 255, 255, 0.14),
-    0 0 92px rgba(97, 232, 255, 0.22);
-  animation: apporaLiquidBreath 8s ease-in-out infinite;
-}
-
-.apporaCursorBlob {
-  background:
-    radial-gradient(circle at 34% 25%, rgba(255, 255, 255, 0.62), transparent 28%),
-    linear-gradient(135deg, rgba(156, 255, 95, 0.68), rgba(97, 232, 255, 0.54) 52%, rgba(255, 123, 216, 0.42));
-  box-shadow:
-    inset -18px -18px 34px rgba(5, 17, 20, 0.18),
-    0 0 50px rgba(156, 255, 95, 0.15);
-}
-
-.apporaCursorBlob.one {
+.apporaLensGlare {
+  top: 17%;
+  left: 17%;
   width: 38%;
-  height: 38%;
-  right: 3%;
-  top: 16%;
-  transform: translate3d(calc(var(--appora-cursor-hot) * 18px), calc(var(--appora-cursor-hot) * -9px), 0);
-  animation: apporaLiquidOrbitOne 7.2s ease-in-out infinite;
-}
-
-.apporaCursorBlob.two {
-  width: 31%;
-  height: 31%;
-  left: 3%;
-  bottom: 18%;
-  transform: translate3d(calc(var(--appora-cursor-hot) * -14px), calc(var(--appora-cursor-hot) * 12px), 0);
-  animation: apporaLiquidOrbitTwo 8.4s ease-in-out infinite;
-}
-
-.apporaCursorBlob.three {
-  width: 18%;
-  height: 18%;
-  right: 22%;
-  bottom: 2%;
-  opacity: 0.72;
-  transform: translate3d(calc(var(--appora-cursor-hot) * 20px), calc(var(--appora-cursor-hot) * 15px), 0);
-  animation: apporaLiquidOrbitThree 6.6s ease-in-out infinite;
-}
-
-.apporaCursorGlint {
-  top: 28%;
-  left: 31%;
-  width: 16%;
-  height: 7%;
+  height: 12%;
+  border-radius: 999px;
   background: rgba(255, 255, 255, 0.58);
-  filter: blur(6px);
-  transform: rotate(-24deg);
-  opacity: calc(0.46 + (var(--appora-cursor-hot) * 0.18));
+  filter: blur(7px);
+  transform: rotate(-22deg);
+}
+
+.apporaLensCaustic.one {
+  inset: 16% 8% auto auto;
+  width: 42%;
+  height: 42%;
+  border-radius: inherit;
+  border-top: 1px solid rgba(255, 255, 255, 0.42);
+  transform: rotate(28deg);
+}
+
+.apporaLensCaustic.two {
+  left: 14%;
+  bottom: 14%;
+  width: 48%;
+  height: 24%;
+  border-radius: 999px;
+  border-bottom: 1px solid rgba(119, 231, 255, 0.28);
+  transform: rotate(-18deg);
 }
 
 :root[data-app-theme="light"] .apporaLanding::before {
@@ -4112,7 +4096,7 @@ a {
 .apporaNav {
   position: sticky;
   top: 16px;
-  z-index: 10;
+  z-index: 5;
   width: min(1200px, calc(100vw - 32px));
   min-height: 68px;
   margin: 16px auto 0;
@@ -4123,14 +4107,14 @@ a {
   padding: 0 12px 0 14px;
   border: 1px solid var(--appora-border);
   border-radius: 999px;
-  background: rgba(7, 16, 21, 0.68);
+  background: rgba(13, 14, 18, 0.72);
   backdrop-filter: blur(22px);
   box-shadow: 0 22px 70px rgba(0, 0, 0, 0.22);
 }
 
 :root[data-app-theme="light"] .apporaNav {
-  background: rgba(255, 255, 255, 0.68);
-  box-shadow: 0 22px 70px rgba(49, 60, 48, 0.13);
+  background: rgba(13, 14, 18, 0.72);
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.22);
 }
 
 .apporaBrand {
@@ -4140,9 +4124,9 @@ a {
 
 .apporaLanding .authBrandMark {
   color: #071015;
-  background: linear-gradient(135deg, var(--appora-accent), var(--appora-cyan));
+  background: linear-gradient(135deg, #ffffff, rgba(119, 231, 255, 0.82));
   border-color: rgba(255, 255, 255, 0.32);
-  box-shadow: inset -4px -5px 0 rgba(0, 0, 0, 0.08), 0 0 28px rgba(156, 255, 95, 0.18);
+  box-shadow: inset -4px -5px 0 rgba(0, 0, 0, 0.08), 0 0 28px rgba(119, 231, 255, 0.14);
 }
 
 .apporaNavLinks,
@@ -4163,7 +4147,7 @@ a {
 }
 
 :root[data-app-theme="light"] .apporaNavLinks {
-  background: rgba(17, 23, 23, 0.045);
+  background: rgba(255, 255, 255, 0.045);
 }
 
 .apporaNavLinks a,
@@ -4219,11 +4203,11 @@ a {
   gap: 9px;
   padding: 0 18px;
   border-radius: 999px;
-  color: #071015;
-  background: linear-gradient(135deg, var(--appora-accent), var(--appora-cyan));
+  color: #090a0d;
+  background: linear-gradient(135deg, #ffffff, #b7a4ff 48%, #77e7ff);
   font-size: 13px;
   font-weight: 680;
-  box-shadow: 0 18px 54px rgba(97, 232, 255, 0.2);
+  box-shadow: 0 18px 54px rgba(119, 231, 255, 0.18);
 }
 
 .apporaSecondaryButton {
@@ -4255,16 +4239,18 @@ a {
 .apporaHero {
   min-height: calc(100vh - 84px);
   display: grid;
-  grid-template-columns: minmax(0, 0.92fr) minmax(470px, 1.08fr);
-  gap: clamp(34px, 5vw, 82px);
-  align-items: center;
-  padding: clamp(50px, 7vw, 86px) 0 72px;
+  align-items: stretch;
+  padding: clamp(36px, 5vw, 62px) 0 72px;
 }
 
 .apporaHeroCopy {
+  position: relative;
   display: grid;
+  align-content: center;
   justify-items: start;
-  gap: 24px;
+  min-height: 720px;
+  gap: 22px;
+  overflow: hidden;
 }
 
 .apporaHero h1,
@@ -4276,10 +4262,14 @@ a {
 }
 
 .apporaHero h1 {
+  position: relative;
+  z-index: 1;
   max-width: 760px;
-  font-size: clamp(48px, 6.3vw, 82px);
+  margin-top: clamp(260px, 28vw, 430px);
+  font-size: clamp(36px, 4.8vw, 72px);
   line-height: 0.98;
-  font-weight: 650;
+  font-weight: 620;
+  text-transform: none;
 }
 
 .apporaHero p,
@@ -4290,16 +4280,22 @@ a {
 }
 
 .apporaHero p {
+  position: relative;
+  z-index: 1;
   max-width: 650px;
   font-size: clamp(17px, 1.45vw, 20px);
 }
 
 .apporaHeroActions {
+  position: relative;
+  z-index: 1;
   gap: 12px;
   flex-wrap: wrap;
 }
 
 .apporaSignalRow {
+  position: relative;
+  z-index: 1;
   gap: 8px;
   flex-wrap: wrap;
 }
@@ -4315,6 +4311,57 @@ a {
   color: var(--appora-muted);
   font-size: 12px;
   font-weight: 620;
+}
+
+.apporaTypeStage::before {
+  content: "";
+  position: absolute;
+  inset: 7% -10% 20% -10%;
+  z-index: 0;
+  background:
+    radial-gradient(circle at 34% 28%, rgba(255, 255, 255, 0.08), transparent 32%),
+    radial-gradient(circle at 64% 36%, rgba(119, 231, 255, 0.08), transparent 34%),
+    radial-gradient(circle at 48% 62%, rgba(155, 108, 255, 0.12), transparent 34%);
+  filter: blur(3px);
+}
+
+.apporaHugeType {
+  position: absolute;
+  inset: 2% 0 auto;
+  z-index: 0;
+  display: grid;
+  gap: clamp(2px, 0.8vw, 12px);
+  color: rgba(255, 255, 255, 0.94);
+  font-size: clamp(76px, 13.4vw, 218px);
+  font-weight: 760;
+  line-height: 0.74;
+  letter-spacing: -0.07em;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.apporaHugeType span {
+  display: block;
+  max-width: 100%;
+  white-space: nowrap;
+  text-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.08),
+    0 28px 72px rgba(0, 0, 0, 0.42);
+}
+
+.apporaHugeType span:nth-child(2) {
+  opacity: 0.84;
+  transform: translateX(5.6vw);
+}
+
+.apporaHugeType span:nth-child(3) {
+  opacity: 0.72;
+  transform: translateX(1.2vw);
+}
+
+.apporaHugeType span:nth-child(4) {
+  opacity: 0.58;
+  transform: translateX(15.8vw);
 }
 
 .apporaHeroVisual {
@@ -4969,34 +5016,16 @@ a {
   to { transform: translateX(-50%); }
 }
 
-@keyframes apporaLiquidBreath {
+@keyframes apporaGlassMorph {
   0%, 100% {
     border-radius: 48% 52% 51% 49% / 52% 46% 54% 48%;
-    transform: rotate(0deg) scale(1);
   }
   33% {
     border-radius: 56% 44% 49% 51% / 45% 56% 44% 55%;
-    transform: rotate(5deg) scale(1.035);
   }
   66% {
     border-radius: 43% 57% 56% 44% / 55% 42% 58% 45%;
-    transform: rotate(-4deg) scale(0.985);
   }
-}
-
-@keyframes apporaLiquidOrbitOne {
-  0%, 100% { translate: 0 0; }
-  50% { translate: 12px -8px; }
-}
-
-@keyframes apporaLiquidOrbitTwo {
-  0%, 100% { translate: 0 0; }
-  50% { translate: -10px 11px; }
-}
-
-@keyframes apporaLiquidOrbitThree {
-  0%, 100% { translate: 0 0; }
-  50% { translate: 13px 9px; }
 }
 
 @keyframes apporaMascotFloat {
@@ -5030,8 +5059,7 @@ a {
 
 @media (prefers-reduced-motion: reduce) {
   .apporaMarquee,
-  .apporaCursorCore,
-  .apporaCursorBlob,
+  .apporaGlassLens,
   .apporaMascot,
   .apporaMascotHalo,
   .apporaMascotEye {
@@ -5043,6 +5071,23 @@ a {
   .apporaHero,
   .apporaSplit {
     grid-template-columns: 1fr;
+  }
+
+  .apporaHeroCopy {
+    min-height: 680px;
+  }
+
+  .apporaHugeType,
+  .apporaLensText {
+    font-size: clamp(74px, 18vw, 154px);
+  }
+
+  .apporaHero h1 {
+    margin-top: clamp(300px, 44vw, 390px);
+  }
+
+  .apporaGlassLens {
+    width: clamp(160px, 30vw, 260px);
   }
 
   .apporaHeroVisual {
@@ -5099,8 +5144,30 @@ a {
     padding: 56px 0 52px;
   }
 
+  .apporaHeroCopy {
+    min-height: 650px;
+  }
+
+  .apporaHugeType,
+  .apporaLensText {
+    font-size: clamp(64px, 22vw, 96px);
+    line-height: 0.78;
+    letter-spacing: -0.06em;
+  }
+
+  .apporaHugeType span:nth-child(2),
+  .apporaHugeType span:nth-child(3),
+  .apporaHugeType span:nth-child(4) {
+    transform: none;
+  }
+
+  .apporaGlassLens {
+    width: 172px;
+  }
+
   .apporaHero h1 {
-    font-size: 42px;
+    margin-top: 332px;
+    font-size: 38px;
     line-height: 1;
   }
 
