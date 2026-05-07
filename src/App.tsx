@@ -179,6 +179,8 @@ export default function App() {
     window.localStorage.setItem("appora-theme", appTheme);
   }, [appTheme]);
 
+  const toggleAppTheme = () => setAppTheme((theme) => theme === "dark" ? "light" : "dark");
+
   const modelFromPreferences = (provider: ProviderChoice, prefs: UserPreferences | null): string => {
     if (!prefs) return "";
     if (provider === "openai") return prefs.openai_model || "";
@@ -945,7 +947,7 @@ export default function App() {
           <a href="#faq">FAQ</a>
         </nav>
         <div className="apporaNavActions">
-          <button className="apporaThemeToggle" type="button" onClick={() => setAppTheme((theme) => theme === "dark" ? "light" : "dark")} title={`Switch to ${appTheme === "dark" ? "light" : "dark"} mode`} aria-label={`Switch to ${appTheme === "dark" ? "light" : "dark"} mode`}>
+          <button className="apporaThemeToggle" type="button" onClick={toggleAppTheme} title={`Switch to ${appTheme === "dark" ? "light" : "dark"} mode`} aria-label={`Switch to ${appTheme === "dark" ? "light" : "dark"} mode`}>
             {appTheme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
           </button>
           <button className="apporaNavCta" onClick={startGoogleLogin}>
@@ -1244,64 +1246,82 @@ export default function App() {
   );
 
   const renderWorkspaceOnboarding = () => (
-    <div className="workspaceGateWrap workspaceSetupWrap">
+    <div className="workspaceGateWrap workspaceSetupWrap" id="top">
       {renderNewProjectModal()}
-      <div className="workspaceGateCard pane workspaceSetupCard">
-        <div className="workspaceGateKicker">Project setup</div>
-        <div className="workspaceGateTitle">Start a project for this session</div>
-        <div className="workspaceGateSubtitle">
-          Open an existing project, upload one, or create a new Supabase-backed project for the agent.
-          {isHostedBrowser() ? " Project text files are restored from Supabase between serverless runs." : ""}
+      <header className="apporaNav workspaceSetupNav">
+        <a className="splineBrandButton apporaBrand" href="#top" aria-label="Appora home">
+          <span className="authBrandMark">A</span>
+          <span>Appora</span>
+        </a>
+        <div className="workspaceSetupNavMeta">
+          <span>{identity?.display_name || identity?.email || "Signed in"}</span>
         </div>
-        <div className="workspaceGateFeatureGrid">
-          <div className="gateFeatureCard">
-            <div className="gateFeatureTitle">Open or upload project</div>
-            <div className="gateFeatureText">Best when you already have a repo and want to keep working immediately.</div>
+        <div className="apporaNavActions">
+          <button className="apporaThemeToggle" type="button" onClick={toggleAppTheme} title={`Switch to ${appTheme === "dark" ? "light" : "dark"} mode`} aria-label={`Switch to ${appTheme === "dark" ? "light" : "dark"} mode`}>
+            {appTheme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
+          </button>
+          <button className="apporaNavCta" type="button" onClick={logoutToStart}>
+            Logout
+          </button>
+        </div>
+      </header>
+      <main className="workspaceSetupMain">
+        <div className="workspaceGateCard pane workspaceSetupCard">
+          <div className="workspaceGateKicker">Project setup</div>
+          <div className="workspaceGateTitle">Start a project for this session</div>
+          <div className="workspaceGateSubtitle">
+            Open an existing project, upload one, or create a new Supabase-backed project for the agent.
+            {isHostedBrowser() ? " Project text files are restored from Supabase between serverless runs." : ""}
           </div>
-          <div className="gateFeatureCard">
-            <div className="gateFeatureTitle">Create new project</div>
-            <div className="gateFeatureText">Best when you want Clara or Raka to scaffold a fresh app from a simple brief.</div>
+          <div className="workspaceGateFeatureGrid">
+            <div className="gateFeatureCard">
+              <div className="gateFeatureTitle">Open or upload project</div>
+              <div className="gateFeatureText">Best when you already have a repo and want to keep working immediately.</div>
+            </div>
+            <div className="gateFeatureCard">
+              <div className="gateFeatureTitle">Create new project</div>
+              <div className="gateFeatureText">Best when you want Clara or Raka to scaffold a fresh app from a simple brief.</div>
+            </div>
           </div>
-        </div>
-        <div className="workspaceGateActions">
-          <button className="btn primary" onClick={pickWorkspace}>{isHostedBrowser() ? "Upload project…" : "Open project…"}</button>
-          <button className="btn" onClick={() => setNewProjectOpen(true)}>New project</button>
-          <button className="btn" onClick={logoutToStart}>Logout</button>
-        </div>
-        {hasVerifiedHostedAuth && hostedProjects.length > 0 ? (
-          <div className="savedProjectsPanel">
-            <div className="savedProjectsHeader">
-              <div>
-                <div className="savedProjectsEyebrow">Saved projects</div>
-                <div className="savedProjectsTitle">Project yang pernah dibuat</div>
+          <div className="workspaceGateActions">
+            <button className="btn primary" onClick={pickWorkspace}>{isHostedBrowser() ? "Upload project…" : "Open project…"}</button>
+            <button className="btn" onClick={() => setNewProjectOpen(true)}>New project</button>
+          </div>
+          {hasVerifiedHostedAuth && hostedProjects.length > 0 ? (
+            <div className="savedProjectsPanel">
+              <div className="savedProjectsHeader">
+                <div>
+                  <div className="savedProjectsEyebrow">Saved projects</div>
+                  <div className="savedProjectsTitle">Project yang pernah dibuat</div>
+                </div>
+                <button className="btn subtleBtn" onClick={() => void refreshProjects()}>Refresh</button>
               </div>
-              <button className="btn subtleBtn" onClick={() => void refreshProjects()}>Refresh</button>
+              <div className="savedProjectsList">
+                {hostedProjects.map((project) => (
+                  <button
+                    key={project.id}
+                    className="savedProjectItem"
+                    onClick={() => void openSavedProject(project.root)}
+                  >
+                    <span>
+                      <strong>{project.name}</strong>
+                      <small>{project.root}</small>
+                    </span>
+                    <span className="savedProjectOpen">Open</span>
+                  </button>
+                ))}
+              </div>
             </div>
-            <div className="savedProjectsList">
-              {hostedProjects.map((project) => (
-                <button
-                  key={project.id}
-                  className="savedProjectItem"
-                  onClick={() => void openSavedProject(project.root)}
-                >
-                  <span>
-                    <strong>{project.name}</strong>
-                    <small>{project.root}</small>
-                  </span>
-                  <span className="savedProjectOpen">Open</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : null}
-        {renderFolderInput()}
-      </div>
+          ) : null}
+          {renderFolderInput()}
+        </div>
+      </main>
     </div>
   );
 
   if (googleAuthLoading) {
     return (
-      <div className="workspaceGateWrap">
+      <div className="workspaceGateWrap workspaceSetupWrap">
         <div className="workspaceGateCard pane">
           <div className="workspaceGateTitle">Loading…</div>
         </div>
@@ -1429,7 +1449,7 @@ export default function App() {
         showExplorerPane={showExplorerPane}
         showAssistPane={showAssistPane}
         onQuickSwitchBuildMode={quickSwitchBuildMode}
-        onToggleTheme={() => setAppTheme((theme) => theme === "dark" ? "light" : "dark")}
+        onToggleTheme={toggleAppTheme}
         onOpenSettings={openSettings}
         onEnsurePreviewRunning={ensurePreviewRunning}
         onToggleExplorerPane={() => setShowExplorerPane((v) => !v)}

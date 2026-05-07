@@ -5542,13 +5542,31 @@ a {
 }
 
 .workspaceSetupWrap {
+  --appora-bg: #071015;
+  --appora-bg-2: #0d1722;
+  --appora-surface: rgba(255, 255, 255, 0.07);
+  --appora-surface-strong: rgba(255, 255, 255, 0.11);
+  --appora-border: rgba(209, 250, 229, 0.14);
+  --appora-text: #effff8;
+  --appora-muted: rgba(239, 255, 248, 0.66);
+  --appora-soft: rgba(239, 255, 248, 0.44);
+  --appora-accent: #9cff5f;
+  --appora-cyan: #61e8ff;
+  --appora-pink: #ff7bd8;
+  --appora-violet: #9b8cff;
   position: relative;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: clamp(34px, 5vw, 72px);
+  padding: 16px clamp(16px, 4vw, 44px) clamp(32px, 6vw, 72px);
   background:
-    radial-gradient(circle at 10% 8%, rgba(156, 255, 95, 0.26), transparent 30%),
-    radial-gradient(circle at 86% 18%, rgba(97, 232, 255, 0.24), transparent 34%),
-    radial-gradient(circle at 58% 88%, rgba(255, 123, 216, 0.12), transparent 34%),
-    linear-gradient(180deg, #f6faef 0%, #eef9fb 52%, #f8f8f2 100%);
+    radial-gradient(circle at 11% 6%, rgba(156, 255, 95, 0.2), transparent 28%),
+    radial-gradient(circle at 86% 13%, rgba(97, 232, 255, 0.18), transparent 32%),
+    radial-gradient(circle at 65% 76%, rgba(255, 123, 216, 0.1), transparent 34%),
+    linear-gradient(180deg, #071015 0%, #0b1218 48%, #05080c 100%);
 }
 
 .workspaceSetupWrap::before {
@@ -5557,25 +5575,49 @@ a {
   inset: 0;
   pointer-events: none;
   background-image:
-    linear-gradient(rgba(17, 23, 23, 0.045) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(17, 23, 23, 0.045) 1px, transparent 1px);
+    linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
   background-size: 54px 54px;
   mask-image: linear-gradient(180deg, black, transparent 82%);
+}
+
+.workspaceSetupMain {
+  position: relative;
+  z-index: 1;
+  width: min(1180px, 100%);
+  display: flex;
+  justify-content: center;
+}
+
+.workspaceSetupNav {
+  flex: 0 0 auto;
+  margin-top: 0;
+}
+
+.workspaceSetupNavMeta {
+  min-width: 0;
+  color: var(--appora-muted);
+  font-size: 12px;
+  font-weight: 620;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .workspaceSetupCard {
   position: relative;
   width: min(920px, 100%);
-  border-radius: 34px;
-  border: 1px solid rgba(17, 23, 23, 0.1);
+  border-radius: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
   background:
-    radial-gradient(circle at 8% 0%, rgba(156, 255, 95, 0.2), transparent 26%),
-    radial-gradient(circle at 92% 10%, rgba(97, 232, 255, 0.22), transparent 32%),
-    rgba(255, 255, 255, 0.76);
-  color: #111717;
-  box-shadow: 0 32px 90px rgba(40, 46, 35, 0.16);
+    radial-gradient(circle at 8% 0%, rgba(156, 255, 95, 0.12), transparent 26%),
+    radial-gradient(circle at 92% 10%, rgba(97, 232, 255, 0.13), transparent 32%),
+    rgba(10, 18, 24, 0.78);
+  color: rgba(246, 250, 245, 0.94);
+  box-shadow: 0 32px 90px rgba(0, 0, 0, 0.26);
   text-align: center;
   overflow: hidden;
+  backdrop-filter: blur(22px);
 }
 
 .workspaceSetupCard::before {
@@ -5584,8 +5626,8 @@ a {
   inset: 0;
   pointer-events: none;
   background:
-    linear-gradient(rgba(17, 23, 23, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(17, 23, 23, 0.035) 1px, transparent 1px);
+    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
   background-size: 42px 42px;
   mask-image: linear-gradient(180deg, black, transparent 76%);
 }
@@ -5605,8 +5647,8 @@ a {
   padding: 8px 14px;
   border-radius: 999px;
   background: rgba(17, 23, 23, 0.06);
-  border: 1px solid rgba(17, 23, 23, 0.1);
-  color: rgba(17, 23, 23, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(246, 250, 245, 0.66);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0;
@@ -5617,7 +5659,7 @@ a {
   margin-top: 18px;
   max-width: 760px;
   margin-inline: auto;
-  color: #111717;
+  color: rgba(246, 250, 245, 0.96);
   font-size: clamp(38px, 5.8vw, 72px);
   font-weight: 680;
   line-height: 0.98;
@@ -5628,7 +5670,7 @@ a {
   margin-top: 14px;
   max-width: 650px;
   margin-inline: auto;
-  color: rgba(17, 23, 23, 0.64);
+  color: rgba(246, 250, 245, 0.64);
   font-size: 17px;
   line-height: 1.7;
 }
@@ -5650,21 +5692,21 @@ a {
   gap: 10px;
   padding: 22px;
   border-radius: 22px;
-  border: 1px solid rgba(17, 23, 23, 0.09);
-  background: rgba(255, 255, 255, 0.64);
-  box-shadow: 0 22px 60px rgba(40, 46, 35, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(255, 255, 255, 0.055);
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.16);
   text-align: left;
 }
 
 .gateFeatureTitle {
-  color: #111717;
+  color: rgba(246, 250, 245, 0.94);
   font-size: 18px;
   font-weight: 680;
 }
 
 .gateFeatureText {
   margin-top: 0;
-  color: rgba(17, 23, 23, 0.62);
+  color: rgba(246, 250, 245, 0.62);
   font-size: 14px;
   line-height: 1.6;
 }
@@ -5682,9 +5724,9 @@ a {
   min-height: 46px;
   min-width: 138px;
   border-radius: 999px;
-  border-color: rgba(17, 23, 23, 0.1);
-  background: rgba(255, 255, 255, 0.76);
-  color: #111717;
+  border-color: rgba(255, 255, 255, 0.11);
+  background: rgba(255, 255, 255, 0.07);
+  color: rgba(246, 250, 245, 0.92);
   font-size: 13px;
   font-weight: 680;
 }
@@ -5700,9 +5742,83 @@ a {
   margin-top: 30px;
   padding: 18px;
   border-radius: 24px;
-  border: 1px solid rgba(17, 23, 23, 0.09);
-  background: rgba(255, 255, 255, 0.58);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(255, 255, 255, 0.055);
   text-align: left;
+}
+
+:root[data-app-theme="light"] .workspaceSetupWrap {
+  --appora-bg: #f5f8ee;
+  --appora-bg-2: #eef8fa;
+  --appora-surface: rgba(255, 255, 255, 0.68);
+  --appora-surface-strong: rgba(255, 255, 255, 0.86);
+  --appora-border: rgba(18, 31, 38, 0.12);
+  --appora-text: #111717;
+  --appora-muted: rgba(17, 23, 23, 0.64);
+  --appora-soft: rgba(17, 23, 23, 0.42);
+  background:
+    radial-gradient(circle at 10% 8%, rgba(156, 255, 95, 0.26), transparent 30%),
+    radial-gradient(circle at 86% 18%, rgba(97, 232, 255, 0.24), transparent 34%),
+    radial-gradient(circle at 58% 88%, rgba(255, 123, 216, 0.12), transparent 34%),
+    linear-gradient(180deg, #f6faef 0%, #eef9fb 52%, #f8f8f2 100%);
+}
+
+:root[data-app-theme="light"] .workspaceSetupWrap::before {
+  background-image:
+    linear-gradient(rgba(17, 23, 23, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(17, 23, 23, 0.045) 1px, transparent 1px);
+}
+
+:root[data-app-theme="light"] .workspaceSetupCard {
+  border-color: rgba(17, 23, 23, 0.1);
+  background:
+    radial-gradient(circle at 8% 0%, rgba(156, 255, 95, 0.2), transparent 26%),
+    radial-gradient(circle at 92% 10%, rgba(97, 232, 255, 0.22), transparent 32%),
+    rgba(255, 255, 255, 0.76);
+  color: #111717;
+  box-shadow: 0 32px 90px rgba(40, 46, 35, 0.16);
+}
+
+:root[data-app-theme="light"] .workspaceSetupCard::before {
+  background:
+    linear-gradient(rgba(17, 23, 23, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(17, 23, 23, 0.035) 1px, transparent 1px);
+}
+
+:root[data-app-theme="light"] .workspaceGateKicker {
+  background: rgba(17, 23, 23, 0.06);
+  border-color: rgba(17, 23, 23, 0.1);
+  color: rgba(17, 23, 23, 0.7);
+}
+
+:root[data-app-theme="light"] .workspaceGateTitle,
+:root[data-app-theme="light"] .gateFeatureTitle {
+  color: #111717;
+}
+
+:root[data-app-theme="light"] .workspaceGateSubtitle {
+  color: rgba(17, 23, 23, 0.64);
+}
+
+:root[data-app-theme="light"] .gateFeatureCard {
+  border-color: rgba(17, 23, 23, 0.09);
+  background: rgba(255, 255, 255, 0.64);
+  box-shadow: 0 22px 60px rgba(40, 46, 35, 0.08);
+}
+
+:root[data-app-theme="light"] .gateFeatureText {
+  color: rgba(17, 23, 23, 0.62);
+}
+
+:root[data-app-theme="light"] .workspaceSetupCard .workspaceGateActions .btn {
+  border-color: rgba(17, 23, 23, 0.1);
+  background: rgba(255, 255, 255, 0.76);
+  color: #111717;
+}
+
+:root[data-app-theme="light"] .savedProjectsPanel {
+  border-color: rgba(17, 23, 23, 0.09);
+  background: rgba(255, 255, 255, 0.58);
 }
 
 .savedProjectsHeader {
