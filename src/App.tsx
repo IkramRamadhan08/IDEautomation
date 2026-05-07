@@ -22,6 +22,7 @@ import {
   updateUserPreferences,
   updateProjectPreferences,
   writeFile,
+  fetchAgentCapabilities,
   importBrowserFolder,
   uploadImageAsset,
   listHostedProjects,
@@ -32,6 +33,7 @@ import {
   type HostedProject,
   type ProjectTemplate,
   type UserPreferences,
+  type AgentCapabilities,
 } from "./api";
 
 import {
@@ -94,6 +96,7 @@ export default function App() {
   const [workingMsg, setWorkingMsg] = useState<string>("");
   const [agentLiveItems, setAgentLiveItems] = useState<AgentLiveItem[]>([]);
   const [agentAuditTrail, setAgentAuditTrail] = useState<AgentAuditSnapshot[]>([]);
+  const [agentCapabilities, setAgentCapabilities] = useState<AgentCapabilities | null>(null);
 
   const projectOptions = hostedProjects.length > 0
     ? hostedProjects.map((project) => ({ root: project.root, name: project.name }))
@@ -453,6 +456,25 @@ export default function App() {
     if (ws) {
       void refreshExplorer(selectedProject !== "." ? selectedProject : ".");
     }
+  }, [selectedProject, ws]);
+
+  useEffect(() => {
+    if (!ws) {
+      setAgentCapabilities(null);
+      return;
+    }
+    let cancelled = false;
+    const projectRoot = selectedProject || ".";
+    fetchAgentCapabilities(projectRoot, false)
+      .then((caps) => {
+        if (!cancelled) setAgentCapabilities(caps);
+      })
+      .catch(() => {
+        if (!cancelled) setAgentCapabilities(null);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [selectedProject, ws]);
 
   useEffect(() => {
@@ -998,6 +1020,7 @@ export default function App() {
       previewFrameKey={previewFrameKey}
       recentActions={agentActions}
       agentLiveItems={agentLiveItems}
+      agentCapabilities={agentCapabilities}
       onRefreshExplorer={refreshExplorer}
       onSelectProject={selectProject}
       onRestoreCheckpoint={restoreLatestCheckpoint}
@@ -1028,6 +1051,7 @@ export default function App() {
       agentActions={agentActions}
       agentLiveItems={agentLiveItems}
       agentAuditTrail={agentAuditTrail}
+      agentCapabilities={agentCapabilities}
       attachedAssetName={attachedImage?.name || null}
       onEnsurePreviewRunning={ensurePreviewRunning}
     />
@@ -1045,6 +1069,7 @@ export default function App() {
           settingsOpen={settingsOpen}
           identity={identity}
           settings={settings}
+          agentCapabilities={agentCapabilities}
           llmProviderDraft={llmProviderDraft}
           buildModeDraft={buildModeDraft}
           modelDraft={modelDraft}

@@ -2,9 +2,11 @@ import React from "react";
 import { Bot, Image as ImageIcon, Play, Sparkles, Wand2 } from "lucide-react";
 import { PreviewPane } from "../components/preview/PreviewPane";
 import { AgentAuditTrail } from "../components/agent/AgentAuditTrail";
+import { AgentCapabilitiesPanel } from "../components/agent/AgentCapabilitiesPanel";
 import { actionDetail, isOperationalLiveItem } from "../agent/liveActions";
 import { getBuildModeProfile } from "../agent/runtime";
 import { type AgentAction, type AgentAuditSnapshot, type AgentLiveItem } from "../types";
+import type { AgentCapabilities } from "../api";
 
 interface FullAgentWorkspaceProps {
   ws: string | null;
@@ -17,6 +19,7 @@ interface FullAgentWorkspaceProps {
   agentActions: AgentAction[];
   agentLiveItems: AgentLiveItem[];
   agentAuditTrail: AgentAuditSnapshot[];
+  agentCapabilities: AgentCapabilities | null;
   attachedAssetName?: string | null;
   onEnsurePreviewRunning: () => void | Promise<string | void>;
 }
@@ -39,6 +42,7 @@ export const FullAgentWorkspace: React.FC<FullAgentWorkspaceProps> = ({
   agentActions,
   agentLiveItems,
   agentAuditTrail,
+  agentCapabilities,
   attachedAssetName,
   onEnsurePreviewRunning,
 }) => {
@@ -78,6 +82,8 @@ export const FullAgentWorkspace: React.FC<FullAgentWorkspaceProps> = ({
             </div>
             <div className="missionPrimaryText">{statusText}</div>
           </div>
+
+          <AgentCapabilitiesPanel capabilities={agentCapabilities} />
 
           <div className="missionCard">
             <div className="missionCardHeader">

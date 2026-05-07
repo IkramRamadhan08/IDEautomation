@@ -1796,6 +1796,56 @@ a {
   white-space: nowrap;
 }
 
+.agentCapabilityCard {
+  position: relative;
+  overflow: hidden;
+}
+
+.agentCapabilityCard::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(135deg, rgba(143, 163, 255, 0.08), transparent 48%);
+}
+
+.agentCapabilityCard > * {
+  position: relative;
+}
+
+.agentCapabilityCard.compact .missionCardTitle {
+  font-size: 13px;
+}
+
+.agentCapabilityRow {
+  justify-content: flex-start;
+}
+
+.agentCapabilityIcon {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.agentCapabilityIcon.connected {
+  color: var(--success);
+  border-color: rgba(101, 214, 173, 0.24);
+  background: rgba(101, 214, 173, 0.1);
+}
+
+.agentCapabilityIcon.disconnected {
+  color: var(--warning);
+  border-color: rgba(231, 191, 106, 0.22);
+  background: rgba(231, 191, 106, 0.09);
+}
+
 .missionReviewPath,
 .missionCompactPrimary,
 .missionReply {
@@ -4461,6 +4511,52 @@ a {
   font-weight: 700;
 }
 
+.settingsReadinessGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.settingsReadinessItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.settingsReadinessDot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  margin-top: 5px;
+  border-radius: 999px;
+  background: var(--warning);
+  box-shadow: 0 0 0 4px rgba(231, 191, 106, 0.1);
+}
+
+.settingsReadinessDot.ok {
+  background: var(--success);
+  box-shadow: 0 0 0 4px rgba(101, 214, 173, 0.1);
+}
+
+.settingsReadinessLabel {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.settingsReadinessValue {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 .settingsLabel {
   display: inline-block;
   margin-bottom: 6px;
@@ -5075,6 +5171,10 @@ a {
   .settingsGrid {
     grid-template-columns: 1fr;
     overflow: auto;
+  }
+
+  .settingsReadinessGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .commandBarButton {

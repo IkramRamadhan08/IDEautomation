@@ -2,8 +2,10 @@ import React from "react";
 import { FileExplorer } from "../components/explorer/FileExplorer";
 import { MonacoEditor } from "../components/editor/MonacoEditor";
 import { PreviewPane } from "../components/preview/PreviewPane";
+import { AgentCapabilitiesPanel } from "../components/agent/AgentCapabilitiesPanel";
 import { actionDetail, isOperationalLiveItem } from "../agent/liveActions";
 import { type AgentAction, type AgentLiveItem, type ExplorerItem, type FileBuffer } from "../types";
+import type { AgentCapabilities } from "../api";
 
 interface HybridWorkspaceProps {
   ws: string | null;
@@ -27,6 +29,7 @@ interface HybridWorkspaceProps {
   previewFrameKey: number;
   recentActions: AgentAction[];
   agentLiveItems: AgentLiveItem[];
+  agentCapabilities: AgentCapabilities | null;
   onRefreshExplorer: () => void | Promise<void>;
   onSelectProject: (project: string) => void;
   onRestoreCheckpoint: () => void | Promise<void>;
@@ -66,6 +69,7 @@ export const HybridWorkspace: React.FC<HybridWorkspaceProps> = ({
   previewFrameKey,
   recentActions,
   agentLiveItems,
+  agentCapabilities,
   onRefreshExplorer,
   onSelectProject,
   onRestoreCheckpoint,
@@ -135,6 +139,7 @@ export const HybridWorkspace: React.FC<HybridWorkspaceProps> = ({
             aria-label="Resize assist panel"
           />
           <aside className="hybridSidePane hybridAssistRail" style={{ width: assistPaneWidth }}>
+            <AgentCapabilitiesPanel capabilities={agentCapabilities} compact />
             {hasInteractionItems ? (
               <div className="missionCard hybridInteractionCard">
                 <div className="missionCardHeader">

@@ -5,11 +5,13 @@ import {
   type ProviderChoice,
   type BuildMode,
 } from "../../types";
+import type { AgentCapabilities } from "../../api";
 
 interface SettingsModalProps {
   settingsOpen: boolean;
   identity: IdentityInfo | null;
   settings: SettingsInfo | null;
+  agentCapabilities: AgentCapabilities | null;
   llmProviderDraft: ProviderChoice;
   buildModeDraft: BuildMode;
   modelDraft: string;
@@ -37,6 +39,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   settingsOpen,
   identity,
   settings,
+  agentCapabilities,
   llmProviderDraft,
   buildModeDraft,
   modelDraft,
@@ -65,6 +68,36 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const providerStatus = providerKey ? settings?.providers?.[providerKey] ?? null : null;
   const modelOptionsId = `model-options-${providerKey || "none"}`;
   const freeModels = providerStatus?.free_tier_models || [];
+  const readiness = [
+    {
+      label: "Memory",
+      value: agentCapabilities?.supports.supabase_rag_ready
+        ? "Supabase RAG ready"
+        : agentCapabilities?.supports.vector_memory_retrieval
+          ? "Local vector fallback"
+          : "Session only",
+      ok: Boolean(agentCapabilities?.supports.long_term_memory_rag || agentCapabilities?.supports.short_term_memory_rag),
+    },
+    {
+      label: "Tools",
+      value: agentCapabilities
+        ? `${agentCapabilities.supports.tool_actions.length} action types`
+        : "Checking",
+      ok: Boolean(agentCapabilities?.supports.skill_registry && agentCapabilities?.supports.read_only_inspection_boundary),
+    },
+    {
+      label: "MCP",
+      value: agentCapabilities
+        ? `${agentCapabilities.discovered_mcp_servers.length} server detected`
+        : "Checking",
+      ok: Boolean(agentCapabilities?.supports.mcp_registry),
+    },
+    {
+      label: "Preview QA",
+      value: agentCapabilities?.stack.preview_audit_mode || "Checking",
+      ok: Boolean(agentCapabilities?.supports.preview_quality_checks || agentCapabilities?.supports.playwright_preview_audit),
+    },
+  ];
 
   return (
     <div className="modalBackdrop" onClick={onClose}>
@@ -106,6 +139,34 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               >
                 Clara
               </button>
+            </div>
+          </div>
+
+          <div className="settingsSection compactSettingsSection settingsSectionWide">
+            <div className="settingsRowHead">
+              <div>
+                <div className="brainTitle">Agent readiness</div>
+                <div className="settingsSubtle compactHint">Biar user awam tahu Clara/Raka lagi punya memory, tools, MCP, dan preview check apa.</div>
+              </div>
+              <div className="providerStatusLine compactStatusLine">
+                <span className={`providerStatusChip ${agentCapabilities?.supports.command_conversation_boundary ? "connected" : "disconnected"}`}>
+                  Chat boundary
+                </span>
+                <span className={`providerStatusChip ${agentCapabilities?.supports.provider_fallback_routing ? "connected" : "disconnected"}`}>
+                  Fallback
+                </span>
+              </div>
+            </div>
+            <div className="settingsReadinessGrid">
+              {readiness.map((item) => (
+                <div key={item.label} className="settingsReadinessItem">
+                  <span className={`settingsReadinessDot ${item.ok ? "ok" : ""}`} />
+                  <div>
+                    <div className="settingsReadinessLabel">{item.label}</div>
+                    <div className="settingsReadinessValue">{item.value}</div>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
 
