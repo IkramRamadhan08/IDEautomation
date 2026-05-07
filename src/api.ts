@@ -667,12 +667,34 @@ export type AgentRunTrace = {
   }>;
 };
 export type AgentResult = {
+  job_id?: string | null;
   spoken: string;
   log: string;
   changes: AgentChange[];
   actions: Array<{ type: string; [key: string]: unknown }>;
   intent?: AgentIntent;
   trace?: AgentRunTrace;
+};
+export type AgentJob = {
+  id: string;
+  owner_id: string;
+  project_root: string;
+  build_mode?: BuildMode | string | null;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled" | string;
+  input: string;
+  result?: AgentResult | Record<string, unknown> | null;
+  error?: string | null;
+  created_at?: string | number | null;
+  updated_at?: string | number | null;
+  started_at?: string | number | null;
+  completed_at?: string | number | null;
+};
+export type AgentJobEvent = {
+  id: number;
+  job_id: string;
+  event_type: AgentStreamEvent["event"] | string;
+  payload: Record<string, unknown>;
+  created_at?: string | number | null;
 };
 export type AgentCapabilities = {
   ok: boolean;
@@ -754,6 +776,19 @@ export async function fetchAgentCapabilities(project_root: string, includeLiveTo
   const params = new URLSearchParams({ project_root });
   if (includeLiveTools) params.set("include_live_tools", "true");
   const r = await apiFetch(`/api/agent/capabilities?${params.toString()}`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function getAgentJob(jobId: string): Promise<{ ok: boolean; job: AgentJob; source: "supabase" | "session" }> {
+  const r = await apiFetch(`/api/agent/jobs/${encodeURIComponent(jobId)}`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function getAgentJobEvents(jobId: string, afterId = 0): Promise<{ ok: boolean; events: AgentJobEvent[]; source: "supabase" | "session" }> {
+  const params = new URLSearchParams({ after_id: String(Math.max(0, afterId)) });
+  const r = await apiFetch(`/api/agent/jobs/${encodeURIComponent(jobId)}/events?${params.toString()}`);
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }

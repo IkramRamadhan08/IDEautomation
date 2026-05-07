@@ -375,10 +375,19 @@ export async function runAgentWorkflow({
         if (event.event === "status") {
           const phase = typeof event.data.phase === "string" ? event.data.phase : "";
           const message = typeof event.data.message === "string" ? event.data.message : "";
+          const jobId = typeof event.data.job_id === "string" ? event.data.job_id : "";
           setWorkingMsg(message || PHASE_LABELS[phase] || "Agent lagi kerja…");
           if (phase) setEditorStatus(PHASE_LABELS[phase] || passEditorStatus);
           if (phase && !seenPhases.has(phase)) {
             seenPhases.add(phase);
+            if (phase === "queued" && jobId) {
+              pushAgentLiveItem({
+                role: "tool",
+                tone: "working",
+                text: "Durable agent job dibuat.",
+                meta: `job ${jobId.slice(0, 8)}`,
+              });
+            }
           }
           return;
         }

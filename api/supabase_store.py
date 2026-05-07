@@ -190,6 +190,99 @@ def delete_project_file(*, owner_id: str, project_root: str, path: str) -> bool:
     return True
 
 
+def create_agent_job(*, owner_id: str, job_id: str, project_root: str, build_mode: str | None, input_text: str) -> dict[str, Any] | None:
+    client = get_supabase_admin()
+    if not client:
+        return None
+    payload = {
+        "id": job_id,
+        "owner_id": owner_id,
+        "project_root": str(project_root or ".").strip() or ".",
+        "build_mode": build_mode,
+        "status": "queued",
+        "input": str(input_text or "")[:20_000],
+    }
+    try:
+        res = client.table("agent_jobs").insert(payload).execute()
+        data = getattr(res, "data", None) or []
+        return data[0] if data else payload
+    except Exception:
+        return None
+
+
+def update_agent_job(*, owner_id: str, job_id: str, status: str, result: dict[str, Any] | None = None, error: str | None = None) -> dict[str, Any] | None:
+    client = get_supabase_admin()
+    if not client:
+        return None
+    payload: dict[str, Any] = {"status": status}
+    if status == "running":
+        payload["started_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    if status in {"completed", "failed", "cancelled"}:
+        payload["completed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    if result is not None:
+        payload["result"] = result
+    if error is not None:
+        payload["error"] = str(error)[:4000]
+    try:
+        res = client.table("agent_jobs").update(payload).eq("id", job_id).eq("owner_id", owner_id).execute()
+        data = getattr(res, "data", None) or []
+        return data[0] if data else None
+    except Exception:
+        return None
+
+
+def append_agent_job_event(*, owner_id: str, job_id: str, event_type: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    client = get_supabase_admin()
+    if not client:
+        return None
+    row = {
+        "job_id": job_id,
+        "owner_id": owner_id,
+        "event_type": str(event_type or "status").strip() or "status",
+        "payload": payload if isinstance(payload, dict) else {},
+    }
+    try:
+        res = client.table("agent_job_events").insert(row).execute()
+        data = getattr(res, "data", None) or []
+        return data[0] if data else row
+    except Exception:
+        return None
+
+
+def get_agent_job(*, owner_id: str, job_id: str) -> dict[str, Any] | None:
+    client = get_supabase_admin()
+    if not client:
+        return None
+    try:
+        res = client.table("agent_jobs").select("*").eq("id", job_id).eq("owner_id", owner_id).limit(1).execute()
+        data = getattr(res, "data", None) or []
+        return data[0] if data else None
+    except Exception:
+        return None
+
+
+def list_agent_job_events(*, owner_id: str, job_id: str, after_id: int = 0, limit: int = 200) -> list[dict[str, Any]] | None:
+    client = get_supabase_admin()
+    if not client:
+        return None
+    try:
+        query = (
+            client.table("agent_job_events")
+            .select("id, job_id, event_type, payload, created_at")
+            .eq("job_id", job_id)
+            .eq("owner_id", owner_id)
+            .order("id")
+            .limit(max(1, min(int(limit or 200), 1000)))
+        )
+        if after_id > 0:
+            query = query.gt("id", after_id)
+        res = query.execute()
+        data = getattr(res, "data", None)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return None
+
+
 def _classify_agent_memory_chunks_probe_error(exc: Exception) -> str:
     message = str(exc or "").lower()
     if "agent_memory_chunks" in message and (

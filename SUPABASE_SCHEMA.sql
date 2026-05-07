@@ -85,10 +85,39 @@ create table if not exists public.user_provider_secrets (
   primary key (profile_id, provider)
 );
 
+create table if not exists public.agent_jobs (
+  id uuid primary key default gen_random_uuid(),
+  owner_id text not null references public.profiles(id) on delete cascade,
+  project_root text not null default '.',
+  build_mode text,
+  status text not null default 'queued',
+  input text not null default '',
+  result jsonb,
+  error text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  started_at timestamptz,
+  completed_at timestamptz
+);
+
+create table if not exists public.agent_job_events (
+  id bigserial primary key,
+  job_id uuid not null references public.agent_jobs(id) on delete cascade,
+  owner_id text not null references public.profiles(id) on delete cascade,
+  event_type text not null,
+  payload jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
 create index if not exists idx_projects_owner_id on public.projects(owner_id);
 create index if not exists idx_projects_updated_at on public.projects(updated_at desc);
 create index if not exists idx_project_members_profile_id on public.project_members(profile_id);
 create index if not exists idx_project_files_owner_root on public.project_files(owner_id, project_root);
+create index if not exists idx_agent_jobs_owner_updated on public.agent_jobs(owner_id, updated_at desc);
+create index if not exists idx_agent_jobs_owner_project on public.agent_jobs(owner_id, project_root, updated_at desc);
+create index if not exists idx_agent_job_events_job_id on public.agent_job_events(job_id, id);
+create index if not exists idx_agent_job_events_owner_job_id
+  on public.agent_job_events(owner_id, job_id, id);
 
 create or replace function public.set_updated_at()
 returns trigger
@@ -125,6 +154,11 @@ create trigger trg_project_files_updated_at
 before update on public.project_files
 for each row execute function public.set_updated_at();
 
+drop trigger if exists trg_agent_jobs_updated_at on public.agent_jobs;
+create trigger trg_agent_jobs_updated_at
+before update on public.agent_jobs
+for each row execute function public.set_updated_at();
+
 alter table public.profiles enable row level security;
 alter table public.projects enable row level security;
 alter table public.project_members enable row level security;
@@ -132,6 +166,12 @@ alter table public.user_settings enable row level security;
 alter table public.project_preferences enable row level security;
 alter table public.project_files enable row level security;
 alter table public.user_provider_secrets enable row level security;
+alter table public.agent_jobs enable row level security;
+alter table public.agent_job_events enable row level security;
+
+grant select, insert, update on public.agent_jobs to authenticated;
+grant select, insert on public.agent_job_events to authenticated;
+grant usage, select on sequence public.agent_job_events_id_seq to authenticated;
 
 -- Trial-stage RLS:
 -- app server may still use service role for API writes,
@@ -139,12 +179,12 @@ alter table public.user_provider_secrets enable row level security;
 
 do $$ begin
   create policy "profiles_select_self" on public.profiles
-    for select using (auth.uid()::text = supabase_user_id::text);
+    for select using ((select auth.uid())::text = supabase_user_id::text);
 exception when duplicate_object then null; end $$;
 
 do $$ begin
   create policy "profiles_update_self" on public.profiles
-    for update using (auth.uid()::text = supabase_user_id::text);
+    for update using ((select auth.uid())::text = supabase_user_id::text);
 exception when duplicate_object then null; end $$;
 
 do $$ begin
@@ -153,7 +193,7 @@ do $$ begin
       exists (
         select 1 from public.project_members pm
         join public.profiles p on p.id = pm.profile_id
-        where pm.project_id = projects.id and p.supabase_user_id::text = auth.uid()::text
+        where pm.project_id = projects.id and p.supabase_user_id::text = (select auth.uid())::text
       )
     );
 exception when duplicate_object then null; end $$;
@@ -163,7 +203,7 @@ do $$ begin
     for insert with check (
       exists (
         select 1 from public.profiles p
-        where p.id = owner_id and p.supabase_user_id::text = auth.uid()::text
+        where p.id = owner_id and p.supabase_user_id::text = (select auth.uid())::text
       )
     );
 exception when duplicate_object then null; end $$;
@@ -174,7 +214,7 @@ do $$ begin
       exists (
         select 1 from public.project_members pm
         join public.profiles p on p.id = pm.profile_id
-        where pm.project_id = projects.id and p.supabase_user_id::text = auth.uid()::text
+        where pm.project_id = projects.id and p.supabase_user_id::text = (select auth.uid())::text
       )
     );
 exception when duplicate_object then null; end $$;
@@ -184,7 +224,7 @@ do $$ begin
     for select using (
       exists (
         select 1 from public.profiles p
-        where p.id = profile_id and p.supabase_user_id::text = auth.uid()::text
+        where p.id = profile_id and p.supabase_user_id::text = (select auth.uid())::text
       )
     );
 exception when duplicate_object then null; end $$;
@@ -194,7 +234,7 @@ do $$ begin
     for select using (
       exists (
         select 1 from public.profiles p
-        where p.id = user_id and p.supabase_user_id::text = auth.uid()::text
+        where p.id = user_id and p.supabase_user_id::text = (select auth.uid())::text
       )
     );
 exception when duplicate_object then null; end $$;
@@ -204,7 +244,7 @@ do $$ begin
     for insert with check (
       exists (
         select 1 from public.profiles p
-        where p.id = user_id and p.supabase_user_id::text = auth.uid()::text
+        where p.id = user_id and p.supabase_user_id::text = (select auth.uid())::text
       )
     );
 exception when duplicate_object then null; end $$;
@@ -214,7 +254,7 @@ do $$ begin
     for update using (
       exists (
         select 1 from public.profiles p
-        where p.id = user_id and p.supabase_user_id::text = auth.uid()::text
+        where p.id = user_id and p.supabase_user_id::text = (select auth.uid())::text
       )
     );
 exception when duplicate_object then null; end $$;
@@ -225,7 +265,7 @@ do $$ begin
       exists (
         select 1 from public.project_members pm
         join public.profiles p on p.id = pm.profile_id
-        where pm.project_id = project_preferences.project_id and p.supabase_user_id::text = auth.uid()::text
+        where pm.project_id = project_preferences.project_id and p.supabase_user_id::text = (select auth.uid())::text
       )
     );
 exception when duplicate_object then null; end $$;
@@ -235,7 +275,7 @@ do $$ begin
     for select using (
       exists (
         select 1 from public.profiles p
-        where p.id = owner_id and p.supabase_user_id::text = auth.uid()::text
+        where p.id = owner_id and p.supabase_user_id::text = (select auth.uid())::text
       )
     );
 exception when duplicate_object then null; end $$;
@@ -245,7 +285,7 @@ do $$ begin
     for insert with check (
       exists (
         select 1 from public.profiles p
-        where p.id = owner_id and p.supabase_user_id::text = auth.uid()::text
+        where p.id = owner_id and p.supabase_user_id::text = (select auth.uid())::text
       )
     );
 exception when duplicate_object then null; end $$;
@@ -255,7 +295,7 @@ do $$ begin
     for update using (
       exists (
         select 1 from public.profiles p
-        where p.id = owner_id and p.supabase_user_id::text = auth.uid()::text
+        where p.id = owner_id and p.supabase_user_id::text = (select auth.uid())::text
       )
     );
 exception when duplicate_object then null; end $$;
@@ -265,7 +305,7 @@ do $$ begin
     for delete using (
       exists (
         select 1 from public.profiles p
-        where p.id = owner_id and p.supabase_user_id::text = auth.uid()::text
+        where p.id = owner_id and p.supabase_user_id::text = (select auth.uid())::text
       )
     );
 exception when duplicate_object then null; end $$;
@@ -275,7 +315,7 @@ do $$ begin
     for select using (
       exists (
         select 1 from public.profiles p
-        where p.id = profile_id and p.supabase_user_id::text = auth.uid()::text
+        where p.id = profile_id and p.supabase_user_id::text = (select auth.uid())::text
       )
     );
 exception when duplicate_object then null; end $$;
@@ -285,7 +325,7 @@ do $$ begin
     for insert with check (
       exists (
         select 1 from public.profiles p
-        where p.id = profile_id and p.supabase_user_id::text = auth.uid()::text
+        where p.id = profile_id and p.supabase_user_id::text = (select auth.uid())::text
       )
     );
 exception when duplicate_object then null; end $$;
@@ -295,7 +335,7 @@ do $$ begin
     for update using (
       exists (
         select 1 from public.profiles p
-        where p.id = profile_id and p.supabase_user_id::text = auth.uid()::text
+        where p.id = profile_id and p.supabase_user_id::text = (select auth.uid())::text
       )
     );
 exception when duplicate_object then null; end $$;
@@ -305,7 +345,57 @@ do $$ begin
     for delete using (
       exists (
         select 1 from public.profiles p
-        where p.id = profile_id and p.supabase_user_id::text = auth.uid()::text
+        where p.id = profile_id and p.supabase_user_id::text = (select auth.uid())::text
+      )
+    );
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  create policy "agent_jobs_select_owner" on public.agent_jobs
+    for select using (
+      exists (
+        select 1 from public.profiles p
+        where p.id = owner_id and p.supabase_user_id::text = (select auth.uid())::text
+      )
+    );
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  create policy "agent_jobs_insert_owner" on public.agent_jobs
+    for insert with check (
+      exists (
+        select 1 from public.profiles p
+        where p.id = owner_id and p.supabase_user_id::text = (select auth.uid())::text
+      )
+    );
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  create policy "agent_jobs_update_owner" on public.agent_jobs
+    for update using (
+      exists (
+        select 1 from public.profiles p
+        where p.id = owner_id and p.supabase_user_id::text = (select auth.uid())::text
+      )
+    );
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  create policy "agent_job_events_select_owner" on public.agent_job_events
+    for select using (
+      exists (
+        select 1 from public.profiles p
+        where p.id = owner_id and p.supabase_user_id::text = (select auth.uid())::text
+      )
+    );
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  create policy "agent_job_events_insert_owner" on public.agent_job_events
+    for insert with check (
+      exists (
+        select 1 from public.profiles p
+        where p.id = owner_id and p.supabase_user_id::text = (select auth.uid())::text
       )
     );
 exception when duplicate_object then null; end $$;

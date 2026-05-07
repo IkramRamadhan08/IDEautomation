@@ -3935,6 +3935,821 @@ a {
   background: rgba(244, 241, 234, 0.22);
 }
 
+.apporaLanding {
+  --appora-bg: #071015;
+  --appora-bg-2: #0d1722;
+  --appora-surface: rgba(255, 255, 255, 0.07);
+  --appora-surface-strong: rgba(255, 255, 255, 0.11);
+  --appora-border: rgba(209, 250, 229, 0.14);
+  --appora-text: #effff8;
+  --appora-muted: rgba(239, 255, 248, 0.66);
+  --appora-soft: rgba(239, 255, 248, 0.44);
+  --appora-accent: #9cff5f;
+  --appora-cyan: #61e8ff;
+  --appora-pink: #ff7bd8;
+  --appora-violet: #9b8cff;
+  min-height: 100vh;
+  color: var(--appora-text);
+  background:
+    radial-gradient(circle at 9% 5%, rgba(156, 255, 95, 0.2), transparent 28%),
+    radial-gradient(circle at 88% 9%, rgba(97, 232, 255, 0.18), transparent 30%),
+    radial-gradient(circle at 72% 54%, rgba(155, 140, 255, 0.12), transparent 34%),
+    linear-gradient(180deg, var(--appora-bg) 0%, var(--appora-bg-2) 48%, #06090d 100%);
+  overflow-x: hidden;
+  scroll-snap-type: none;
+}
+
+:root[data-app-theme="light"] .apporaLanding {
+  --appora-bg: #f5f8ee;
+  --appora-bg-2: #eef8fa;
+  --appora-surface: rgba(255, 255, 255, 0.68);
+  --appora-surface-strong: rgba(255, 255, 255, 0.86);
+  --appora-border: rgba(18, 31, 38, 0.12);
+  --appora-text: #111717;
+  --appora-muted: rgba(17, 23, 23, 0.64);
+  --appora-soft: rgba(17, 23, 23, 0.42);
+  background:
+    radial-gradient(circle at 9% 5%, rgba(156, 255, 95, 0.42), transparent 27%),
+    radial-gradient(circle at 88% 9%, rgba(97, 232, 255, 0.35), transparent 30%),
+    radial-gradient(circle at 72% 54%, rgba(155, 140, 255, 0.18), transparent 34%),
+    linear-gradient(180deg, var(--appora-bg) 0%, var(--appora-bg-2) 52%, #f8f8f2 100%);
+}
+
+.apporaLanding::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: 54px 54px;
+  mask-image: linear-gradient(180deg, black, transparent 72%);
+}
+
+:root[data-app-theme="light"] .apporaLanding::before {
+  background-image:
+    linear-gradient(rgba(17, 23, 23, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(17, 23, 23, 0.045) 1px, transparent 1px);
+}
+
+.apporaNav {
+  position: sticky;
+  top: 16px;
+  z-index: 10;
+  width: min(1200px, calc(100vw - 32px));
+  min-height: 68px;
+  margin: 16px auto 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 0 12px 0 14px;
+  border: 1px solid var(--appora-border);
+  border-radius: 999px;
+  background: rgba(7, 16, 21, 0.68);
+  backdrop-filter: blur(22px);
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.22);
+}
+
+:root[data-app-theme="light"] .apporaNav {
+  background: rgba(255, 255, 255, 0.68);
+  box-shadow: 0 22px 70px rgba(49, 60, 48, 0.13);
+}
+
+.apporaBrand {
+  text-decoration: none;
+  color: var(--appora-text);
+}
+
+.apporaLanding .authBrandMark {
+  color: #071015;
+  background: linear-gradient(135deg, var(--appora-accent), var(--appora-cyan));
+  border-color: rgba(255, 255, 255, 0.32);
+  box-shadow: inset -4px -5px 0 rgba(0, 0, 0, 0.08), 0 0 28px rgba(156, 255, 95, 0.18);
+}
+
+.apporaNavLinks,
+.apporaNavActions,
+.apporaHeroActions,
+.apporaSignalRow,
+.apporaFooter nav {
+  display: flex;
+  align-items: center;
+}
+
+.apporaNavLinks {
+  gap: 4px;
+  padding: 5px;
+  border: 1px solid var(--appora-border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+:root[data-app-theme="light"] .apporaNavLinks {
+  background: rgba(17, 23, 23, 0.045);
+}
+
+.apporaNavLinks a,
+.apporaFooter a {
+  color: var(--appora-muted);
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.apporaNavLinks a {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 13px;
+  border-radius: 999px;
+}
+
+.apporaNavLinks a:hover {
+  color: var(--appora-text);
+  background: var(--appora-surface);
+}
+
+.apporaNavActions {
+  gap: 8px;
+}
+
+.apporaThemeToggle,
+.apporaNavCta,
+.apporaPrimaryButton,
+.apporaSecondaryButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  cursor: pointer;
+  text-decoration: none;
+  transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease, background 180ms ease;
+}
+
+.apporaThemeToggle {
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--appora-border);
+  border-radius: 999px;
+  background: var(--appora-surface);
+  color: var(--appora-text);
+}
+
+.apporaNavCta,
+.apporaPrimaryButton {
+  min-height: 44px;
+  gap: 9px;
+  padding: 0 18px;
+  border-radius: 999px;
+  color: #071015;
+  background: linear-gradient(135deg, var(--appora-accent), var(--appora-cyan));
+  font-size: 13px;
+  font-weight: 900;
+  box-shadow: 0 18px 54px rgba(97, 232, 255, 0.2);
+}
+
+.apporaSecondaryButton {
+  min-height: 44px;
+  gap: 9px;
+  padding: 0 18px;
+  border: 1px solid var(--appora-border);
+  border-radius: 999px;
+  color: var(--appora-text);
+  background: var(--appora-surface);
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.apporaThemeToggle:hover,
+.apporaNavCta:hover,
+.apporaPrimaryButton:hover,
+.apporaSecondaryButton:hover {
+  transform: translateY(-2px);
+}
+
+.apporaMain {
+  position: relative;
+  z-index: 1;
+  width: min(1200px, calc(100vw - 32px));
+  margin: 0 auto;
+}
+
+.apporaHero {
+  min-height: calc(100vh - 84px);
+  display: grid;
+  grid-template-columns: minmax(0, 0.92fr) minmax(470px, 1.08fr);
+  gap: clamp(34px, 5vw, 82px);
+  align-items: center;
+  padding: clamp(50px, 7vw, 86px) 0 72px;
+}
+
+.apporaHeroCopy {
+  display: grid;
+  justify-items: start;
+  gap: 24px;
+}
+
+.apporaHero h1,
+.apporaSection h2,
+.apporaFinalCta h2 {
+  margin: 0;
+  color: var(--appora-text);
+  letter-spacing: 0;
+}
+
+.apporaHero h1 {
+  max-width: 720px;
+  font-size: clamp(56px, 7.7vw, 104px);
+  line-height: 0.91;
+  font-weight: 920;
+}
+
+.apporaHero p,
+.apporaSection p {
+  margin: 0;
+  color: var(--appora-muted);
+  line-height: 1.65;
+}
+
+.apporaHero p {
+  max-width: 650px;
+  font-size: clamp(17px, 1.45vw, 20px);
+}
+
+.apporaHeroActions {
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.apporaSignalRow {
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.apporaSignalRow span {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 12px;
+  border: 1px solid var(--appora-border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--appora-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.apporaHeroVisual {
+  position: relative;
+  min-height: 680px;
+  display: grid;
+  align-content: center;
+  gap: 16px;
+}
+
+.apporaOrbitGlow {
+  position: absolute;
+  inset: 8% -4% 12% 8%;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 40% 28%, rgba(156, 255, 95, 0.28), transparent 34%),
+    radial-gradient(circle at 64% 58%, rgba(97, 232, 255, 0.23), transparent 38%),
+    radial-gradient(circle at 30% 74%, rgba(255, 123, 216, 0.18), transparent 28%);
+  filter: blur(8px);
+}
+
+.apporaCommandPanel,
+.apporaNode,
+.apporaWorkflowStack article,
+.apporaAgentCards article,
+.apporaTemplateGrid article,
+.apporaDocsPanel div,
+.apporaFaqGrid article,
+.apporaFinalCta {
+  border: 1px solid var(--appora-border);
+  background: linear-gradient(180deg, var(--appora-surface-strong), var(--appora-surface));
+  backdrop-filter: blur(18px);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.18);
+}
+
+:root[data-app-theme="light"] .apporaCommandPanel,
+:root[data-app-theme="light"] .apporaNode,
+:root[data-app-theme="light"] .apporaWorkflowStack article,
+:root[data-app-theme="light"] .apporaAgentCards article,
+:root[data-app-theme="light"] .apporaTemplateGrid article,
+:root[data-app-theme="light"] .apporaDocsPanel div,
+:root[data-app-theme="light"] .apporaFaqGrid article,
+:root[data-app-theme="light"] .apporaFinalCta {
+  box-shadow: 0 24px 80px rgba(39, 50, 42, 0.11);
+}
+
+.apporaCommandPanel {
+  position: relative;
+  overflow: hidden;
+  padding: 16px;
+  border-radius: 30px;
+}
+
+.apporaCommandPanel::after {
+  content: "";
+  position: absolute;
+  inset: auto 18px 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--appora-cyan), transparent);
+}
+
+.apporaPanelChrome {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--appora-soft);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.apporaPanelChrome span {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--appora-soft);
+}
+
+.apporaPanelChrome strong {
+  margin-left: 8px;
+  color: var(--appora-muted);
+}
+
+.apporaPromptLine {
+  margin-top: 18px;
+  padding: 18px;
+  border-radius: 18px;
+  background: rgba(0, 0, 0, 0.18);
+  color: var(--appora-text);
+  font-size: 18px;
+  font-weight: 820;
+  line-height: 1.35;
+}
+
+:root[data-app-theme="light"] .apporaPromptLine {
+  background: rgba(17, 23, 23, 0.06);
+}
+
+.apporaAgentRows {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.apporaAgentRows div,
+.apporaDocsPanel div,
+.apporaFaqGrid article,
+.apporaTemplateGrid article,
+.apporaWorkflowStack article {
+  min-width: 0;
+}
+
+.apporaAgentRows div {
+  display: grid;
+  grid-template-columns: auto 72px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.apporaAgentRows strong,
+.apporaNode strong,
+.apporaTemplateGrid strong,
+.apporaDocsPanel strong,
+.apporaFaqGrid strong,
+.apporaWorkflowStack strong,
+.apporaAgentCards h3 {
+  color: var(--appora-text);
+}
+
+.apporaAgentRows span,
+.apporaNode span,
+.apporaTemplateGrid span,
+.apporaDocsPanel span,
+.apporaFaqGrid span,
+.apporaWorkflowStack span,
+.apporaAgentCards p {
+  color: var(--appora-muted);
+}
+
+.apporaNodeGrid {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.apporaNode {
+  min-height: 142px;
+  display: grid;
+  align-content: end;
+  gap: 8px;
+  padding: 16px;
+  border-radius: 24px;
+  transition: transform 180ms ease, border-color 180ms ease;
+}
+
+.apporaNode:nth-child(2),
+.apporaNode:nth-child(5) {
+  transform: translateY(24px);
+}
+
+.apporaNode:hover {
+  transform: translateY(-5px);
+  border-color: rgba(97, 232, 255, 0.42);
+}
+
+.apporaNode:nth-child(2):hover,
+.apporaNode:nth-child(5):hover {
+  transform: translateY(16px);
+}
+
+.apporaNode svg,
+.apporaDocsPanel svg,
+.apporaTemplateGrid svg,
+.apporaFaqGrid svg {
+  color: var(--appora-cyan);
+}
+
+.apporaBand,
+.apporaSection,
+.apporaFinalCta {
+  position: relative;
+}
+
+.apporaBand {
+  padding: 12px 0 64px;
+  overflow: hidden;
+}
+
+.apporaMarquee {
+  display: flex;
+  width: max-content;
+  gap: 10px;
+  animation: apporaMarquee 34s linear infinite;
+}
+
+.apporaMarquee span {
+  min-width: 150px;
+  min-height: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--appora-border);
+  border-radius: 999px;
+  background: var(--appora-surface);
+  color: var(--appora-muted);
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.apporaSection {
+  display: grid;
+  gap: 28px;
+  padding: clamp(82px, 10vw, 132px) 0;
+  scroll-margin-top: 102px;
+}
+
+.apporaSection::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(97, 232, 255, 0.42), transparent);
+}
+
+.apporaSplit {
+  grid-template-columns: minmax(0, 0.86fr) minmax(420px, 1fr);
+  align-items: center;
+  gap: clamp(28px, 5vw, 72px);
+}
+
+.apporaSectionHeader,
+.apporaSectionCopy {
+  display: grid;
+  gap: 12px;
+  max-width: 820px;
+}
+
+.apporaSectionHeader.wide {
+  max-width: 980px;
+}
+
+.apporaSectionIndex {
+  width: fit-content;
+  color: var(--appora-accent);
+  font-size: 12px;
+  font-weight: 950;
+  letter-spacing: 0.18em;
+}
+
+.apporaSection h2 {
+  font-size: clamp(38px, 5.3vw, 72px);
+  line-height: 0.98;
+  font-weight: 900;
+}
+
+.apporaSection p {
+  max-width: 620px;
+  font-size: 17px;
+}
+
+.apporaWorkflowStack {
+  display: grid;
+  gap: 12px;
+}
+
+.apporaWorkflowStack article {
+  display: grid;
+  grid-template-columns: 50px 96px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-height: 86px;
+  padding: 16px;
+  border-radius: 22px;
+}
+
+.apporaWorkflowStack em {
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--appora-accent), var(--appora-cyan));
+  color: #071015;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 950;
+}
+
+.apporaAgents {
+  align-content: center;
+}
+
+.apporaAgentCards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.apporaAgentCards article {
+  min-height: 330px;
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  padding: 26px;
+  border-radius: 30px;
+}
+
+.apporaAgentAvatar {
+  width: 64px;
+  height: 64px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 22px;
+  color: #071015;
+  font-size: 24px;
+  font-weight: 950;
+}
+
+.apporaAgentAvatar.clara {
+  background: linear-gradient(135deg, #ffd7f2, var(--appora-pink));
+}
+
+.apporaAgentAvatar.raka {
+  background: linear-gradient(135deg, #d7fff8, var(--appora-cyan));
+}
+
+.apporaAgentCards h3 {
+  margin: 0;
+  font-size: 32px;
+  line-height: 1;
+}
+
+.apporaAgentCards p {
+  margin: 0;
+  line-height: 1.65;
+}
+
+.apporaTemplateGrid,
+.apporaFaqGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.apporaTemplateGrid article,
+.apporaFaqGrid article,
+.apporaDocsPanel div {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 20px;
+  border-radius: 24px;
+}
+
+.apporaTemplateGrid article {
+  min-height: 190px;
+}
+
+.apporaDocsPanel {
+  display: grid;
+  gap: 12px;
+}
+
+.apporaDocsPanel div {
+  min-height: 118px;
+}
+
+.apporaFaqGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.apporaFaqGrid article {
+  min-height: 150px;
+}
+
+.apporaFinalCta {
+  display: grid;
+  justify-items: center;
+  gap: 24px;
+  margin: 52px 0 0;
+  padding: clamp(54px, 8vw, 96px);
+  border-radius: 36px;
+  text-align: center;
+  overflow: hidden;
+}
+
+.apporaFinalCta::before {
+  content: "";
+  position: absolute;
+  inset: -30%;
+  background:
+    radial-gradient(circle at 34% 40%, rgba(156, 255, 95, 0.18), transparent 27%),
+    radial-gradient(circle at 68% 52%, rgba(97, 232, 255, 0.2), transparent 30%);
+  pointer-events: none;
+}
+
+.apporaFinalCta h2,
+.apporaFinalCta button {
+  position: relative;
+}
+
+.apporaFinalCta h2 {
+  max-width: 880px;
+  font-size: clamp(38px, 5.7vw, 78px);
+  line-height: 0.98;
+}
+
+.apporaFooter {
+  position: relative;
+  z-index: 1;
+  width: min(1200px, calc(100vw - 32px));
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 42px 0 54px;
+  color: var(--appora-muted);
+}
+
+.apporaFooter div {
+  display: grid;
+  gap: 4px;
+}
+
+.apporaFooter strong {
+  color: var(--appora-text);
+}
+
+.apporaFooter nav {
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+@keyframes apporaMarquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .apporaMarquee {
+    animation: none;
+  }
+}
+
+@media (max-width: 980px) {
+  .apporaHero,
+  .apporaSplit {
+    grid-template-columns: 1fr;
+  }
+
+  .apporaHeroVisual {
+    min-height: auto;
+  }
+
+  .apporaTemplateGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .apporaNavLinks {
+    display: none;
+  }
+}
+
+@media (max-width: 680px) {
+  .apporaNav {
+    top: 10px;
+    min-height: 62px;
+    width: min(100vw - 20px, 1200px);
+  }
+
+  .apporaBrand {
+    font-size: 15px;
+  }
+
+  .apporaNavCta {
+    display: none;
+  }
+
+  .apporaMain,
+  .apporaFooter {
+    width: min(100vw - 28px, 1200px);
+  }
+
+  .apporaHero {
+    min-height: auto;
+    padding: 56px 0 52px;
+  }
+
+  .apporaHero h1 {
+    font-size: 50px;
+  }
+
+  .apporaHero p,
+  .apporaSection p {
+    font-size: 16px;
+  }
+
+  .apporaSecondaryButton,
+  .apporaPrimaryButton {
+    width: 100%;
+  }
+
+  .apporaHeroActions {
+    width: 100%;
+  }
+
+  .apporaNodeGrid,
+  .apporaAgentCards,
+  .apporaTemplateGrid,
+  .apporaFaqGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .apporaNode:nth-child(2),
+  .apporaNode:nth-child(5),
+  .apporaNode:nth-child(2):hover,
+  .apporaNode:nth-child(5):hover {
+    transform: none;
+  }
+
+  .apporaAgentRows div,
+  .apporaWorkflowStack article {
+    grid-template-columns: 1fr;
+  }
+
+  .apporaSection {
+    padding: 72px 0;
+  }
+
+  .apporaSection h2 {
+    font-size: 38px;
+  }
+
+  .apporaFinalCta {
+    border-radius: 26px;
+  }
+
+  .apporaFooter {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
 @keyframes splineFloat {
   0%, 100% {
     translate: 0 0;

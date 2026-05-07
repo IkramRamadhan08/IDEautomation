@@ -11,6 +11,7 @@ import json
 import re
 import shlex
 import subprocess
+import uuid
 from html import unescape
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request as URLRequest, urlopen
@@ -22,12 +23,17 @@ from pydantic import BaseModel
 
 from api.settings import ROOT, ENV_PATH, load_settings
 from api.supabase_store import (
+    append_agent_job_event,
+    create_agent_job,
     delete_project_file as supabase_delete_project_file,
+    get_agent_job,
     get_agent_memory_chunks_summary,
     get_agent_memory_chunks_table_status,
     has_supabase,
+    list_agent_job_events,
     list_project_files as supabase_list_project_files,
     list_projects as supabase_list_projects,
+    update_agent_job,
     upsert_profile,
     upsert_project_files as supabase_upsert_project_files,
 )
@@ -384,6 +390,88 @@ def _spoken_stream_chunks(text: str, *, max_chars: int = 28) -> list[str]:
         chunks.append(current)
     return chunks
 
+
+def _local_agent_jobs() -> dict:
+    return _session_state().setdefault("agent_jobs", {})
+
+
+def _best_effort_background(fn, *args, **kwargs) -> None:
+    def worker():
+        try:
+            fn(*args, **kwargs)
+        except Exception:
+            pass
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def _create_agent_job_record(req: "AgentReq") -> str:
+    job_id = uuid.uuid4().hex
+    owner_id = CURRENT_USER_ID.get()
+    project_root = (getattr(req, "project_root", None) or ".").strip() or "."
+    build_mode = getattr(req, "build_mode", None)
+    local_jobs = _local_agent_jobs()
+    local_jobs[job_id] = {
+        "id": job_id,
+        "owner_id": owner_id,
+        "project_root": project_root,
+        "build_mode": build_mode,
+        "status": "queued",
+        "input": str(getattr(req, "input", "") or "")[:20_000],
+        "result": None,
+        "error": None,
+        "events": [],
+        "created_at": int(time.time()),
+        "updated_at": int(time.time()),
+    }
+    _best_effort_background(
+        create_agent_job,
+        owner_id=owner_id,
+        job_id=job_id,
+        project_root=project_root,
+        build_mode=build_mode,
+        input_text=str(getattr(req, "input", "") or ""),
+    )
+    return job_id
+
+
+def _record_agent_job_event(job_id: str | None, event: str, data: dict) -> None:
+    if not job_id:
+        return
+    payload = dict(data or {})
+    payload.setdefault("job_id", job_id)
+    owner_id = CURRENT_USER_ID.get()
+    local_jobs = _local_agent_jobs()
+    job = local_jobs.get(job_id)
+    if isinstance(job, dict):
+        events = job.setdefault("events", [])
+        events.append({"id": len(events) + 1, "event_type": event, "payload": payload, "created_at": int(time.time())})
+        job["updated_at"] = int(time.time())
+        if event == "status" and payload.get("phase") in {"starting", "queued"}:
+            job["status"] = "running"
+        elif event == "done":
+            job["status"] = "completed"
+            job["result"] = payload.get("result")
+        elif event == "error":
+            job["status"] = "failed"
+            job["error"] = str(payload.get("message") or "")[:4000]
+    _best_effort_background(append_agent_job_event, owner_id=owner_id, job_id=job_id, event_type=event, payload=payload)
+
+
+def _update_agent_job_record(job_id: str | None, status: str, *, result: dict | None = None, error: str | None = None) -> None:
+    if not job_id:
+        return
+    owner_id = CURRENT_USER_ID.get()
+    job = _local_agent_jobs().get(job_id)
+    if isinstance(job, dict):
+        job["status"] = status
+        job["updated_at"] = int(time.time())
+        if result is not None:
+            job["result"] = result
+        if error is not None:
+            job["error"] = error
+    _best_effort_background(update_agent_job, owner_id=owner_id, job_id=job_id, status=status, result=result, error=error)
+
 # Local app: allow frontend dev server
 app.add_middleware(
     CORSMiddleware,
@@ -463,6 +551,7 @@ def _session_state() -> dict:
         sessions[sid] = {
             "workspace": None,
             "runners": {},
+            "agent_jobs": {},
             "oauth_pending": {},
             "google_user": None,
         }
@@ -2261,14 +2350,45 @@ async def upload_image_asset(project_root: str = Form("."), file: UploadFile = F
     return ImageAssetResp(ok=True, path=rel, name=candidate.name, content_type=content_type or None, size=len(data))
 
 
-def _run_agent_impl(req: AgentReq, event_cb=None):
+@app.get("/api/agent/jobs/{job_id}")
+def agent_job_status(job_id: str):
+    owner_id = CURRENT_USER_ID.get()
+    local = _local_agent_jobs().get(job_id)
+    if isinstance(local, dict):
+        job = {key: value for key, value in local.items() if key != "events"}
+        return {"ok": True, "job": job, "source": "session"}
+    remote = get_agent_job(owner_id=owner_id, job_id=job_id)
+    if remote:
+        return {"ok": True, "job": remote, "source": "supabase"}
+    raise HTTPException(404, "agent job not found")
+
+
+@app.get("/api/agent/jobs/{job_id}/events")
+def agent_job_events(job_id: str, after_id: int = 0, limit: int = 200):
+    owner_id = CURRENT_USER_ID.get()
+    local = _local_agent_jobs().get(job_id)
+    if isinstance(local, dict):
+        events = [event for event in local.get("events", []) if int(event.get("id") or 0) > max(0, int(after_id or 0))]
+        return {"ok": True, "events": events[: max(1, min(int(limit or 200), 1000))], "source": "session"}
+    remote = list_agent_job_events(owner_id=owner_id, job_id=job_id, after_id=max(0, int(after_id or 0)), limit=limit)
+    if remote is not None:
+        return {"ok": True, "events": remote, "source": "supabase"}
+    raise HTTPException(404, "agent job not found")
+
+
+def _run_agent_impl(req: AgentReq, event_cb=None, job_id: str | None = None):
     def emit(event: str, data: dict):
+        payload = dict(data or {})
+        if job_id:
+            payload.setdefault("job_id", job_id)
+            _record_agent_job_event(job_id, event, payload)
         if event_cb:
             try:
-                event_cb(event, data)
+                event_cb(event, payload)
             except Exception:
                 pass
 
+    _update_agent_job_record(job_id, "running")
     emit("status", {"phase": "starting", "message": "Nyusun konteks kerja dulu..."})
     ws_root = _ws()
     _hydrate_hosted_project(ws_root, getattr(req, "project_root", ".") or ".")
@@ -2306,6 +2426,7 @@ def _run_agent_impl(req: AgentReq, event_cb=None):
             })
 
         result = {
+            "job_id": job_id,
             "spoken": sug_spoken,
             "log": sug_log,
             "changes": out_changes,
@@ -2316,12 +2437,15 @@ def _run_agent_impl(req: AgentReq, event_cb=None):
         }
         for chunk in _spoken_stream_chunks(sug_spoken):
             emit("delta", {"spoken_chunk": chunk})
+        _update_agent_job_record(job_id, "completed", result=result)
         emit("done", {"message": "Beres, hasil agent siap dipakai.", "result": result})
         return result
     except RuntimeError as exc:
+        _update_agent_job_record(job_id, "failed", error=str(exc))
         emit("error", {"message": str(exc)})
         raise HTTPException(400, str(exc))
     except Exception as exc:
+        _update_agent_job_record(job_id, "failed", error=str(exc))
         emit("error", {"message": str(exc)})
         raise HTTPException(500, str(exc))
 
@@ -2329,10 +2453,12 @@ def _run_agent_impl(req: AgentReq, event_cb=None):
 @app.post("/api/agent")
 def agent(req: AgentReq):
     """Suggest a multi-file patch. Adds per-file unified diffs."""
+    job_id = _create_agent_job_record(req)
     if req.stream:
         bound_session_id = CURRENT_SESSION_ID.get()
         bound_user_id = CURRENT_USER_ID.get()
         bound_profile_id = CURRENT_PROFILE_ID.get()
+        bound_job_id = job_id
 
         def event_stream():
             import queue as queue_mod
@@ -2346,12 +2472,15 @@ def agent(req: AgentReq):
                 session_token = CURRENT_SESSION_ID.set(bound_session_id)
                 user_token = CURRENT_USER_ID.set(bound_user_id)
                 profile_token = CURRENT_PROFILE_ID.set(bound_profile_id)
-                push("status", {"phase": "queued", "message": "Agent diterima, mulai jalan..."})
+                push("status", {"phase": "queued", "message": "Agent diterima, mulai jalan...", "job_id": bound_job_id})
                 try:
-                    _run_agent_impl(req, event_cb=push)
+                    _record_agent_job_event(bound_job_id, "status", {"phase": "queued", "message": "Agent diterima, mulai jalan...", "job_id": bound_job_id})
+                    _run_agent_impl(req, event_cb=push, job_id=bound_job_id)
                 except HTTPException as exc:
+                    _update_agent_job_record(bound_job_id, "failed", error=str(exc.detail))
                     push("error", {"message": str(exc.detail)})
                 except Exception as exc:
+                    _update_agent_job_record(bound_job_id, "failed", error=str(exc))
                     push("error", {"message": str(exc)})
                 finally:
                     CURRENT_PROFILE_ID.reset(profile_token)
@@ -2377,4 +2506,4 @@ def agent(req: AgentReq):
             },
         )
 
-    return _run_agent_impl(req)
+    return _run_agent_impl(req, job_id=job_id)

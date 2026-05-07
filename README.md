@@ -34,6 +34,7 @@ The intended user is someone who may not know how to code but wants to build a r
   - xAI
 - Free-tier friendly mode for providers with strict limits
 - Agent memory and RAG-ready Supabase document chunks
+- Durable agent job ledger with `job_id`, event history, and recoverable final result
 - Checkpoint and restore before agent file writes
 - Serverless-compatible terminal command execution surface
 - Project validation and preview audit hooks
@@ -151,6 +152,15 @@ Useful backend readiness endpoints:
 
 If RAG status is `missing`, Supabase is connected but the agent memory table has not been created yet.
 
+`SUPABASE_SCHEMA.sql` also creates:
+
+- `public.agent_jobs`
+- `public.agent_job_events`
+
+These tables make agent runs recoverable in hosted mode. `/api/agent` returns/streams a `job_id`, and the frontend can later read job status/events through `/api/agent/jobs/{job_id}` and `/api/agent/jobs/{job_id}/events`.
+
+If your Supabase project already has the earlier Appora schema, run only `docs/supabase-agent-jobs.sql` to add the durable job ledger without touching existing project tables.
+
 ## Hosted Deployment on Vercel
 
 Import the repo into Vercel and use the Vite framework preset. The repo includes `vercel.json` and `api/index.py`, so frontend and API routes are prepared for serverless deployment.
@@ -242,9 +252,9 @@ Appora is built for a hosted serverless app-builder workflow. The current archit
 
 Known boundaries:
 
-- Vercel serverless is not a long-running compute runtime.
+- Vercel serverless is not a persistent VM. Appora configures the Python API function for a 300s max duration so streaming agent work and short validation commands have room to finish, but long-running dev servers still do not belong inside the function.
 - Heavy sandbox isolation for arbitrary user workloads is not implemented as a separate container layer.
-- Browser preview and terminal behavior depend on the deployment/runtime constraints.
+- Browser preview and terminal behavior depend on the deployment/runtime constraints. Hosted terminal actions are request-scoped and best-effort; local/dev preview servers are disabled on Vercel.
 - Provider quality and rate limits depend on each user key and chosen model.
 
 The product direction is to keep improving agent reliability through stronger tools, stricter verification, better project persistence, and clearer hosted UX rather than expanding into a full custom cloud IDE infrastructure.

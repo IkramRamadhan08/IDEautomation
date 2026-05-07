@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { Toaster, toast } from "sonner";
 import { supabase } from "./lib/supabase";
@@ -55,7 +55,24 @@ import {
 
 import { Topbar } from "./components/navigation/Topbar";
 import { AgentOrb } from "./components/agent/AgentOrb";
-import { ArrowRight, Moon, Sparkles, Sun } from "lucide-react";
+import {
+  ArrowRight,
+  Bot,
+  Boxes,
+  Code2,
+  Database,
+  Globe2,
+  HelpCircle,
+  Layers3,
+  Moon,
+  PlayCircle,
+  Rocket,
+  ShieldCheck,
+  Sparkles,
+  Sun,
+  Terminal,
+  Workflow,
+} from "lucide-react";
 import { runAgentWorkflow } from "./agent/workflow";
 import { errorMessage, notifyToast } from "./app/feedback";
 import { ensurePreviewRunningFlow, isHostedBrowser } from "./preview/runtime";
@@ -822,50 +839,222 @@ export default function App() {
   };
 
   // --- Renders ---
-  const renderGoogleLoginGate = () => (
-    <div className="authLanding splineLanding simpleSplineLanding" id="top">
-      <header className="simpleSplineNav">
-        <div className="splineBrandButton">
+  const renderGoogleLoginGate = () => {
+    const heroNodes = [
+      { label: "Prompt", detail: "Describe the app", icon: Sparkles },
+      { label: "Plan", detail: "Clara scopes the build", icon: Bot },
+      { label: "Code", detail: "Raka edits files", icon: Code2 },
+      { label: "Preview", detail: "Inspect in browser", icon: Globe2 },
+      { label: "Memory", detail: "Project context stays", icon: Layers3 },
+      { label: "Deploy", detail: "Vercel-ready output", icon: Rocket },
+    ];
+    const templateCards = [
+      ["SaaS dashboard", "Auth, settings, billing-ready workspace"],
+      ["AI landing page", "Conversion sections with provider routing"],
+      ["Admin portal", "Tables, forms, permissions, activity"],
+      ["Portfolio app", "Content pages, templates, deployment"],
+    ];
+    const providers = ["OpenAI", "Gemini", "Anthropic", "OpenRouter", "Groq", "Together", "Cerebras", "xAI", "Supabase", "Vercel"];
+
+    return (
+    <div className="authLanding apporaLanding" id="top">
+      <header className="apporaNav">
+        <a className="splineBrandButton apporaBrand" href="#top" aria-label="Appora home">
           <span className="authBrandMark">A</span>
           <span>Appora</span>
-        </div>
-        <div className="splineNavActions">
-          <button className="splineThemeToggle" type="button" onClick={() => setAppTheme((theme) => theme === "dark" ? "light" : "dark")} title={`Switch to ${appTheme === "dark" ? "light" : "dark"} mode`} aria-label={`Switch to ${appTheme === "dark" ? "light" : "dark"} mode`}>
+        </a>
+        <nav className="apporaNavLinks" aria-label="Landing navigation">
+          <a href="#templates">Templates</a>
+          <a href="#tutorial">Tutorial</a>
+          <a href="#docs">Docs</a>
+          <a href="#faq">FAQ</a>
+        </nav>
+        <div className="apporaNavActions">
+          <button className="apporaThemeToggle" type="button" onClick={() => setAppTheme((theme) => theme === "dark" ? "light" : "dark")} title={`Switch to ${appTheme === "dark" ? "light" : "dark"} mode`} aria-label={`Switch to ${appTheme === "dark" ? "light" : "dark"} mode`}>
             {appTheme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
           </button>
-          <button className="splineNavCta" onClick={startGoogleLogin}>
+          <button className="apporaNavCta" onClick={startGoogleLogin}>
             Start building
             <ArrowRight size={16} />
           </button>
         </div>
       </header>
 
-      <main className="simpleSplineMain">
-        <section className="simpleSplineHero" aria-label="Appora">
-          <div className="simpleSplineCopy">
-            <div className="splineKicker"><Sparkles size={15} /> Interactive agent builder</div>
-            <h1>Build apps by moving ideas into boxes.</h1>
-            <p>Talk to Clara, refine with Raka, and keep the whole project in one hosted workspace.</p>
-            <button className="splinePrimaryButton" onClick={startGoogleLogin}>
-              Continue with Google
-              <ArrowRight size={17} />
-            </button>
+      <main className="apporaMain">
+        <section className="apporaHero" aria-label="Appora">
+          <div className="apporaHeroCopy">
+            <h1>Build real apps with an agent that can code, remember, and ship.</h1>
+            <p>
+              Appora turns a rough idea into a hosted workspace with Clara for planning, Raka for implementation,
+              live preview, project memory, Supabase data, and Vercel-ready output.
+            </p>
+            <div className="apporaHeroActions">
+              <button className="apporaPrimaryButton" onClick={startGoogleLogin}>
+                Continue with Google
+                <ArrowRight size={17} />
+              </button>
+              <a className="apporaSecondaryButton" href="#tutorial">
+                Watch the flow
+                <PlayCircle size={17} />
+              </a>
+            </div>
+            <div className="apporaSignalRow" aria-label="Platform signals">
+              <span>BYOK models</span>
+              <span>Serverless ready</span>
+              <span>Project memory</span>
+            </div>
           </div>
 
-          <div className="boxesHoverScene" aria-label="Interactive Appora boxes">
-            {[
-              "Clara", "Raka", "Preview", "Memory", "Terminal", "Supabase",
-              "Vercel", "Templates", "BYOK", "MCP", "Repair", "Ship",
-            ].map((label, index) => (
-              <button className="hoverBox" type="button" key={label} style={{ "--i": index } as CSSProperties}>
-                <span>{label}</span>
-              </button>
+          <div className="apporaHeroVisual" aria-label="Agent workflow preview">
+            <div className="apporaOrbitGlow" />
+            <div className="apporaCommandPanel">
+              <div className="apporaPanelChrome">
+                <span />
+                <span />
+                <span />
+                <strong>appora://workspace</strong>
+              </div>
+              <div className="apporaPromptLine">Build a booking app with auth, admin dashboard, and deploy notes.</div>
+              <div className="apporaAgentRows">
+                <div><Bot size={17} /><strong>Clara</strong><span>breaks the request into product, data, UI, and test steps</span></div>
+                <div><Terminal size={17} /><strong>Raka</strong><span>edits files, runs checks, and records actions only</span></div>
+              </div>
+            </div>
+            <div className="apporaNodeGrid">
+              {heroNodes.map(({ label, detail, icon: Icon }) => (
+                <div className="apporaNode" key={label}>
+                  <Icon size={18} />
+                  <strong>{label}</strong>
+                  <span>{detail}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="apporaBand apporaMarqueeBand" aria-label="Supported providers">
+          <div className="apporaMarquee">
+            {[...providers, ...providers].map((provider, index) => (
+              <span key={`${provider}-${index}`}>{provider}</span>
             ))}
           </div>
         </section>
+
+        <section className="apporaSection apporaSplit" id="tutorial">
+          <div className="apporaSectionCopy">
+            <span className="apporaSectionIndex">01</span>
+            <h2>From chat to working project without switching tools.</h2>
+            <p>Start with normal language. The agent plans the project, edits files, runs terminal actions, previews the result, and keeps every action visible.</p>
+          </div>
+          <div className="apporaWorkflowStack">
+            {[
+              ["Ask", "Describe the product, audience, pages, and integrations."],
+              ["Build", "Agent writes code with patch-based edits and command history."],
+              ["Inspect", "Preview and browser checks catch broken UI before deploy."],
+              ["Ship", "Hosted project state stays connected to Supabase and Vercel."],
+            ].map(([title, copy], index) => (
+              <article key={title}>
+                <em>{String(index + 1).padStart(2, "0")}</em>
+                <strong>{title}</strong>
+                <span>{copy}</span>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="apporaSection apporaAgents" aria-label="Agents">
+          <div className="apporaSectionHeader">
+            <span className="apporaSectionIndex">02</span>
+            <h2>Two agents, one build loop.</h2>
+          </div>
+          <div className="apporaAgentCards">
+            <article>
+              <div className="apporaAgentAvatar clara">C</div>
+              <h3>Clara</h3>
+              <p>Conversational planner. She keeps the response stream human, asks for missing context, and turns vague requests into clear implementation intent.</p>
+            </article>
+            <article>
+              <div className="apporaAgentAvatar raka">R</div>
+              <h3>Raka</h3>
+              <p>Execution agent. He focuses on edits, terminal commands, tool calls, verification, and the action-only interaction log.</p>
+            </article>
+          </div>
+        </section>
+
+        <section className="apporaSection" id="templates">
+          <div className="apporaSectionHeader wide">
+            <span className="apporaSectionIndex">03</span>
+            <h2>Production-shaped starters for people who do not want a blank repo.</h2>
+          </div>
+          <div className="apporaTemplateGrid">
+            {templateCards.map(([title, copy]) => (
+              <article key={title}>
+                <Boxes size={19} />
+                <strong>{title}</strong>
+                <span>{copy}</span>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="apporaSection apporaSplit" id="docs">
+          <div className="apporaSectionCopy">
+            <span className="apporaSectionIndex">04</span>
+            <h2>Bring your own keys, use the models people actually have.</h2>
+            <p>Provider routing is built for free-tier friendly experimentation: OpenAI, Gemini, OpenRouter, Groq, Together, Cerebras, xAI, and more through hosted settings.</p>
+          </div>
+          <div className="apporaDocsPanel">
+            <div><ShieldCheck size={18} /><strong>Hosted settings</strong><span>API keys stay in user-scoped provider secrets.</span></div>
+            <div><Database size={18} /><strong>Supabase memory</strong><span>Project files, settings, job ledger, and memory chunks persist.</span></div>
+            <div><Workflow size={18} /><strong>MCP/tool loop</strong><span>Actions are separated from assistant responses for clearer UX.</span></div>
+          </div>
+        </section>
+
+        <section className="apporaSection apporaFaqSection" id="faq">
+          <div className="apporaSectionHeader">
+            <span className="apporaSectionIndex">05</span>
+            <h2>Built for hosted web, not a local-only toy.</h2>
+          </div>
+          <div className="apporaFaqGrid">
+            {[
+              ["Can it deploy?", "The app is shaped for Vercel serverless with Supabase as the durable backend."],
+              ["Can beginners use it?", "The primary flow is prompt, preview, edit with agent help, then ship from a saved project."],
+              ["Can I use free models?", "Yes. The provider layer supports BYOK model routing so users can pick what they already have."],
+              ["Where do actions show?", "Agent actions belong in Live Interaction. Model conversation streams through the orb/chat surface."],
+            ].map(([question, answer]) => (
+              <article key={question}>
+                <HelpCircle size={18} />
+                <strong>{question}</strong>
+                <span>{answer}</span>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="apporaFinalCta">
+          <h2>Start with an idea. Leave with a project you can keep improving.</h2>
+          <button className="apporaPrimaryButton" onClick={startGoogleLogin}>
+            Open Appora
+            <ArrowRight size={17} />
+          </button>
+        </section>
       </main>
+
+      <footer className="apporaFooter">
+        <div>
+          <strong>Appora</strong>
+          <span>Agentic web builder for hosted projects.</span>
+        </div>
+        <nav aria-label="Footer navigation">
+          <a href="#templates">Templates</a>
+          <a href="#tutorial">Tutorial</a>
+          <a href="#docs">Docs</a>
+          <a href="#faq">FAQ</a>
+        </nav>
+      </footer>
     </div>
   );
+  };
 
   const renderNewProjectModal = () => (
     newProjectOpen ? (
