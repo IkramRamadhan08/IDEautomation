@@ -1,126 +1,187 @@
 # Voice IDE
 
-Voice IDE adalah proyek **untuk lulus kuliah**.
+Voice IDE is an agentic web/app builder for non-coders and fast-moving builders. It combines a hosted browser IDE, Supabase-backed project persistence, BYOK model providers, and two coding agents designed to help users move from rough intent to a working web application.
 
-Arah project ini sekarang sengaja dipersempit:
-- dipakai **dosen / evaluator** untuk mencoba hasil kerja
-- **serverless only** lewat **Vercel**
-- state utama disimpan di **Supabase**
-- flow harus terasa rapi, gampang dipakai, dan cukup meyakinkan saat demo
-- agent harus proper untuk bantu bikin web yang kelihatan bagus dan modern
+The target runtime is **Vercel serverless + Supabase**. The product is not positioned as a local-only experiment or short-lived showcase; the architecture is meant for a hosted experience where users sign in, paste their own model API keys, create projects, and ask an agent to build or improve apps.
 
-Project ini **bukan** lagi diarahkan ke:
-- server sendiri yang harus dibayar terus
-- Docker/self-host setup
-- infra multi-tenant production yang berat
+## Product Direction
 
-## Fokus produk
+Voice IDE is built around two agents:
 
-Voice IDE punya 2 mode agent:
+- **Clara**: full-agent mode. Clara is the autonomous product builder that can take a rough brief, inspect the repo, plan the implementation, edit files, validate, repair, and push toward a coherent preview-ready result.
+- **Raka**: hybrid mode. Raka is the IDE copilot that stays close to the active file, editor state, and current project context for precise assisted coding.
 
-- **Clara** = full-agent mode, lebih cocok buat minta agent bangun web/app secara lebih menyeluruh
-- **Raka** = hybrid mode, lebih cocok buat ngoding bareng dan edit bertahap
+The intended user is someone who may not know how to code but wants to build a real web/app surface by chatting with an agent, reviewing the result, and iterating.
 
-Tujuan UX sekarang:
-- login lancar
-- project tersimpan
-- preferences tersimpan
-- agent enak dipakai
-- hasil web terlihat proper untuk presentasi / penilaian
+## Core Capabilities
+
+- Hosted auth and project persistence with Supabase
+- Browser-based project workspace and file explorer
+- Monaco-powered hybrid IDE surface
+- Full-agent autonomous build mode
+- Floating agent orb for conversational streaming
+- Separate live interaction module for agent actions only
+- Supabase-backed user settings and project files
+- BYOK provider settings per user
+- Multi-provider model support:
+  - OpenAI
+  - Anthropic
+  - OpenRouter
+  - Groq
+  - Gemini
+  - Together AI
+  - Cerebras
+  - xAI
+- Free-tier friendly mode for providers with strict limits
+- Agent memory and RAG-ready Supabase document chunks
+- Checkpoint and restore before agent file writes
+- Serverless-compatible terminal command execution surface
+- Project validation and preview audit hooks
+
+## Agent Runtime
+
+The backend agent runtime uses **LangGraph**. The current graph is:
+
+```text
+intent
+  -> memory
+  -> skills
+  -> mcp
+  -> plan
+  -> deep_preflight
+  -> draft
+  -> tooling / refine
+  -> verify
+  -> finalize
+```
+
+Important runtime behavior:
+
+- Intent detection keeps greetings and normal chat read-only.
+- Deep work preflight automatically inspects larger tasks before drafting.
+- Local read-only tools give the model structured repo context.
+- MCP tools can be discovered and executed through registered configs.
+- Verifier checks block unsafe or invalid output before files are applied.
+- Verifier repair pass gives the agent one more chance to correct bad output.
+- Checkpoints are written before applying file changes, so the latest agent write can be restored.
+
+## Local Agent Tools
+
+The runtime exposes read-only local tools to the model:
+
+- `repo_list`: list project files without dependency/build noise
+- `repo_read`: read one file
+- `repo_read_many`: read multiple files in one bounded call
+- `repo_search`: search source files
+- `package_scripts`: inspect scripts, dependencies, and package manager hints
+- `repo_overview`: summarize project shape and key files
+- `dependency_graph`: build a bounded JS/TS import graph
+
+These tools are designed to reduce guessing and make Clara/Raka behave more like real coding agents.
 
 ## Stack
 
-- Frontend: React + Vite + TypeScript
+- Frontend: React 19, Vite, TypeScript
+- Editor: Monaco
+- UI primitives: Radix UI, lucide-react, framer-motion
 - Backend: FastAPI
-- Auth + persistence: Supabase
-- Deploy target: Vercel
+- Agent graph: LangGraph
+- Auth and persistence: Supabase
+- Deploy target: Vercel serverless
 
-## Auth dan model
+## Repository Layout
 
-Yang tetap dipakai:
-- **OAuth login user/app** boleh tetap ada
+```text
+api/                    FastAPI backend and agent runtime
+api/tests/              Backend regression tests
+docs/                   Supabase/RAG docs and SQL
+scripts/                Utility scripts and preview audit
+src/                    React frontend
+src/agent/              Frontend agent workflow/runtime helpers
+src/components/         UI components
+src/modes/              Full-agent and hybrid workspaces
+SUPABASE_SCHEMA.sql     Main Supabase schema
+vercel.json             Vercel routing/build config
+```
 
-Yang sudah dibuang:
-- **OAuth provider model**
+## Local Development
 
-Akses model sekarang **BYOK only**:
-- `OPENAI_API_KEY`
-- `ANTHROPIC_API_KEY`
-- `OPENROUTER_API_KEY`
-
-## Ambil project
-
-Kalau mau ambil project ini dari GitHub:
+Install frontend dependencies:
 
 ```bash
-git clone <URL-REPO-KAMU>
-cd voice-ide
 npm install
+```
+
+Create and install the backend environment:
+
+```bash
 python3 -m venv api/.venv
 source api/.venv/bin/activate
 pip install -e ./api
 ```
 
-Jalankan local dev kalau mau cek cepat sebelum deploy:
+Run the backend:
 
-### Frontend
-```bash
-npm run dev
-```
-
-### Backend
 ```bash
 source api/.venv/bin/activate
 uvicorn api.main:app --reload --host 0.0.0.0 --port 8787
 ```
 
-## Deploy ke Vercel serverless
+Run the frontend:
 
-Ini jalur deploy utama project ini.
+```bash
+npm run dev
+```
 
-### 1. Siapkan Supabase
+By default the Vite frontend calls the local API at `http://localhost:8787` in development.
 
-Buat project di Supabase, lalu jalankan schema dari file:
+## Supabase Setup
+
+Create a Supabase project and run:
 
 - `SUPABASE_SCHEMA.sql`
-- `docs/supabase-agent-rag.sql` untuk tabel `public.agent_memory_chunks` yang dipakai agent RAG
+- `docs/supabase-agent-rag.sql`
 
-Setelah itu siapkan Auth provider kalau kamu mau pakai login Google.
+The RAG SQL creates `public.agent_memory_chunks`, used by the agent memory backend when available.
 
-### 2. Import repo ke Vercel
+Useful backend readiness endpoints:
 
-- Push repo ke GitHub
-- Buka Vercel
-- Import repository ini
-- Framework: **Vite**
+- `GET /api/supabase/rag/status?project_root=.`
+- `POST /api/supabase/rag/sync` with `{ "project_root": "." }`
 
-Repo ini sudah punya:
-- `vercel.json`
-- `api/index.py`
+If RAG status is `missing`, Supabase is connected but the agent memory table has not been created yet.
 
-Jadi frontend dan API sudah diarahkan untuk deploy serverless di Vercel.
+## Hosted Deployment on Vercel
 
-### 3. Isi environment variables di Vercel
+Import the repo into Vercel and use the Vite framework preset. The repo includes `vercel.json` and `api/index.py`, so frontend and API routes are prepared for serverless deployment.
 
-Minimal isi ini di **Vercel Environment Variables**:
+Required environment variables:
 
 ```env
 VITE_SUPABASE_URL=...
 VITE_SUPABASE_ANON_KEY=...
 SUPABASE_URL=...
 SUPABASE_SERVICE_ROLE_KEY=...
-VOICEIDE_SECRET_KEY=...  # random string, required for hosted BYOK secret encryption
+VOICEIDE_SECRET_KEY=...
 ```
 
-Catatan BYOK (hosted):
-- Di deploy hosted, **jangan mengandalkan** `OPENAI_API_KEY` dari env untuk semua user.
-- User akan isi API key mereka di Settings, lalu key disimpan **per akun** di Supabase (`user_provider_secrets`) dengan enkripsi menggunakan `VOICEIDE_SECRET_KEY`.
+`VOICEIDE_SECRET_KEY` is required for hosted BYOK provider secret encryption.
 
-Kalau mau set model/config dasar juga, tambahkan:
+Recommended defaults:
 
 ```env
 LLM_PROVIDER=openrouter
 BUILD_MODE=hybrid
+FRIENDLY_FREE_TIER_MODE=true
+AGENT_REFINEMENT_MODE=auto
+AGENT_MIN_GAP_SECONDS=4
+AGENT_REQUESTS_PER_MINUTE=8
+AGENT_CONTEXT_CHAR_BUDGET=48000
+```
+
+Optional default model settings:
+
+```env
 OPENAI_MODEL=gpt-5.5
 ANTHROPIC_MODEL=claude-opus-4-7
 OPENROUTER_MODEL=x-ai/grok-4.3
@@ -129,16 +190,19 @@ GEMINI_MODEL=gemini-3-pro-preview
 TOGETHER_MODEL=deepseek-ai/DeepSeek-V4-Pro
 CEREBRAS_MODEL=zai-glm-4.7
 XAI_MODEL=grok-4.3
+```
+
+Optional OAuth settings:
+
+```env
 GOOGLE_OAUTH_CLIENT_ID=...
 GOOGLE_OAUTH_CLIENT_SECRET=...
 ```
 
-Default hosted disarankan pakai OpenRouter supaya user BYOK bisa mulai dari router `openrouter/free` atau model `:free`/murah dulu, lalu upgrade model kalau butuh kualitas lebih.
-OpenAI tetap ditampilkan sebagai opsi familiar; kalau akun user punya free trial/account credits, pemakaian API akan memotong credit itu dulu, tapi model OpenAI bukan free-tier unlimited.
-
-Optional provider lain:
+Optional server-level provider keys:
 
 ```env
+OPENAI_API_KEY=...
 ANTHROPIC_API_KEY=...
 OPENROUTER_API_KEY=...
 GROQ_API_KEY=...
@@ -146,59 +210,50 @@ GEMINI_API_KEY=...
 TOGETHER_API_KEY=...
 CEREBRAS_API_KEY=...
 XAI_API_KEY=...
-SUPABASE_ANON_KEY=...
 ```
 
-### 3.5 Cek readiness Supabase agent
+For hosted public usage, prefer per-user BYOK through Settings instead of sharing one server-level key across all users.
 
-Backend sekarang punya jalur readiness biar nggak nebak-nebak:
+## BYOK Provider Model
 
-- `GET /api/supabase/rag/status?project_root=.`
-- `POST /api/supabase/rag/sync` dengan body `{ "project_root": "." }`
+Voice IDE is designed for bring-your-own-key usage. Users can paste provider API keys in Settings. Keys are stored per account in Supabase and encrypted using `VOICEIDE_SECRET_KEY`.
 
-Kalau status bilang `missing`, artinya koneksi Supabase ada tapi tabel `public.agent_memory_chunks` belum dibikin.
-Kalau status masih `unconfigured` tapi auth frontend sudah hidup, biasanya yang kurang adalah `SUPABASE_SERVICE_ROLE_KEY`, jadi login bisa siap tapi sync RAG/backend persistence belum live.
+OpenRouter is a good default provider for public hosted deployments because it gives users one router key and access to free or lower-cost models. Groq, Gemini, and Cerebras are useful for users who want free/dev-tier experimentation with stricter limits. OpenAI remains available because it is familiar, but OpenAI API usage is credit/billing based rather than unlimited free tier.
 
-### 4. Deploy
+## Validation
 
-Klik **Deploy** di Vercel.
+Common checks:
 
-### 5. Tes flow setelah live
+```bash
+npm run lint
+npm run build
+npm run test:agent-regression
+```
 
-Urutan tes yang disarankan:
-- buka app
-- login
-- buka settings
-- isi provider/model
-- create project
-- reload halaman
-- pastikan project masih ada
-- coba Hybrid mode
-- coba Full Agent mode
-- minta agent bikin landing page / dashboard kecil
-- cek hasil preview dan kualitas flow
+Backend targeted tests can also be run with:
 
-## Batasan yang jujur
+```bash
+api/.venv/bin/python -m unittest api.tests.test_agent_regressions.AgentToolsRegressionTests
+```
 
-Project ini sekarang ditargetkan untuk:
-- demo
-- penilaian dosen
-- validasi hasil kerja kuliah
+## Current Engineering Boundaries
 
-Project ini **belum** ditujukan untuk:
-- SaaS production penuh
-- runtime berat yang stabil untuk banyak user
-- isolasi tenant kelas production
-- infra berbayar jangka panjang
+Voice IDE is built for a hosted serverless app-builder workflow. The current architecture is intentionally not a heavy self-hosted container platform.
 
-## Kesimpulan arah project
+Known boundaries:
 
-Arah final saat ini sederhana:
+- Vercel serverless is not a long-running compute runtime.
+- Heavy sandbox isolation for arbitrary user workloads is not implemented as a separate container layer.
+- Browser preview and terminal behavior depend on the deployment/runtime constraints.
+- Provider quality and rate limits depend on each user key and chosen model.
 
-- **bukan** bangun startup infra berat
-- **bukan** self-host Docker
-- **bukan** bayar server sendiri terus
-- **iya** untuk serverless Vercel
-- **iya** untuk flow yang rapi
-- **iya** untuk agent yang proper bikin web keren
-- **iya** untuk dipakai presentasi dan bantu lulus kuliah
+The product direction is to keep improving agent reliability through stronger tools, stricter verification, better project persistence, and clearer hosted UX rather than expanding into a full custom cloud IDE infrastructure.
+
+## Vision
+
+The goal is for Clara and Raka to become competitive coding agents for web/app building:
+
+- Clara should be able to take broad product intent and ship a coherent first version.
+- Raka should make the hybrid IDE feel like working with a sharp coding partner.
+- The system should inspect before editing, validate before claiming success, and protect user work with checkpoints.
+- Non-coders should be able to create and iterate on real web apps by talking to the agent, not by learning the toolchain first.
