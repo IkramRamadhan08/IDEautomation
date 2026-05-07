@@ -15,3 +15,8 @@ create index if not exists agent_memory_chunks_project_root_idx
 
 create index if not exists agent_memory_chunks_source_path_idx
   on public.agent_memory_chunks (source_path, updated_at desc);
+
+create index if not exists agent_memory_chunks_project_source_idx
+  on public.agent_memory_chunks (project_root, source_path, chunk_index);
+
+alter table public.agent_memory_chunks enable row level security;
