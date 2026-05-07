@@ -2452,6 +2452,10 @@ a {
 .authAgentGrid div:hover,
 .authWorkspaceGrid div:hover,
 .authDocsGrid div:hover,
+.authUseCaseGrid div:hover,
+.authComparisonGrid div:hover,
+.authDeployFlow div:hover,
+.authTrustGrid div:hover,
 .authFaqList div:hover {
   transform: translateY(-4px);
   border-color: rgba(125, 211, 252, 0.24);
@@ -2556,7 +2560,11 @@ a {
   gap: 12px;
 }
 
-.authDocsGrid div {
+.authDocsGrid div,
+.authUseCaseGrid div,
+.authComparisonGrid div,
+.authDeployFlow div,
+.authTrustGrid div {
   min-height: 180px;
   display: grid;
   align-content: start;
@@ -2569,17 +2577,82 @@ a {
 }
 
 .authDocsGrid strong,
+.authUseCaseGrid strong,
+.authDeployFlow strong,
+.authTrustGrid strong,
 .authFaqList strong {
   color: var(--text);
   font-size: 15px;
 }
 
 .authDocsGrid p,
+.authUseCaseGrid p,
+.authComparisonGrid p,
+.authDeployFlow p,
+.authTrustGrid p,
 .authFaqList p {
   margin: 0;
   color: var(--muted);
   font-size: 13px;
   line-height: 1.65;
+}
+
+.authUseCaseGrid,
+.authTrustGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.authComparisonGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.25fr) minmax(0, 0.9fr);
+  gap: 12px;
+}
+
+.authComparisonGrid div {
+  min-height: 240px;
+  align-content: end;
+}
+
+.authComparisonGrid .highlight {
+  background:
+    linear-gradient(180deg, rgba(125, 211, 252, 0.14), rgba(125, 211, 252, 0.03)),
+    rgba(255, 255, 255, 0.04);
+  border-color: rgba(125, 211, 252, 0.24);
+}
+
+.authComparisonGrid span {
+  color: #7dd3fc;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.authDeployFlow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.authDeployFlow div {
+  position: relative;
+}
+
+.authDeployFlow em {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid rgba(125, 211, 252, 0.2);
+  background: rgba(125, 211, 252, 0.08);
+  color: #b8ecff;
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 900;
 }
 
 .authTemplateList,
@@ -2627,6 +2700,101 @@ a {
   border: 1px solid rgba(229, 231, 235, 0.1);
   background: rgba(255, 255, 255, 0.03);
   transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
+}
+
+.authFinalCta {
+  min-height: 420px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 28px;
+  padding: clamp(54px, 7vw, 96px);
+  margin: 18px 0 0;
+  border-radius: 18px;
+  border: 1px solid rgba(125, 211, 252, 0.18);
+  background:
+    radial-gradient(circle at 82% 22%, rgba(125, 211, 252, 0.16), transparent 34%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.025));
+  scroll-snap-align: start;
+}
+
+.authFinalCta span {
+  color: #7dd3fc;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.authFinalCta h2 {
+  margin: 12px 0 0;
+  max-width: 760px;
+  color: #f7f3ea;
+  font-size: clamp(34px, 5vw, 64px);
+  line-height: 1.02;
+  letter-spacing: 0;
+}
+
+.authFooter {
+  width: min(1220px, calc(100vw - 36px));
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(0, 1.55fr);
+  gap: 38px;
+  padding: 44px 0 38px;
+  border-top: 1px solid rgba(229, 231, 235, 0.09);
+}
+
+.authFooterBrand {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+
+.authFooterBrand p,
+.authFooterBottom {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.authFooterGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.authFooterGrid div {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.authFooterGrid strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.authFooterGrid a,
+.authFooterGrid span {
+  width: fit-content;
+  color: var(--muted);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.authFooterGrid a:hover {
+  color: var(--text);
+}
+
+.authFooterBottom {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  padding-top: 28px;
+  border-top: 1px solid rgba(229, 231, 235, 0.08);
 }
 
 @keyframes authHeroEnter {
@@ -2688,6 +2856,10 @@ a {
   .authAgentGrid div,
   .authWorkspaceGrid div,
   .authDocsGrid div,
+  .authUseCaseGrid div,
+  .authComparisonGrid div,
+  .authDeployFlow div,
+  .authTrustGrid div,
   .authFaqList div,
   .authTemplateList span,
   .authProviderList span {
@@ -3691,8 +3863,16 @@ a {
 
   .authCapabilityGrid,
   .authAgentGrid,
-  .authWorkspaceGrid {
+  .authWorkspaceGrid,
+  .authUseCaseGrid,
+  .authDeployFlow,
+  .authTrustGrid,
+  .authFooterGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .authComparisonGrid {
+    grid-template-columns: 1fr;
   }
 
   .authCapabilityGrid .wide {
@@ -3705,6 +3885,11 @@ a {
 
   .authProductPreview {
     min-height: 480px;
+  }
+
+  .authFinalCta,
+  .authFooter {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -3821,6 +4006,11 @@ a {
   .authCapabilityGrid,
   .authAgentGrid,
   .authWorkspaceGrid,
+  .authUseCaseGrid,
+  .authComparisonGrid,
+  .authDeployFlow,
+  .authTrustGrid,
+  .authFooterGrid,
   .authDocsGrid {
     grid-template-columns: 1fr;
   }
@@ -3841,6 +4031,15 @@ a {
 
   .authProductPreview {
     min-height: 360px;
+  }
+
+  .authFinalCta {
+    min-height: auto;
+    padding: 28px;
+  }
+
+  .authFooterBottom {
+    flex-direction: column;
   }
 
   .authSectionHeader h2 {

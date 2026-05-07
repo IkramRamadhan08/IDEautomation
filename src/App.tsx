@@ -1071,6 +1071,106 @@ export default function App() {
           </div>
         </section>
 
+        <section className="authInfoBand authUseCaseBand" aria-label="Use cases">
+          <div className="authSectionHeader">
+            <span>Use cases</span>
+            <h2>Built for people who know what they want, even if they do not know the stack yet.</h2>
+          </div>
+          <div className="authUseCaseGrid">
+            <div>
+              <strong>Founders</strong>
+              <p>Turn a product idea into a first working interface, then iterate copy, flows, pricing, and dashboard screens with Clara.</p>
+            </div>
+            <div>
+              <strong>Agencies</strong>
+              <p>Draft client portals, landing pages, campaign tools, and internal admin screens faster without starting from a blank repo.</p>
+            </div>
+            <div>
+              <strong>Operators</strong>
+              <p>Build lightweight tools for tracking leads, content, inventory, support, tasks, or reports without waiting for a dev sprint.</p>
+            </div>
+            <div>
+              <strong>Developers</strong>
+              <p>Use Raka as a browser IDE copilot when you want direct control over code but still want agent memory and preview checks.</p>
+            </div>
+          </div>
+        </section>
+
+        <section className="authInfoBand authComparisonBand" aria-label="Why Appora">
+          <div className="authSectionHeader">
+            <span>Why Appora</span>
+            <h2>More than a chat box, lighter than asking users to run a local coding agent.</h2>
+          </div>
+          <div className="authComparisonGrid">
+            <div>
+              <span>Typical AI chat</span>
+              <p>Gives snippets, loses project context, and leaves the user to paste code into an editor.</p>
+            </div>
+            <div className="highlight">
+              <span>Appora</span>
+              <p>Starts with templates, edits project files, tracks actions separately from chat, validates builds, and remembers project decisions.</p>
+            </div>
+            <div>
+              <span>Local-only agents</span>
+              <p>Powerful, but require terminal setup, local environment knowledge, and more technical confidence from the user.</p>
+            </div>
+          </div>
+        </section>
+
+        <section className="authInfoBand authDeployBand" aria-label="Deployment and storage">
+          <div className="authSectionHeader">
+            <span>Hosting model</span>
+            <h2>Designed around Vercel serverless and Supabase so projects can live beyond one browser session.</h2>
+          </div>
+          <div className="authDeployFlow">
+            <div>
+              <em>01</em>
+              <strong>Google login</strong>
+              <p>Users enter a hosted workspace with account-backed settings and projects.</p>
+            </div>
+            <div>
+              <em>02</em>
+              <strong>Supabase project state</strong>
+              <p>Project records, settings, provider keys, and memory are designed for durable storage.</p>
+            </div>
+            <div>
+              <em>03</em>
+              <strong>Serverless agent API</strong>
+              <p>FastAPI routes expose project, file, provider, tool, and agent workflows for the browser client.</p>
+            </div>
+            <div>
+              <em>04</em>
+              <strong>Preview and repair</strong>
+              <p>The agent uses build output and browser inspection to move from generated code toward a usable app.</p>
+            </div>
+          </div>
+        </section>
+
+        <section className="authInfoBand authTrustBand" aria-label="Trust and control">
+          <div className="authSectionHeader">
+            <span>Trust and control</span>
+            <h2>Autonomous enough to be useful, visible enough that users know what changed.</h2>
+          </div>
+          <div className="authTrustGrid">
+            <div>
+              <strong>Actions are visible</strong>
+              <p>Agent activity belongs in the interaction feed, while the orb streams the conversational response.</p>
+            </div>
+            <div>
+              <strong>User-owned keys</strong>
+              <p>BYOK keeps provider choice flexible and supports users experimenting with free or trial limits.</p>
+            </div>
+            <div>
+              <strong>Scoped edits</strong>
+              <p>Patch-based editing, checkpoints, and repair loops make larger changes easier to inspect.</p>
+            </div>
+            <div>
+              <strong>Honest limits</strong>
+              <p>Provider rate limits, terminal risk, and preview failures should be surfaced clearly instead of hidden.</p>
+            </div>
+          </div>
+        </section>
+
         <section id="faq" className="authInfoBand" aria-label="FAQ">
           <div className="authSectionHeader">
             <span>FAQ</span>
@@ -1089,9 +1189,59 @@ export default function App() {
               <strong>Where are projects stored?</strong>
               <p>Hosted projects are designed to persist through Supabase, with Vercel serving the app experience.</p>
             </div>
+            <div>
+              <strong>Can Clara deploy for me?</strong>
+              <p>The product is structured for hosted workflows first. Actual deployment automation should stay explicit and user-approved.</p>
+            </div>
+            <div>
+              <strong>Can I still edit code myself?</strong>
+              <p>Yes. Hybrid mode keeps the IDE surface available for direct file edits and focused copilot help.</p>
+            </div>
           </div>
         </section>
+
+        <section className="authFinalCta" aria-label="Start building">
+          <div>
+            <span>Ready when the idea is still rough</span>
+            <h2>Open a workspace, paste a model key, and ask Appora to build the first version.</h2>
+          </div>
+          <button className="btn primary authPrimaryCta" onClick={startGoogleLogin}>Continue with Google</button>
+        </section>
       </main>
+
+      <footer className="authFooter">
+        <div className="authFooterBrand">
+          <div className="authBrand">
+            <span className="authBrandMark">A</span>
+            <span>Appora</span>
+          </div>
+          <p>Agentic web builder for hosted Vercel and Supabase app workflows.</p>
+        </div>
+        <div className="authFooterGrid">
+          <div>
+            <strong>Product</strong>
+            <a href="#templates">Templates</a>
+            <a href="#tutorial">Tutorial</a>
+            <a href="#providers">Providers</a>
+          </div>
+          <div>
+            <strong>Platform</strong>
+            <a href="#docs">Docs</a>
+            <a href="#faq">FAQ</a>
+            <a href="#top" onClick={(event) => { event.preventDefault(); document.querySelector(".authLanding")?.scrollTo({ top: 0, behavior: "smooth" }); }}>Back to top</a>
+          </div>
+          <div>
+            <strong>Agents</strong>
+            <span>Clara full builder</span>
+            <span>Raka hybrid copilot</span>
+            <span>Memory and preview audit</span>
+          </div>
+        </div>
+        <div className="authFooterBottom">
+          <span>Appora</span>
+          <span>Bring your own model key. User-approved actions. Hosted project memory.</span>
+        </div>
+      </footer>
     </div>
   );
 
