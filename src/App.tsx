@@ -197,6 +197,12 @@ export default function App() {
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const agentLiveIdRef = useRef(0);
   const hasVerifiedHostedAuth = Boolean(settings?.supabase_enabled && googleAuth?.authenticated);
+  const authUserKey = googleAuth?.authenticated
+    ? googleAuth.user?.sub || googleAuth.user?.email || "authenticated"
+    : "";
+  const activeAuthUserRef = useRef<string | null>(null);
+  const latestAuthUserKeyRef = useRef(authUserKey);
+  latestAuthUserKeyRef.current = authUserKey;
 
   const makeAgentLiveId = useCallback(() => `agent-live-${Date.now()}-${agentLiveIdRef.current++}`,
     []);
@@ -225,6 +231,34 @@ export default function App() {
     setAgentLiveItems([]);
     setAgentAuditTrail([]);
   }, []);
+
+  const clearWorkspaceUiState = useCallback(() => {
+    setWs(null);
+    setIdentity(null);
+    setProjects([]);
+    setHostedProjects([]);
+    setSelectedProject(".");
+    setPreviewUrl("");
+    setPreviewFrameKey((prev) => prev + 1);
+    setAgentInput("");
+    setAgentStatus("idle");
+    setAgentLog("");
+    setAgentReply("");
+    setAgentActions([]);
+    setAttachedImage(null);
+    setWorkingMsg("");
+    setAgentCapabilities(null);
+    setExplorerItems([]);
+    setTreeExpanded({});
+    setTreeChildren({});
+    setTreeLoading({});
+    setOpenFiles([]);
+    setActiveFile("");
+    setBuffers({});
+    setEditorStatus("Ready");
+    setEditorBusy(false);
+    resetAgentRunView();
+  }, [resetAgentRunView]);
 
   const bindFolderInputRef = (node: HTMLInputElement | null) => {
     folderInputRef.current = node;
@@ -287,8 +321,19 @@ export default function App() {
       void loadWorkspaceOverview();
       return;
     }
-    setWs(null);
-  }, [googleAuth?.authenticated, googleAuth?.phase]);
+    clearWorkspaceUiState();
+  }, [clearWorkspaceUiState, googleAuth?.authenticated, googleAuth?.phase]);
+
+  useEffect(() => {
+    const previousAuthUser = activeAuthUserRef.current;
+    if (previousAuthUser === authUserKey) return;
+
+    activeAuthUserRef.current = authUserKey;
+    if (previousAuthUser === null) return;
+
+    resetClientIdentity();
+    clearWorkspaceUiState();
+  }, [authUserKey, clearWorkspaceUiState]);
 
   useEffect(() => {
     const clampAssistWidth = () => {
@@ -332,8 +377,10 @@ export default function App() {
   }, [isResizingAssistPane]);
 
   const loadSettingsOverview = async () => {
+    const requestAuthUserKey = latestAuthUserKeyRef.current;
     try {
       const s = await getSettings();
+      if (requestAuthUserKey !== latestAuthUserKeyRef.current) return;
       setSettings(s);
 
       let nextBuildMode = s.build_mode || "hybrid";
@@ -343,6 +390,7 @@ export default function App() {
       if (s.supabase_enabled && googleAuth?.authenticated) {
         try {
           const prefRes = await getUserPreferences();
+          if (requestAuthUserKey !== latestAuthUserKeyRef.current) return;
           const prefs = prefRes.preferences;
           nextBuildMode = prefs.build_mode || nextBuildMode;
           nextProvider = (prefs.llm_provider || nextProvider) as ProviderChoice;
@@ -360,15 +408,19 @@ export default function App() {
   };
 
   const loadIdentityOverview = async () => {
+    const requestAuthUserKey = latestAuthUserKeyRef.current;
     try {
       const info = await getIdentity();
+      if (requestAuthUserKey !== latestAuthUserKeyRef.current) return;
       setIdentity(info);
     } catch { /* ignore */ }
   };
 
   const loadWorkspaceOverview = async () => {
+    const requestAuthUserKey = latestAuthUserKeyRef.current;
     try {
       const info = await getWorkspace();
+      if (requestAuthUserKey !== latestAuthUserKeyRef.current) return;
       setWs(info.path);
     } catch {
       // keep the current workspace state if a background restore check fails
@@ -394,23 +446,25 @@ export default function App() {
       // ignore sign-out transport errors and clear local state anyway
     }
     resetClientIdentity();
-    setWs(null);
-    setIdentity(null);
+    clearWorkspaceUiState();
     setGoogleAuth({ ok: true, authenticated: false, phase: "idle", user: null });
   };
 
   // --- Workspace & Files ---
   const refreshProjects = async () => {
+    const requestAuthUserKey = latestAuthUserKeyRef.current;
     try {
       const [detected, hosted, templates] = await Promise.all([
         detectProjects().catch(() => ({ ok: true, projects: [] as ProjectInfo[] })),
         hasVerifiedHostedAuth ? listHostedProjects().catch(() => ({ ok: true, projects: [] as HostedProject[] })) : Promise.resolve({ ok: true, projects: [] as HostedProject[] }),
         hasVerifiedHostedAuth ? listProjectTemplates().catch(() => ({ ok: true, templates: [] as ProjectTemplate[] })) : Promise.resolve({ ok: true, templates: [] as ProjectTemplate[] }),
       ]);
+      if (requestAuthUserKey !== latestAuthUserKeyRef.current) return;
       setProjects(detected.projects || []);
       setHostedProjects(hosted.projects || []);
       setProjectTemplates(templates.templates || []);
     } catch {
+      if (requestAuthUserKey !== latestAuthUserKeyRef.current) return;
       setProjects([]);
       setHostedProjects([]);
       setProjectTemplates([]);

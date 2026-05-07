@@ -122,6 +122,7 @@ create index if not exists idx_agent_job_events_owner_job_id
 create or replace function public.set_updated_at()
 returns trigger
 language plpgsql
+set search_path = public
 as $$
 begin
   new.updated_at = now();

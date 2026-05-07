@@ -2008,7 +2008,7 @@ def supabase_rag_status(project_root: str = "."):
     frontend_auth_ready = bool(getattr(settings_mod.settings, "supabase_frontend_ready", False))
     missing_env = list(getattr(settings_mod.settings, "supabase_missing_env", []) or [])
     table_status = get_agent_memory_chunks_table_status(refresh=True) if supabase_enabled else "unconfigured"
-    summary = get_agent_memory_chunks_summary(project_root=proj_root, limit=1000) if supabase_enabled and table_status == "ready" else None
+    summary = get_agent_memory_chunks_summary(owner_id=CURRENT_USER_ID.get(), project_root=proj_root, limit=1000) if supabase_enabled and table_status == "ready" else None
 
     warning = None
     if frontend_auth_ready and not supabase_enabled:
@@ -2045,7 +2045,7 @@ def supabase_rag_sync(req: SupabaseRagSyncReq):
         raise HTTPException(400, "project_root must exist inside workspace")
 
     sync_result = sync_project_docs_to_supabase(project_dir, project_root=proj_root)
-    summary = get_agent_memory_chunks_summary(project_root=proj_root, limit=1000) if sync_result.get("table_status") == "ready" else None
+    summary = get_agent_memory_chunks_summary(owner_id=CURRENT_USER_ID.get(), project_root=proj_root, limit=1000) if sync_result.get("table_status") == "ready" else None
     return {
         "ok": True,
         **sync_result,

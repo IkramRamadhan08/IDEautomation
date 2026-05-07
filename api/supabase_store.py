@@ -308,7 +308,7 @@ def get_agent_memory_chunks_table_status(*, refresh: bool = False) -> str:
         status = "unconfigured"
     else:
         try:
-            client.table("agent_memory_chunks").select("chunk_id").limit(1).execute()
+            client.table("agent_memory_chunks").select("chunk_id,owner_id").limit(1).execute()
             status = "ready"
         except Exception as exc:
             status = _classify_agent_memory_chunks_probe_error(exc)
@@ -317,7 +317,7 @@ def get_agent_memory_chunks_table_status(*, refresh: bool = False) -> str:
     return status
 
 
-def upsert_agent_memory_chunks(*, project_root: str, chunks: list[dict[str, Any]]) -> bool:
+def upsert_agent_memory_chunks(*, owner_id: str, project_root: str, chunks: list[dict[str, Any]]) -> bool:
     client = get_supabase_admin()
     if not client or not chunks:
         return False
@@ -332,6 +332,7 @@ def upsert_agent_memory_chunks(*, project_root: str, chunks: list[dict[str, Any]
         if not chunk_id or not source_path or not content:
             continue
         payload.append({
+            "owner_id": owner_id,
             "chunk_id": chunk_id,
             "project_root": str(project_root or ".").strip() or ".",
             "source_path": source_path,
@@ -354,14 +355,15 @@ def upsert_agent_memory_chunks(*, project_root: str, chunks: list[dict[str, Any]
         return False
 
 
-def list_agent_memory_chunks(*, project_root: str, limit: int = 240) -> list[dict[str, Any]] | None:
+def list_agent_memory_chunks(*, owner_id: str, project_root: str, limit: int = 240) -> list[dict[str, Any]] | None:
     client = get_supabase_admin()
     if not client:
         return None
     try:
         res = (
             client.table("agent_memory_chunks")
-            .select("chunk_id, project_root, source_path, title, content, chunk_index, chunk_count, content_hash, updated_at")
+            .select("chunk_id, owner_id, project_root, source_path, title, content, chunk_index, chunk_count, content_hash, updated_at")
+            .eq("owner_id", owner_id)
             .eq("project_root", str(project_root or ".").strip() or ".")
             .order("updated_at", desc=True)
             .limit(max(1, min(int(limit or 240), 1000)))
@@ -375,8 +377,8 @@ def list_agent_memory_chunks(*, project_root: str, limit: int = 240) -> list[dic
     return data if isinstance(data, list) else []
 
 
-def get_agent_memory_chunks_summary(*, project_root: str, limit: int = 1000) -> dict[str, Any] | None:
-    rows = list_agent_memory_chunks(project_root=project_root, limit=limit)
+def get_agent_memory_chunks_summary(*, owner_id: str, project_root: str, limit: int = 1000) -> dict[str, Any] | None:
+    rows = list_agent_memory_chunks(owner_id=owner_id, project_root=project_root, limit=limit)
     if rows is None:
         return None
 

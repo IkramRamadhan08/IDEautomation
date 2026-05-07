@@ -588,17 +588,18 @@ def _build_local_long_term_chunks(project_dir: Path, *, project_root: str) -> li
     return chunks
 
 
-def _chunk_id(project_root: str, source_path: str, chunk_index: int) -> str:
-    raw = f"{project_root}|{source_path}|{chunk_index}"
+def _chunk_id(owner_id: str, project_root: str, source_path: str, chunk_index: int) -> str:
+    raw = f"{owner_id}|{project_root}|{source_path}|{chunk_index}"
     return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()
 
 
 def _sync_supabase_doc_chunks(project_root: str, chunks: list[MemoryChunk]) -> bool:
     if not chunks or not has_supabase():
         return False
+    owner_id = CURRENT_USER_ID.get()
     payload = [
         {
-            "chunk_id": _chunk_id(project_root, chunk.source, chunk.chunk_index),
+            "chunk_id": _chunk_id(owner_id, project_root, chunk.source, chunk.chunk_index),
             "source_path": chunk.source,
             "title": chunk.title,
             "content": chunk.text,
@@ -609,11 +610,11 @@ def _sync_supabase_doc_chunks(project_root: str, chunks: list[MemoryChunk]) -> b
         }
         for chunk in chunks
     ]
-    return upsert_agent_memory_chunks(project_root=project_root, chunks=payload)
+    return upsert_agent_memory_chunks(owner_id=owner_id, project_root=project_root, chunks=payload)
 
 
 def _load_supabase_doc_chunks(project_root: str, limit: int) -> list[MemoryChunk] | None:
-    rows = list_agent_memory_chunks(project_root=project_root, limit=limit)
+    rows = list_agent_memory_chunks(owner_id=CURRENT_USER_ID.get(), project_root=project_root, limit=limit)
     if rows is None:
         return None
 
