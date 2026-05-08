@@ -5560,8 +5560,8 @@ a {
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
-  gap: clamp(34px, 5vw, 72px);
-  padding: 16px clamp(16px, 4vw, 44px) clamp(32px, 6vw, 72px);
+  gap: clamp(26px, 4vw, 52px);
+  padding: clamp(22px, 4vw, 42px) clamp(16px, 4vw, 44px);
   background:
     radial-gradient(circle at 11% 6%, rgba(156, 255, 95, 0.2), transparent 28%),
     radial-gradient(circle at 86% 13%, rgba(97, 232, 255, 0.18), transparent 32%),
@@ -5592,6 +5592,10 @@ a {
 .workspaceSetupNav {
   flex: 0 0 auto;
   margin-top: 0;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
 }
 
 .workspaceSetupNavMeta {
@@ -5607,29 +5611,21 @@ a {
 .workspaceSetupCard {
   position: relative;
   width: min(920px, 100%);
-  border-radius: 28px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0;
+  border: 0;
   background:
     radial-gradient(circle at 8% 0%, rgba(156, 255, 95, 0.12), transparent 26%),
     radial-gradient(circle at 92% 10%, rgba(97, 232, 255, 0.13), transparent 32%),
-    rgba(10, 18, 24, 0.78);
+    transparent;
   color: rgba(246, 250, 245, 0.94);
-  box-shadow: 0 32px 90px rgba(0, 0, 0, 0.26);
+  box-shadow: none;
   text-align: center;
   overflow: hidden;
-  backdrop-filter: blur(22px);
+  backdrop-filter: none;
 }
 
 .workspaceSetupCard::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background:
-    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
-  background-size: 42px 42px;
-  mask-image: linear-gradient(180deg, black, transparent 76%);
+  content: none;
 }
 
 .workspaceSetupCard > * {
@@ -5646,8 +5642,8 @@ a {
   margin: 0 auto;
   padding: 8px 14px;
   border-radius: 999px;
-  background: rgba(17, 23, 23, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.07);
+  border: 0;
   color: rgba(246, 250, 245, 0.66);
   font-size: 11px;
   font-weight: 700;
@@ -5691,10 +5687,10 @@ a {
   align-content: start;
   gap: 10px;
   padding: 22px;
-  border-radius: 22px;
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  background: rgba(255, 255, 255, 0.055);
-  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.16);
+  border-radius: 18px;
+  border: 0;
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: none;
   text-align: left;
 }
 
@@ -5724,8 +5720,8 @@ a {
   min-height: 46px;
   min-width: 138px;
   border-radius: 999px;
-  border-color: rgba(255, 255, 255, 0.11);
-  background: rgba(255, 255, 255, 0.07);
+  border-color: transparent;
+  background: rgba(255, 255, 255, 0.08);
   color: rgba(246, 250, 245, 0.92);
   font-size: 13px;
   font-weight: 680;
@@ -5741,9 +5737,9 @@ a {
 .savedProjectsPanel {
   margin-top: 30px;
   padding: 18px;
-  border-radius: 24px;
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  background: rgba(255, 255, 255, 0.055);
+  border-radius: 18px;
+  border: 0;
+  background: rgba(255, 255, 255, 0.06);
   text-align: left;
 }
 
@@ -5770,24 +5766,22 @@ a {
 }
 
 :root[data-app-theme="light"] .workspaceSetupCard {
-  border-color: rgba(17, 23, 23, 0.1);
+  border-color: transparent;
   background:
     radial-gradient(circle at 8% 0%, rgba(156, 255, 95, 0.2), transparent 26%),
     radial-gradient(circle at 92% 10%, rgba(97, 232, 255, 0.22), transparent 32%),
-    rgba(255, 255, 255, 0.76);
+    transparent;
   color: #111717;
-  box-shadow: 0 32px 90px rgba(40, 46, 35, 0.16);
+  box-shadow: none;
 }
 
 :root[data-app-theme="light"] .workspaceSetupCard::before {
-  background:
-    linear-gradient(rgba(17, 23, 23, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(17, 23, 23, 0.035) 1px, transparent 1px);
+  content: none;
 }
 
 :root[data-app-theme="light"] .workspaceGateKicker {
   background: rgba(17, 23, 23, 0.06);
-  border-color: rgba(17, 23, 23, 0.1);
+  border-color: transparent;
   color: rgba(17, 23, 23, 0.7);
 }
 
@@ -5801,9 +5795,9 @@ a {
 }
 
 :root[data-app-theme="light"] .gateFeatureCard {
-  border-color: rgba(17, 23, 23, 0.09);
-  background: rgba(255, 255, 255, 0.64);
-  box-shadow: 0 22px 60px rgba(40, 46, 35, 0.08);
+  border-color: transparent;
+  background: rgba(255, 255, 255, 0.62);
+  box-shadow: none;
 }
 
 :root[data-app-theme="light"] .gateFeatureText {
@@ -5811,14 +5805,29 @@ a {
 }
 
 :root[data-app-theme="light"] .workspaceSetupCard .workspaceGateActions .btn {
-  border-color: rgba(17, 23, 23, 0.1);
+  border-color: transparent;
   background: rgba(255, 255, 255, 0.76);
   color: #111717;
 }
 
 :root[data-app-theme="light"] .savedProjectsPanel {
-  border-color: rgba(17, 23, 23, 0.09);
+  border-color: transparent;
   background: rgba(255, 255, 255, 0.58);
+}
+
+:root[data-app-theme="light"] .savedProjectItem,
+:root[data-app-theme="light"] .templateChoice {
+  background: rgba(255, 255, 255, 0.62);
+  color: #111717;
+}
+
+:root[data-app-theme="light"] .savedProjectItem:hover,
+:root[data-app-theme="light"] .templateChoice:hover {
+  background: rgba(255, 255, 255, 0.82);
+}
+
+:root[data-app-theme="light"] .savedProjectItem small {
+  color: rgba(17, 23, 23, 0.54);
 }
 
 .savedProjectsHeader {
@@ -5858,16 +5867,15 @@ a {
   gap: 12px;
   padding: 14px;
   border-radius: 16px;
-  border: 1px solid rgba(17, 23, 23, 0.09);
-  background: rgba(255, 255, 255, 0.66);
-  color: #111717;
+  border: 0;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(246, 250, 245, 0.92);
   text-align: left;
   cursor: pointer;
 }
 
 .savedProjectItem:hover {
-  border-color: rgba(97, 232, 255, 0.36);
-  background: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.13);
 }
 
 .savedProjectItem span:first-child {
@@ -5889,7 +5897,7 @@ a {
 }
 
 .savedProjectItem small {
-  color: rgba(17, 23, 23, 0.54);
+  color: rgba(246, 250, 245, 0.56);
   font-size: 12px;
 }
 
@@ -5929,12 +5937,12 @@ a {
   padding: 22px;
   border-radius: 26px;
   overflow: auto;
-  border-color: rgba(17, 23, 23, 0.1);
+  border: 0;
   background:
-    radial-gradient(circle at 12% 0%, rgba(156, 255, 95, 0.16), transparent 28%),
-    radial-gradient(circle at 88% 10%, rgba(97, 232, 255, 0.18), transparent 32%),
-    rgba(255, 255, 255, 0.88);
-  color: #111717;
+    radial-gradient(circle at 12% 0%, rgba(156, 255, 95, 0.14), transparent 28%),
+    radial-gradient(circle at 88% 10%, rgba(97, 232, 255, 0.16), transparent 32%),
+    rgba(10, 18, 24, 0.9);
+  color: rgba(246, 250, 245, 0.92);
 }
 
 .newProjectModalHeader,
@@ -5951,7 +5959,7 @@ a {
 
 .newProjectModalTitle {
   margin-top: 4px;
-  color: #111717;
+  color: rgba(246, 250, 245, 0.94);
   font-size: 26px;
   font-weight: 680;
   letter-spacing: 0;
@@ -5964,7 +5972,7 @@ a {
 }
 
 .newProjectField span {
-  color: rgba(17, 23, 23, 0.68);
+  color: rgba(246, 250, 245, 0.66);
   font-size: 12px;
   font-weight: 700;
 }
@@ -5973,18 +5981,17 @@ a {
   width: 100%;
   min-height: 48px;
   padding: 0 16px;
-  border: 1px solid rgba(17, 23, 23, 0.1);
+  border: 0;
   border-radius: 16px;
   outline: 0;
-  background: rgba(255, 255, 255, 0.76);
-  color: #111717;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(246, 250, 245, 0.92);
   font: inherit;
   font-size: 14px;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.62);
 }
 
 .newProjectModal .input:focus {
-  border-color: rgba(97, 232, 255, 0.62);
   box-shadow: 0 0 0 4px rgba(97, 232, 255, 0.16);
 }
 
@@ -5997,9 +6004,9 @@ a {
   min-height: 44px;
   min-width: 126px;
   border-radius: 999px;
-  border-color: rgba(17, 23, 23, 0.1);
-  background: rgba(255, 255, 255, 0.74);
-  color: #111717;
+  border-color: transparent;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(246, 250, 245, 0.92);
 }
 
 .newProjectModal .btn.primary {
@@ -6022,13 +6029,13 @@ a {
 }
 
 .newProjectTemplateHeader span {
-  color: rgba(17, 23, 23, 0.72);
+  color: rgba(246, 250, 245, 0.72);
   font-size: 12px;
   font-weight: 800;
 }
 
 .newProjectTemplateHeader small {
-  color: rgba(17, 23, 23, 0.52);
+  color: rgba(246, 250, 245, 0.52);
   font-size: 11px;
 }
 
@@ -6045,20 +6052,18 @@ a {
   gap: 8px;
   padding: 12px;
   border-radius: 18px;
-  border: 1px solid rgba(17, 23, 23, 0.1);
-  background: rgba(255, 255, 255, 0.62);
-  color: #111717;
+  border: 0;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(246, 250, 245, 0.92);
   text-align: left;
   cursor: pointer;
 }
 
 .templateChoice:hover {
-  border-color: rgba(97, 232, 255, 0.42);
-  background: rgba(255, 255, 255, 0.86);
+  background: rgba(255, 255, 255, 0.13);
 }
 
 .templateChoice.selected {
-  border-color: rgba(97, 232, 255, 0.62);
   background: linear-gradient(135deg, rgba(156, 255, 95, 0.22), rgba(97, 232, 255, 0.18));
 }
 
@@ -7034,6 +7039,13 @@ a {
 :root[data-app-theme="light"] .missionCard,
 :root[data-app-theme="light"] .newProjectModal {
   background: rgba(255, 255, 255, 0.82);
+}
+
+:root[data-app-theme="light"] .workspaceSetupCard {
+  background:
+    radial-gradient(circle at 8% 0%, rgba(156, 255, 95, 0.2), transparent 26%),
+    radial-gradient(circle at 92% 10%, rgba(97, 232, 255, 0.22), transparent 32%),
+    transparent;
 }
 
 :root[data-app-theme="light"] .codeEditorShell,
