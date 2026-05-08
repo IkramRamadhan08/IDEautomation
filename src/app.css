@@ -122,6 +122,10 @@ a {
   flex-direction: column;
   height: 100vh;
   width: 100vw;
+  background:
+    radial-gradient(circle at 18% -10%, rgba(143, 163, 255, 0.12), transparent 32%),
+    radial-gradient(circle at 82% 4%, rgba(101, 214, 173, 0.08), transparent 26%),
+    linear-gradient(180deg, #090a0d 0%, #07080a 100%);
 }
 
 .appMain {
@@ -137,10 +141,11 @@ a {
   align-items: center;
   gap: 8px;
   min-height: 48px;
-  padding: 7px 10px;
-  border-bottom: 1px solid rgba(229, 231, 235, 0.08);
-  background: rgba(10, 11, 13, 0.92);
-  backdrop-filter: blur(16px);
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(229, 231, 235, 0.075);
+  background:
+    linear-gradient(180deg, rgba(15, 16, 20, 0.96), rgba(9, 10, 13, 0.94));
+  backdrop-filter: blur(18px) saturate(1.08);
   position: relative;
   z-index: 10;
   flex-wrap: wrap;
@@ -173,9 +178,9 @@ a {
 }
 
 .brandMark {
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -190,9 +195,9 @@ a {
 }
 
 .brand {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
-  letter-spacing: -0.03em;
+  letter-spacing: 0;
 }
 
 .brandSub {
@@ -309,10 +314,10 @@ a {
 .commandBarButton {
   width: min(360px, 28vw);
   min-width: 240px;
-  height: 32px;
+  height: 30px;
   border: 1px solid rgba(229, 231, 235, 0.1);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.035);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.03);
   color: var(--muted);
   display: inline-flex;
   align-items: center;
@@ -354,7 +359,7 @@ a {
 }
 
 .panelToggleBtn {
-  min-width: 78px;
+  min-width: 70px;
 }
 
 .btn {
@@ -362,7 +367,7 @@ a {
   background: rgba(255, 255, 255, 0.045);
   color: var(--text);
   padding: 6px 9px;
-  border-radius: 8px;
+  border-radius: 7px;
   cursor: pointer;
   font-size: 11px;
   font-weight: 600;
@@ -377,8 +382,8 @@ a {
 .btn:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.09);
   border-color: var(--border-strong);
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-md);
+  transform: none;
+  box-shadow: none;
 }
 
 .btn:disabled {
@@ -521,7 +526,7 @@ a {
 :root[data-app-theme="light"] .fullAgentCenterStage,
 :root[data-app-theme="light"] .fullAgentPreview,
 :root[data-app-theme="light"] .hybridSidePane {
-  background: rgba(255, 255, 255, 0.62);
+  background: rgba(255, 255, 255, 0.72);
 }
 
 :root[data-app-theme="light"] .hybridExplorerPane {
@@ -529,7 +534,7 @@ a {
 }
 
 :root[data-app-theme="light"] .codeEditorShell {
-  background: #ffffff;
+  background: #fbfbf9;
   border-color: rgba(23, 23, 23, 0.1);
 }
 
@@ -606,25 +611,26 @@ a {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 12px 10px;
-  border-bottom: 1px solid rgba(229, 231, 235, 0.075);
+  padding: 10px 11px 9px;
+  border-bottom: 1px solid rgba(229, 231, 235, 0.07);
+  background: rgba(255, 255, 255, 0.018);
 }
 
 .paneEyebrow {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.14em;
-  margin-bottom: 5px;
+  letter-spacing: 0.12em;
+  margin-bottom: 4px;
 }
 
 .paneHeading {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
-  letter-spacing: -0.03em;
+  letter-spacing: 0;
 }
 
 .paneCounter {
@@ -654,8 +660,8 @@ a {
 
 .sidebarBody,
 .previewBody {
-  padding: 10px;
-  gap: 10px;
+  padding: 8px;
+  gap: 8px;
   overflow: auto;
 }
 
@@ -684,15 +690,15 @@ a {
 }
 
 .explorerSummaryCard {
-  padding: 14px 15px;
+  padding: 12px;
 }
 
 .explorerSummaryCard.compact {
-  padding: 10px 12px;
+  padding: 9px 10px;
 }
 
 .explorerSummaryTitle {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
 }
 
@@ -721,8 +727,8 @@ a {
 .explorerProjectSelect {
   width: 100%;
   min-width: 0;
-  height: 34px;
-  border-radius: 8px;
+  height: 32px;
+  border-radius: 7px;
   border: 1px solid rgba(148, 163, 184, 0.14);
   background: rgba(5, 6, 9, 0.82);
   color: var(--text);
@@ -734,41 +740,52 @@ a {
 
 .explorerToolbar {
   display: flex;
-  gap: 8px;
+  gap: 6px;
+}
+
+.explorerToolbar .btn {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 32px;
+  padding: 0 5px;
+  gap: 4px;
+  white-space: nowrap;
+  font-size: 10px;
 }
 
 .treeExplorer {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.025);
-  border: 1px solid rgba(148, 163, 184, 0.1);
-  padding: 8px;
+  border-radius: 7px;
+  background: rgba(3, 4, 7, 0.34);
+  border: 1px solid rgba(148, 163, 184, 0.085);
+  padding: 5px;
 }
 
 .treeRow {
   width: 100%;
   display: flex;
   align-items: center;
-  gap: 7px;
-  height: 30px;
+  gap: 6px;
+  height: 28px;
   border: 0;
   background: transparent;
   color: var(--text-soft);
-  border-radius: 7px;
+  border-radius: 6px;
   text-align: left;
   cursor: pointer;
 }
 
 .treeRow:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.045);
   color: var(--text);
 }
 
 .treeRow.active {
-  background: rgba(124, 140, 255, 0.14);
+  background: rgba(143, 163, 255, 0.16);
   color: #f7f9ff;
+  box-shadow: inset 2px 0 0 rgba(199, 210, 254, 0.75);
 }
 
 .treeChevron {
@@ -813,37 +830,40 @@ a {
 .tabs {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 38px;
-  padding: 6px 8px 0;
+  gap: 2px;
+  min-height: 36px;
+  padding: 5px 8px 0;
   overflow-x: auto;
+  background: rgba(255, 255, 255, 0.012);
+  border-bottom: 1px solid rgba(229, 231, 235, 0.06);
 }
 
 .tab {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  height: 32px;
-  padding: 0 10px;
-  border-radius: 8px 8px 0 0;
+  gap: 7px;
+  height: 31px;
+  padding: 0 9px;
+  border-radius: 7px 7px 0 0;
   color: var(--muted);
   cursor: pointer;
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(255, 255, 255, 0.022);
   border: 1px solid transparent;
   border-bottom: 0;
 }
 
 .tab.active {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.06);
-  border-color: rgba(148, 163, 184, 0.14);
+  background: #0b0c0f;
+  border-color: rgba(148, 163, 184, 0.13);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
 }
 
 .tabLabel {
   max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
 }
 
@@ -878,18 +898,19 @@ a {
   flex: 1;
   min-height: 0;
   min-width: 0;
-  padding: 0 8px 8px;
+  padding: 0;
 }
 
 .editorToolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 9px 10px;
-  border: 1px solid rgba(229, 231, 235, 0.095);
-  border-radius: 8px 8px 0 0;
-  background: rgba(255, 255, 255, 0.035);
+  gap: 14px;
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 1px solid rgba(229, 231, 235, 0.07);
+  border-radius: 0;
+  background: rgba(255, 255, 255, 0.022);
 }
 
 .editorToolbarMeta {
@@ -931,9 +952,8 @@ a {
 }
 
 .codeEditorShell {
-  border: 1px solid rgba(229, 231, 235, 0.095);
-  border-top: 0;
-  border-radius: 0 0 8px 8px;
+  border: 0;
+  border-radius: 0;
   overflow: hidden;
   background: #0b1220;
   display: flex;
@@ -954,9 +974,8 @@ a {
 }
 
 .emptyEditor {
-  border: 1px solid rgba(148, 163, 184, 0.12);
-  border-top: 0;
-  border-radius: 0 0 18px 18px;
+  border: 0;
+  border-radius: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1199,13 +1218,14 @@ a {
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  border: 1px solid rgba(148, 163, 184, 0.12);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(148, 163, 184, 0.105);
+  border-radius: 8px;
+  background: rgba(5, 6, 9, 0.38);
 }
 
 .previewMiniHeader {
-  padding: 12px 12px 10px;
+  padding: 10px;
+  border-bottom: 1px solid rgba(229, 231, 235, 0.065);
 }
 
 .previewMiniBody,
@@ -1218,7 +1238,7 @@ a {
 }
 
 .previewMiniBody {
-  padding: 0 8px 8px;
+  padding: 8px;
 }
 
 .previewCanvasWrap {
@@ -1231,12 +1251,12 @@ a {
 .previewViewport,
 .previewEmbedSmall {
   overflow: hidden;
-  padding: 10px;
+  padding: 8px;
   display: flex;
   flex-direction: column;
   min-height: 0;
   flex: 1;
-  border-radius: 16px;
+  border-radius: 8px;
   background: rgba(3, 8, 16, 0.62);
 }
 
@@ -1253,11 +1273,11 @@ a {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 10px;
+  padding: 7px 8px;
   margin-bottom: 8px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(148, 163, 184, 0.105);
 }
 
 .previewDots {
@@ -1298,7 +1318,7 @@ a {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  border-radius: 16px;
+  border-radius: 8px;
   background: #0b1220;
 }
 
@@ -1306,7 +1326,7 @@ a {
   display: block;
   flex: 1;
   min-height: 100%;
-  border-radius: 16px;
+  border-radius: 8px;
   background: white;
 }
 
@@ -1338,15 +1358,22 @@ a {
 }
 
 .hybridWorkspaceShell {
-  background: #090a0d;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+    radial-gradient(circle at 50% -18%, rgba(143, 163, 255, 0.13), transparent 28%),
+    #08090b;
+  background-size: 28px 28px, 28px 28px, auto, auto;
 }
 
 .hybridAssistRail {
   display: flex;
   flex-direction: column;
-  gap: 0;
-  background: #0f1013;
-  border-left: 1px solid rgba(229, 231, 235, 0.08);
+  gap: 8px;
+  padding: 8px;
+  background:
+    linear-gradient(180deg, rgba(17, 18, 22, 0.96), rgba(10, 11, 14, 0.98));
+  border-left: 1px solid rgba(229, 231, 235, 0.085);
 }
 
 .hybridAssistSummary {
@@ -1358,7 +1385,7 @@ a {
 .hybridAssistRail .previewMiniShell {
   flex: 1;
   min-height: 0;
-  margin: 10px;
+  margin: 0;
 }
 
 .hybridLiveCard {
@@ -1366,7 +1393,8 @@ a {
 }
 
 .hybridInteractionCard {
-  margin: 10px 10px 0;
+  margin: 0;
+  flex-shrink: 0;
 }
 
 .missionCard {
@@ -1387,49 +1415,52 @@ a {
 
 .assistResizeHandle {
   width: 4px;
-  background: rgba(229, 231, 235, 0.035);
+  background: rgba(229, 231, 235, 0.026);
 }
 
 .hybridEditorPane {
-  background: #0b0c0f;
+  background:
+    linear-gradient(180deg, rgba(13, 14, 18, 0.98), rgba(7, 8, 10, 0.99));
 }
 
 .hybridExplorerPane {
-  background: #0f1013;
-  border-right: 1px solid rgba(229, 231, 235, 0.08);
+  background:
+    linear-gradient(180deg, rgba(18, 19, 23, 0.98), rgba(10, 11, 14, 0.99));
+  border-right: 1px solid rgba(229, 231, 235, 0.085);
 }
 
 .codeEditorShell {
-  background: #0a0b0e;
-}
-
-.hybridTerminalPanel {
-  height: 184px;
-  min-height: 184px;
-  display: flex;
-  flex-direction: column;
-  border-top: 1px solid rgba(229, 231, 235, 0.09);
   background: #090a0d;
 }
 
+.hybridTerminalPanel {
+  height: 198px;
+  min-height: 198px;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid rgba(229, 231, 235, 0.095);
+  background:
+    linear-gradient(180deg, rgba(10, 11, 14, 0.99), rgba(6, 7, 9, 1));
+}
+
 .terminalTabs {
-  height: 35px;
+  height: 34px;
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 0 10px;
+  padding: 0 8px;
   border-bottom: 1px solid rgba(229, 231, 235, 0.075);
-  background: #0f1013;
+  background: rgba(255, 255, 255, 0.024);
 }
 
 .terminalTab {
-  height: 35px;
-  padding: 0 10px;
+  height: 34px;
+  padding: 0 9px;
   border: 0;
   border-bottom: 2px solid transparent;
   background: transparent;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -1471,8 +1502,8 @@ a {
 }
 
 .terminalIconButton {
-  width: 28px;
-  height: 28px;
+  width: 27px;
+  height: 27px;
   border: 0;
   border-radius: 7px;
   display: inline-flex;
@@ -1497,7 +1528,7 @@ a {
   padding: 0 12px;
   border: 0;
   border-top: 1px solid rgba(229, 231, 235, 0.09);
-  background: #0f1013;
+  background: rgba(255, 255, 255, 0.026);
   color: var(--text-soft);
   font: inherit;
   font-size: 12px;
@@ -1520,10 +1551,10 @@ a {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 10px 12px;
+  padding: 10px 12px 12px;
   background:
-    linear-gradient(90deg, rgba(124, 140, 255, 0.035), transparent 34%),
-    #08090b;
+    radial-gradient(circle at top left, rgba(143, 163, 255, 0.055), transparent 34%),
+    #07080a;
 }
 
 .terminalLines {
@@ -1605,7 +1636,7 @@ a {
 
 .terminalInputLine {
   margin-top: auto;
-  padding-top: 7px;
+  padding-top: 8px;
   border-top: 1px solid rgba(229, 231, 235, 0.055);
 }
 
@@ -1629,6 +1660,55 @@ a {
   width: 7px;
   height: 15px;
   background: rgba(229, 231, 235, 0.76);
+}
+
+:root[data-app-theme="light"] .hybridWorkspaceShell {
+  background:
+    linear-gradient(rgba(23, 23, 23, 0.024) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(23, 23, 23, 0.024) 1px, transparent 1px),
+    radial-gradient(circle at 50% -18%, rgba(182, 255, 107, 0.28), transparent 28%),
+    #f4efe4;
+  background-size: 28px 28px, 28px 28px, auto, auto;
+}
+
+:root[data-app-theme="light"] .hybridExplorerPane,
+:root[data-app-theme="light"] .hybridSidePane {
+  background: rgba(255, 255, 255, 0.72);
+}
+
+:root[data-app-theme="light"] .hybridEditorPane {
+  background: rgba(255, 255, 255, 0.64);
+}
+
+:root[data-app-theme="light"] .tabs,
+:root[data-app-theme="light"] .editorToolbar,
+:root[data-app-theme="light"] .paneTitle,
+:root[data-app-theme="light"] .terminalCollapsedBar {
+  background: rgba(23, 23, 23, 0.026);
+  border-color: rgba(23, 23, 23, 0.09);
+}
+
+:root[data-app-theme="light"] .tab {
+  background: rgba(23, 23, 23, 0.03);
+}
+
+:root[data-app-theme="light"] .tab.active {
+  background: #fbfbf9;
+  border-color: rgba(23, 23, 23, 0.12);
+}
+
+:root[data-app-theme="light"] .treeExplorer,
+:root[data-app-theme="light"] .previewMiniShell,
+:root[data-app-theme="light"] .previewViewport,
+:root[data-app-theme="light"] .previewEmbedSmall {
+  background: rgba(255, 255, 255, 0.48);
+  border-color: rgba(23, 23, 23, 0.1);
+}
+
+:root[data-app-theme="light"] .treeRow.active {
+  color: #171717;
+  background: rgba(182, 255, 107, 0.36);
+  box-shadow: inset 2px 0 0 rgba(23, 23, 23, 0.58);
 }
 
 .topbarModeSwitch,
@@ -7032,7 +7112,7 @@ a {
 :root[data-app-theme="light"] .fullAgentCenterStage,
 :root[data-app-theme="light"] .fullAgentPreview,
 :root[data-app-theme="light"] .hybridSidePane {
-  background: rgba(255, 255, 255, 0.62);
+  background: rgba(255, 255, 255, 0.72);
 }
 
 :root[data-app-theme="light"] .pane,
@@ -7050,7 +7130,7 @@ a {
 
 :root[data-app-theme="light"] .codeEditorShell,
 :root[data-app-theme="light"] .emptyEditor {
-  background: #ffffff;
+  background: #fbfbf9;
   border-color: rgba(23, 23, 23, 0.1);
 }
 
