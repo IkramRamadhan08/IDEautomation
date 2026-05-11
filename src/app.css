@@ -5677,8 +5677,9 @@ a {
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
-  gap: clamp(26px, 4vw, 52px);
-  padding: clamp(22px, 4vw, 42px) clamp(16px, 4vw, 44px);
+  gap: clamp(14px, 2.4vw, 28px);
+  min-height: 100vh;
+  padding: clamp(14px, 2.4vw, 26px) clamp(16px, 4vw, 44px) clamp(22px, 3vw, 34px);
   background:
     radial-gradient(circle at 11% 6%, rgba(156, 255, 95, 0.2), transparent 28%),
     radial-gradient(circle at 86% 13%, rgba(97, 232, 255, 0.18), transparent 32%),
@@ -5687,7 +5688,7 @@ a {
 }
 
 .workspaceSetupWrap::before {
-  content: "";
+  content: none;
   position: fixed;
   inset: 0;
   pointer-events: none;
@@ -5727,13 +5728,12 @@ a {
 
 .workspaceSetupCard {
   position: relative;
-  width: min(920px, 100%);
+  width: min(860px, 100%);
+  padding-top: clamp(18px, 2.4vw, 30px);
+  padding-bottom: clamp(18px, 2.4vw, 30px);
   border-radius: 0;
   border: 0;
-  background:
-    radial-gradient(circle at 8% 0%, rgba(156, 255, 95, 0.12), transparent 26%),
-    radial-gradient(circle at 92% 10%, rgba(97, 232, 255, 0.13), transparent 32%),
-    transparent;
+  background: transparent;
   color: rgba(246, 250, 245, 0.94);
   box-shadow: none;
   text-align: center;
@@ -5757,7 +5757,7 @@ a {
 .workspaceGateKicker {
   width: fit-content;
   margin: 0 auto;
-  padding: 8px 14px;
+  padding: 6px 12px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.07);
   border: 0;
@@ -5769,42 +5769,42 @@ a {
 }
 
 .workspaceGateTitle {
-  margin-top: 18px;
-  max-width: 760px;
+  margin-top: 12px;
+  max-width: 700px;
   margin-inline: auto;
   color: rgba(246, 250, 245, 0.96);
-  font-size: clamp(38px, 5.8vw, 72px);
+  font-size: clamp(32px, 4.6vw, 58px);
   font-weight: 680;
   line-height: 0.98;
   letter-spacing: 0;
 }
 
 .workspaceGateSubtitle {
-  margin-top: 14px;
-  max-width: 650px;
+  margin-top: 12px;
+  max-width: 620px;
   margin-inline: auto;
   color: rgba(246, 250, 245, 0.64);
-  font-size: 17px;
-  line-height: 1.7;
+  font-size: 15px;
+  line-height: 1.55;
 }
 
 .workspaceGateFeatureGrid {
-  margin-top: 28px;
+  margin-top: 18px;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 14px;
+  gap: 10px;
   background: transparent;
   border: 0;
   padding: 0;
 }
 
 .gateFeatureCard {
-  min-height: 168px;
+  min-height: 0;
   display: grid;
   align-content: start;
-  gap: 10px;
-  padding: 22px;
-  border-radius: 18px;
+  gap: 6px;
+  padding: 14px;
+  border-radius: 14px;
   border: 0;
   background: rgba(255, 255, 255, 0.06);
   box-shadow: none;
@@ -5813,15 +5813,15 @@ a {
 
 .gateFeatureTitle {
   color: rgba(246, 250, 245, 0.94);
-  font-size: 18px;
+  font-size: 14px;
   font-weight: 680;
 }
 
 .gateFeatureText {
   margin-top: 0;
   color: rgba(246, 250, 245, 0.62);
-  font-size: 14px;
-  line-height: 1.6;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .workspaceGateActions {
@@ -5829,13 +5829,13 @@ a {
   align-items: center;
   justify-content: center;
   gap: 12px;
-  margin-top: 30px;
+  margin-top: 18px;
   flex-wrap: wrap;
 }
 
 .workspaceSetupCard .workspaceGateActions .btn {
-  min-height: 46px;
-  min-width: 138px;
+  min-height: 44px;
+  min-width: 148px;
   border-radius: 999px;
   border-color: transparent;
   background: rgba(255, 255, 255, 0.08);
@@ -5848,7 +5848,7 @@ a {
   border: 0;
   background: linear-gradient(135deg, #84ff61, #61e8ff);
   color: #071015;
-  box-shadow: 0 18px 48px rgba(97, 232, 255, 0.18);
+  box-shadow: 0 12px 34px rgba(97, 232, 255, 0.16);
 }
 
 .apporaLoadingShell {
@@ -5943,9 +5943,9 @@ a {
 }
 
 .savedProjectsPanel {
-  margin-top: 30px;
-  padding: 18px;
-  border-radius: 18px;
+  margin-top: 18px;
+  padding: 14px;
+  border-radius: 14px;
   border: 0;
   background: rgba(255, 255, 255, 0.06);
   text-align: left;
@@ -5975,10 +5975,7 @@ a {
 
 :root[data-app-theme="light"] .workspaceSetupCard {
   border-color: transparent;
-  background:
-    radial-gradient(circle at 8% 0%, rgba(156, 255, 95, 0.2), transparent 26%),
-    radial-gradient(circle at 92% 10%, rgba(97, 232, 255, 0.22), transparent 32%),
-    transparent;
+  background: transparent;
   color: #111717;
   box-shadow: none;
 }
@@ -6100,6 +6097,9 @@ a {
   display: grid;
   gap: 8px;
   margin-top: 12px;
+  max-height: min(28vh, 220px);
+  overflow: auto;
+  padding-right: 2px;
 }
 
 .savedProjectItem {
@@ -6109,13 +6109,18 @@ a {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 14px;
-  border-radius: 16px;
+  padding: 12px;
+  border-radius: 12px;
   border: 0;
   background: rgba(255, 255, 255, 0.08);
   color: rgba(246, 250, 245, 0.92);
   text-align: left;
   cursor: pointer;
+}
+
+.savedProjectItem:focus-visible {
+  outline: 2px solid rgba(97, 232, 255, 0.75);
+  outline-offset: 2px;
 }
 
 .savedProjectItem:hover {
@@ -6497,7 +6502,7 @@ a {
   position: fixed;
   right: 24px;
   bottom: 24px;
-  z-index: 20;
+  z-index: 1000;
 }
 
 .agentOrbBubble {
@@ -7166,8 +7171,10 @@ a {
   }
 
   .agentOrb {
-    right: 14px;
-    bottom: 14px;
+    right: max(14px, env(safe-area-inset-right));
+    bottom: max(14px, env(safe-area-inset-bottom));
+    z-index: 1000;
+    touch-action: manipulation;
   }
 
   .agentOrbPanel {
@@ -7260,6 +7267,75 @@ a {
   }
 }
 
+@media (max-width: 720px), (pointer: coarse) {
+  .agentOrb {
+    right: max(12px, env(safe-area-inset-right));
+    bottom: max(12px, env(safe-area-inset-bottom));
+    left: auto;
+    transform: none !important;
+  }
+
+  .agentOrb.open {
+    left: 12px;
+    right: 12px;
+    bottom: max(12px, env(safe-area-inset-bottom));
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    transform: none !important;
+    z-index: 10000;
+  }
+
+  .agentOrbBubble,
+  .agentOrbDock {
+    display: none;
+  }
+
+  .agentOrbPanel {
+    width: 100%;
+    max-height: calc(100dvh - 104px);
+    margin: 0 0 10px;
+    border-radius: 20px;
+    display: flex;
+    flex-direction: column;
+    background: #07101b;
+  }
+
+  .agentOrbHeader {
+    flex: 0 0 auto;
+    padding: 14px 14px 0;
+  }
+
+  .agentOrbContent {
+    min-height: 0;
+    overflow: auto;
+    padding: 14px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .agentOrbPrompt {
+    min-height: 104px;
+    max-height: 28dvh;
+  }
+
+  .agentOrbQuickGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .agentOrbActions {
+    position: sticky;
+    bottom: 0;
+    padding-top: 8px;
+    background: linear-gradient(180deg, rgba(7, 16, 27, 0), #07101b 34%);
+  }
+
+  .agentOrbButton {
+    width: 60px;
+    height: 60px;
+    touch-action: manipulation;
+  }
+}
+
 :root[data-app-theme="light"] .topbar,
 :root[data-app-theme="light"] .pane,
 :root[data-app-theme="light"] .missionCard,
@@ -7286,10 +7362,7 @@ a {
 }
 
 :root[data-app-theme="light"] .workspaceSetupCard {
-  background:
-    radial-gradient(circle at 8% 0%, rgba(156, 255, 95, 0.2), transparent 26%),
-    radial-gradient(circle at 92% 10%, rgba(97, 232, 255, 0.22), transparent 32%),
-    transparent;
+  background: transparent;
 }
 
 :root[data-app-theme="light"] .codeEditorShell,

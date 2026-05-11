@@ -519,7 +519,7 @@ def _model_from_global_settings(provider: str) -> str:
 
 def _model_from_preferences(provider: str, prefs: UserPreferencesRecord) -> str:
     if provider == NINE_ROUTER_PROVIDER:
-        return prefs.openrouter_model or getattr(settings_mod.settings, "nine_router_model", "free-forever")
+        return prefs.nine_router_model or prefs.openrouter_model or getattr(settings_mod.settings, "nine_router_model", "free-forever")
     if provider == OPENAI_PROVIDER:
         return prefs.openai_model or ""
     if provider == ANTHROPIC_PROVIDER:

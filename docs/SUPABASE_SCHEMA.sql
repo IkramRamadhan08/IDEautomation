@@ -47,6 +47,7 @@ create table if not exists public.user_settings (
   build_mode text,
   openai_codex_model text,
   anthropic_model text,
+  nine_router_model text,
   openrouter_model text,
   groq_model text,
   gemini_model text,
@@ -103,6 +104,14 @@ create table if not exists public.agent_jobs (
 
 alter table public.agent_jobs
   add column if not exists request_payload jsonb not null default '{}'::jsonb;
+
+alter table if exists public.user_settings
+  add column if not exists nine_router_model text,
+  add column if not exists groq_model text,
+  add column if not exists gemini_model text,
+  add column if not exists together_model text,
+  add column if not exists cerebras_model text,
+  add column if not exists xai_model text;
 
 create table if not exists public.agent_job_events (
   id bigserial primary key,

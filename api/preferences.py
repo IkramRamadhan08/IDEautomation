@@ -11,7 +11,7 @@ from api.supabase_store import get_supabase_admin, has_supabase
 USER_SETTINGS_TABLE = "user_settings"
 PROJECT_PREFERENCES_TABLE = "project_preferences"
 HAS_PROJECT_PREFERENCES = False
-OPTIONAL_USER_SETTINGS_COLUMNS = ("groq_model", "gemini_model", "together_model", "cerebras_model", "xai_model")
+OPTIONAL_USER_SETTINGS_COLUMNS = ("nine_router_model", "groq_model", "gemini_model", "together_model", "cerebras_model", "xai_model")
 
 
 class UserPreferencesRecord(BaseModel):
@@ -20,6 +20,7 @@ class UserPreferencesRecord(BaseModel):
     build_mode: str | None = None
     openai_model: str | None = None
     anthropic_model: str | None = None
+    nine_router_model: str | None = None
     openrouter_model: str | None = None
     groq_model: str | None = None
     gemini_model: str | None = None
@@ -40,6 +41,7 @@ class UserPreferencesUpdateReq(BaseModel):
     build_mode: str | None = None
     openai_model: str | None = None
     anthropic_model: str | None = None
+    nine_router_model: str | None = None
     openrouter_model: str | None = None
     groq_model: str | None = None
     gemini_model: str | None = None
@@ -85,6 +87,7 @@ def get_user_preferences(*, profile_id: str) -> UserPreferencesRecord:
             build_mode=row.get("build_mode"),
             openai_model=row.get("openai_codex_model"),
             anthropic_model=row.get("anthropic_model"),
+            nine_router_model=row.get("nine_router_model") or row.get("openrouter_model"),
             openrouter_model=row.get("openrouter_model"),
             groq_model=row.get("groq_model"),
             gemini_model=row.get("gemini_model"),
@@ -103,6 +106,7 @@ def upsert_user_preferences(*, profile_id: str, req: UserPreferencesUpdateReq) -
         "build_mode": req.build_mode,
         "openai_codex_model": req.openai_model,
         "anthropic_model": req.anthropic_model,
+        "nine_router_model": req.nine_router_model,
         "openrouter_model": req.openrouter_model,
         "groq_model": req.groq_model,
         "gemini_model": req.gemini_model,
@@ -126,6 +130,7 @@ def upsert_user_preferences(*, profile_id: str, req: UserPreferencesUpdateReq) -
         build_mode=row.get("build_mode"),
         openai_model=row.get("openai_codex_model"),
         anthropic_model=row.get("anthropic_model"),
+        nine_router_model=row.get("nine_router_model") or row.get("openrouter_model"),
         openrouter_model=row.get("openrouter_model"),
         groq_model=row.get("groq_model"),
         gemini_model=row.get("gemini_model"),

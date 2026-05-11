@@ -135,6 +135,7 @@ export type UserPreferences = {
   build_mode: BuildMode | null;
   openai_model: string | null;
   anthropic_model: string | null;
+  nine_router_model: string | null;
   openrouter_model: string | null;
   groq_model: string | null;
   gemini_model: string | null;

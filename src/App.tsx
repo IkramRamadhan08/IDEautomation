@@ -211,7 +211,7 @@ export default function App() {
 
   const modelFromPreferences = (provider: ProviderChoice, prefs: UserPreferences | null): string => {
     if (!prefs) return "";
-    if (provider === "nine_router") return prefs.openrouter_model || "free-forever";
+    if (provider === "nine_router") return prefs.nine_router_model || prefs.openrouter_model || "free-forever";
     if (provider === "openai") return prefs.openai_model || "";
     if (provider === "anthropic") return prefs.anthropic_model || "";
     if (provider === "openrouter") return prefs.openrouter_model || "";
@@ -829,7 +829,6 @@ export default function App() {
       };
       if (modelDraft) {
         patch.nine_router_model = modelDraft;
-        patch.openrouter_model = modelDraft;
         if (llmProviderDraft === "openai") patch.openai_model = modelDraft;
         else if (llmProviderDraft === "anthropic") patch.anthropic_model = modelDraft;
         else if (llmProviderDraft === "openrouter") patch.openrouter_model = modelDraft;
@@ -857,7 +856,8 @@ export default function App() {
           build_mode: buildModeDraft,
           openai_model: llmProviderDraft === "openai" ? modelDraft : null,
           anthropic_model: llmProviderDraft === "anthropic" ? modelDraft : null,
-          openrouter_model: modelDraft,
+          nine_router_model: modelDraft,
+          openrouter_model: llmProviderDraft === "openrouter" ? modelDraft : null,
           groq_model: llmProviderDraft === "groq" ? modelDraft : null,
           gemini_model: llmProviderDraft === "gemini" ? modelDraft : null,
           together_model: llmProviderDraft === "together" ? modelDraft : null,
@@ -1308,6 +1308,10 @@ export default function App() {
             Open an existing project, upload one, or create a new Supabase-backed project for the agent.
             {isHostedBrowser() ? " Project text files are restored from Supabase between serverless runs." : ""}
           </div>
+          <div className="workspaceGateActions">
+            <button className="btn primary" onClick={pickWorkspace}>{isHostedBrowser() ? "Upload project…" : "Open project…"}</button>
+            <button className="btn" onClick={() => setNewProjectOpen(true)}>New project</button>
+          </div>
           <div className="workspaceGateFeatureGrid">
             <div className="gateFeatureCard">
               <div className="gateFeatureTitle">Open or upload project</div>
@@ -1317,10 +1321,6 @@ export default function App() {
               <div className="gateFeatureTitle">Create new project</div>
               <div className="gateFeatureText">Best when you want Clara or Raka to scaffold a fresh app from a simple brief.</div>
             </div>
-          </div>
-          <div className="workspaceGateActions">
-            <button className="btn primary" onClick={pickWorkspace}>{isHostedBrowser() ? "Upload project…" : "Open project…"}</button>
-            <button className="btn" onClick={() => setNewProjectOpen(true)}>New project</button>
           </div>
           {hasVerifiedHostedAuth && hostedProjects.length > 0 ? (
             <div className="savedProjectsPanel">

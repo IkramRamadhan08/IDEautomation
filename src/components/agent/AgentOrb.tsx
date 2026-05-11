@@ -73,10 +73,12 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
   const [orbMode, setOrbMode] = React.useState<OrbMode>("idle");
   const [bubbleText, setBubbleText] = React.useState<string>(modeProfile.idleLines[0]);
   const [lastInteractionAt, setLastInteractionAt] = React.useState<number>(() => Date.now());
+  const [isCompactPointer, setIsCompactPointer] = React.useState(false);
 
   if (!ws) return null;
 
   const handleStop = (_e: unknown, data: { x: number; y: number }) => {
+    if (isCompactPointer) return;
     onSetPosition({ x: data.x, y: data.y });
   };
 
@@ -244,6 +246,18 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
   }, [agentReply, agentWidgetOpen, modeProfile, triggerReaction]);
 
   React.useEffect(() => {
+    const query = window.matchMedia("(max-width: 720px), (pointer: coarse)");
+    const sync = () => {
+      const compact = query.matches;
+      setIsCompactPointer(compact);
+      if (compact && agentOrbPosition) onSetPosition(null);
+    };
+    sync();
+    query.addEventListener("change", sync);
+    return () => query.removeEventListener("change", sync);
+  }, [agentOrbPosition, onSetPosition]);
+
+  React.useEffect(() => {
     if (!agentWidgetOpen) return;
     if (agentStatus !== "idle") return;
     if (!promptHasIntent) return;
@@ -272,11 +286,17 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
                   : "Ready";
 
   const initialPosition = agentOrbPosition || { x: 0, y: 0 };
+  const openOrb = () => {
+    wakeUp(false);
+    onToggleOpen();
+  };
 
   return (
     <Draggable
       nodeRef={nodeRef}
       defaultPosition={initialPosition}
+      position={isCompactPointer ? { x: 0, y: 0 } : undefined}
+      disabled={isCompactPointer}
       onStop={handleStop}
       cancel=".agentOrbPanel"
     >
@@ -413,15 +433,16 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
         </AnimatePresence>
 
         <motion.button
+          type="button"
+          aria-label={`${agentWidgetOpen ? "Close" : "Open"} ${modeProfile.personaName} agent command panel`}
           className={`agentOrbButton ${agentStatus} ${orbMode}`}
-          onClick={() => {
-            wakeUp(false);
-            onToggleOpen();
-          }}
+          onClick={openOrb}
           onMouseEnter={() => wakeUp(false)}
           onDoubleClick={() => wakeUp(true)}
           animate={
-            orbMode === "sleeping"
+            isCompactPointer
+              ? { y: 0, rotate: 0, scale: 1 }
+              : orbMode === "sleeping"
               ? { y: [0, -2, 0], scale: [1, 0.98, 1] }
               : orbMode === "playful"
                 ? { rotate: [0, -8, 8, 0], scale: [1, 1.03, 1] }
@@ -433,7 +454,7 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
                       ? { scale: [1, 1.06, 1] }
                       : { y: [0, -4, 0] }
           }
-          transition={{ duration: orbMode === "playful" ? 0.5 : orbMode === "surprised" ? 0.35 : orbMode === "celebrate" ? 0.7 : orbMode === "working" ? 0.9 : 2.6, repeat: orbMode === "surprised" ? 1 : Infinity, ease: "easeInOut" }}
+          transition={isCompactPointer ? { duration: 0.12 } : { duration: orbMode === "playful" ? 0.5 : orbMode === "surprised" ? 0.35 : orbMode === "celebrate" ? 0.7 : orbMode === "working" ? 0.9 : 2.6, repeat: orbMode === "surprised" ? 1 : Infinity, ease: "easeInOut" }}
         >
           <span className={`agentOrbFace ${orbMode}`}>
             <span className="agentOrbPersonaMark">{buildMode === "full-agent" ? "C" : "R"}</span>
