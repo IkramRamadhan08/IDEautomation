@@ -1059,6 +1059,12 @@ export default function App() {
       ["Portfolio app", "Content pages, templates, deployment"],
     ];
     const providers = ["OpenAI", "Gemini", "Anthropic", "OpenRouter", "Groq", "Together", "Cerebras", "xAI", "Supabase", "Vercel"];
+    const triggerLandingBurst = (target: HTMLDivElement) => {
+      target.style.setProperty("--appora-burst", "1");
+      window.setTimeout(() => {
+        target.style.setProperty("--appora-burst", "0");
+      }, 520);
+    };
     const handleLandingPointerMove = (event: PointerEvent<HTMLDivElement>) => {
       const target = event.currentTarget;
       target.style.setProperty("--appora-cursor-x", `${event.clientX}px`);
@@ -1075,6 +1081,7 @@ export default function App() {
       id="top"
       onPointerMove={handleLandingPointerMove}
       onPointerLeave={handleLandingPointerLeave}
+      onPointerDown={(event) => triggerLandingBurst(event.currentTarget)}
     >
       <Toaster position="top-right" richColors />
       <div className="apporaCursorLiquid" aria-hidden="true">
@@ -1082,6 +1089,12 @@ export default function App() {
         <span className="apporaCursorBlob one" />
         <span className="apporaCursorBlob two" />
         <span className="apporaCursorBlob three" />
+        <span className="apporaCursorDrop d1" />
+        <span className="apporaCursorDrop d2" />
+        <span className="apporaCursorDrop d3" />
+        <span className="apporaCursorDrop d4" />
+        <span className="apporaCursorDrop d5" />
+        <span className="apporaCursorDrop d6" />
         <span className="apporaCursorGlint" />
       </div>
       <header className="apporaNav">
