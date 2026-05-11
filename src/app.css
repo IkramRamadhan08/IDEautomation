@@ -5583,6 +5583,37 @@ a {
   }
 }
 
+@keyframes apporaLoaderFloat {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-1deg);
+  }
+  50% {
+    transform: translateY(-12px) rotate(1deg);
+  }
+}
+
+@keyframes apporaLoaderGlow {
+  0%,
+  100% {
+    opacity: 0.62;
+    transform: scale(0.96);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.04);
+  }
+}
+
+@keyframes apporaLoaderProgress {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(260%);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .authLanding {
     scroll-behavior: auto;
@@ -5612,6 +5643,12 @@ a {
   }
 
   .authMarqueeTrack {
+    animation: none;
+  }
+
+  .apporaLoadingOrbit,
+  .apporaLoadingShell::before,
+  .apporaLoadingProgress span {
     animation: none;
   }
 }
@@ -5814,6 +5851,97 @@ a {
   box-shadow: 0 18px 48px rgba(97, 232, 255, 0.18);
 }
 
+.apporaLoadingShell {
+  position: relative;
+  z-index: 1;
+  width: min(460px, 100%);
+  min-height: 430px;
+  margin: auto;
+  padding: 34px 28px 30px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  color: rgba(246, 250, 245, 0.94);
+  text-align: center;
+}
+
+.apporaLoadingShell::before {
+  content: "";
+  position: absolute;
+  inset: 36px 54px 118px;
+  z-index: -1;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 52% 45%, rgba(97, 232, 255, 0.22), transparent 36%),
+    radial-gradient(circle at 38% 64%, rgba(156, 255, 95, 0.16), transparent 38%);
+  filter: blur(4px);
+  animation: apporaLoaderGlow 3.8s ease-in-out infinite;
+}
+
+.apporaLoadingOrbit {
+  width: min(250px, 62vw);
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.08), transparent 56%),
+    conic-gradient(from 120deg, rgba(97, 232, 255, 0), rgba(97, 232, 255, 0.28), rgba(156, 255, 95, 0.22), rgba(97, 232, 255, 0));
+  border: 1px solid rgba(209, 250, 229, 0.12);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 26px 70px rgba(0, 0, 0, 0.22);
+  animation: apporaLoaderFloat 4.4s ease-in-out infinite;
+}
+
+.apporaLoadingAstronaut {
+  width: 84%;
+  height: 84%;
+  display: block;
+  object-fit: contain;
+  border-radius: 999px;
+  filter: drop-shadow(0 18px 24px rgba(0, 0, 0, 0.22));
+}
+
+.apporaLoadingCopy {
+  display: grid;
+  gap: 8px;
+}
+
+.apporaLoadingTitle {
+  color: rgba(246, 250, 245, 0.96);
+  font-size: clamp(24px, 3.2vw, 34px);
+  font-weight: 680;
+  line-height: 1.04;
+  letter-spacing: 0;
+}
+
+.apporaLoadingSubtitle {
+  max-width: 360px;
+  color: rgba(246, 250, 245, 0.62);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.apporaLoadingProgress {
+  width: min(220px, 62vw);
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.apporaLoadingProgress span {
+  display: block;
+  width: 44%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, #61e8ff, #9cff5f, transparent);
+  animation: apporaLoaderProgress 1.35s ease-in-out infinite;
+}
+
 .savedProjectsPanel {
   margin-top: 30px;
   padding: 18px;
@@ -5888,6 +6016,42 @@ a {
   border-color: transparent;
   background: rgba(255, 255, 255, 0.76);
   color: #111717;
+}
+
+:root[data-app-theme="light"] .apporaLoadingShell {
+  color: #111717;
+}
+
+:root[data-app-theme="light"] .apporaLoadingShell::before {
+  background:
+    radial-gradient(circle at 50% 44%, rgba(97, 232, 255, 0.26), transparent 36%),
+    radial-gradient(circle at 38% 64%, rgba(156, 255, 95, 0.24), transparent 38%);
+}
+
+:root[data-app-theme="light"] .apporaLoadingOrbit {
+  background:
+    radial-gradient(circle at 48% 48%, rgba(255, 255, 255, 0.72), transparent 58%),
+    conic-gradient(from 120deg, rgba(97, 232, 255, 0.02), rgba(97, 232, 255, 0.34), rgba(156, 255, 95, 0.32), rgba(97, 232, 255, 0.02));
+  border-color: rgba(17, 23, 23, 0.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.76),
+    0 24px 60px rgba(97, 232, 255, 0.16);
+}
+
+:root[data-app-theme="light"] .apporaLoadingAstronaut {
+  filter: drop-shadow(0 18px 24px rgba(17, 23, 23, 0.14)) saturate(1.04);
+}
+
+:root[data-app-theme="light"] .apporaLoadingTitle {
+  color: #111717;
+}
+
+:root[data-app-theme="light"] .apporaLoadingSubtitle {
+  color: rgba(17, 23, 23, 0.62);
+}
+
+:root[data-app-theme="light"] .apporaLoadingProgress {
+  background: rgba(17, 23, 23, 0.08);
 }
 
 :root[data-app-theme="light"] .savedProjectsPanel {

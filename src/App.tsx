@@ -80,8 +80,33 @@ import { ensurePreviewRunningFlow, isHostedBrowser } from "./preview/runtime";
 const SettingsModal = lazy(() => import("./components/settings/SettingsModal").then((module) => ({ default: module.SettingsModal })));
 const HybridWorkspace = lazy(() => import("./modes/HybridWorkspace").then((module) => ({ default: module.HybridWorkspace })));
 const FullAgentWorkspace = lazy(() => import("./modes/FullAgentWorkspace").then((module) => ({ default: module.FullAgentWorkspace })));
+const astronautLoaderUrl = new URL("../Astronaut Illustration.webm", import.meta.url).href;
 
 type AppTheme = "light" | "dark";
+
+function ApporaLoading({ title, subtitle }: { title: string; subtitle?: string }) {
+  return (
+    <div className="apporaLoadingShell" role="status" aria-live="polite">
+      <div className="apporaLoadingOrbit" aria-hidden="true">
+        <video
+          className="apporaLoadingAstronaut"
+          src={astronautLoaderUrl}
+          autoPlay
+          muted
+          loop
+          playsInline
+        />
+      </div>
+      <div className="apporaLoadingCopy">
+        <div className="apporaLoadingTitle">{title}</div>
+        {subtitle ? <div className="apporaLoadingSubtitle">{subtitle}</div> : null}
+      </div>
+      <div className="apporaLoadingProgress" aria-hidden="true">
+        <span />
+      </div>
+    </div>
+  );
+}
 
 function getDefaultAssistPaneWidth() {
   if (typeof window === "undefined") return 280;
@@ -1322,9 +1347,7 @@ export default function App() {
   if (googleAuthLoading) {
     return (
       <div className="workspaceGateWrap workspaceSetupWrap">
-        <div className="workspaceGateCard pane">
-          <div className="workspaceGateTitle">Loading…</div>
-        </div>
+        <ApporaLoading title="Preparing Appora" subtitle="Checking your session and workspace state." />
       </div>
     );
   }
@@ -1458,7 +1481,7 @@ export default function App() {
 
       <div style={{ display: "none" }}>{hostedProjects.length}</div>
       <main className="appMain">
-        <Suspense fallback={<div className="workspaceGateWrap"><div className="workspaceGateCard pane"><div className="workspaceGateTitle">Loading workspace…</div></div></div>}>
+        <Suspense fallback={<ApporaLoading title="Loading workspace" subtitle="Bringing the IDE surface online." />}>
           {buildMode === "hybrid" ? renderHybridMode() : renderFullAgentMode()}
         </Suspense>
       </main>
