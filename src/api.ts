@@ -246,6 +246,33 @@ export async function createHostedProject(payload: { name: string; slug?: string
   return r.json();
 }
 
+export async function renameHostedProject(projectId: string, payload: { name: string }): Promise<{ ok: boolean; project: HostedProject }> {
+  const r = await apiFetch(`/api/projects/${encodeURIComponent(projectId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function archiveHostedProject(projectId: string): Promise<{ ok: boolean; project: HostedProject }> {
+  const r = await apiFetch(`/api/projects/${encodeURIComponent(projectId)}`, {
+    method: "DELETE",
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function exportProjectZip(projectRoot: string): Promise<{ blob: Blob; filename: string }> {
+  const r = await apiFetch(`/api/projects/export?project_root=${encodeURIComponent(projectRoot)}`);
+  if (!r.ok) throw new Error(await r.text());
+  const disposition = r.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename="?([^";]+)"?/i);
+  const fallback = `${(projectRoot || "appora-project").split("/").filter(Boolean).pop() || "appora-project"}.zip`;
+  return { blob: await r.blob(), filename: match?.[1] || fallback };
+}
+
 export async function getWorkspace(): Promise<WorkspaceInfo> {
   const r = await apiFetch(`/api/workspace`);
   if (!r.ok) throw new Error(await r.text());

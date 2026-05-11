@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path, PurePosixPath
 from typing import Literal
 import hashlib
+import io
 import os
 import shutil
 import threading
@@ -12,6 +13,7 @@ import re
 import shlex
 import subprocess
 import uuid
+import zipfile
 from html import unescape
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request as URLRequest, urlopen
@@ -107,6 +109,7 @@ SENSITIVE_HOSTED_API_PREFIXES = (
     "/api/run",
     "/api/agent",
     "/api/assets",
+    "/api/projects/export",
     "/api/project/validate",
     "/api/preview/audit",
     "/api/supabase/rag",
@@ -198,6 +201,57 @@ HOSTED_SHELL_SYNC_EXCLUDED_DIRS = {
     "node_modules",
     "venv",
 }
+
+PROJECT_EXPORT_EXCLUDED_DIRS = HOSTED_SHELL_SYNC_EXCLUDED_DIRS | {
+    ".voiceide",
+    ".idea",
+    ".vscode",
+}
+PROJECT_EXPORT_EXCLUDED_FILES = {
+    ".env",
+    ".env.local",
+    ".env.production",
+    ".env.development",
+}
+PROJECT_EXPORT_MAX_FILES = 2000
+PROJECT_EXPORT_MAX_BYTES_PER_FILE = 8_000_000
+PROJECT_EXPORT_MAX_TOTAL_BYTES = 80_000_000
+
+
+def _safe_export_filename(project_root: str) -> str:
+    name = str(project_root or "appora-project").strip().strip("/") or "appora-project"
+    name = name.split("/")[-1] or "appora-project"
+    name = re.sub(r"[^a-zA-Z0-9._-]+", "-", name).strip("-._")
+    return (name or "appora-project")[:80]
+
+
+def _iter_project_export_files(project_dir: Path) -> list[Path]:
+    files: list[Path] = []
+    total_bytes = 0
+    for path in sorted(project_dir.rglob("*")):
+        if len(files) >= PROJECT_EXPORT_MAX_FILES:
+            break
+        if not path.is_file():
+            continue
+        try:
+            rel = PurePosixPath(str(path.relative_to(project_dir)))
+        except Exception:
+            continue
+        if any(part in PROJECT_EXPORT_EXCLUDED_DIRS for part in rel.parts):
+            continue
+        if rel.name in PROJECT_EXPORT_EXCLUDED_FILES or rel.name.startswith(".env."):
+            continue
+        try:
+            size = path.stat().st_size
+        except Exception:
+            continue
+        if size > PROJECT_EXPORT_MAX_BYTES_PER_FILE:
+            continue
+        if total_bytes + size > PROJECT_EXPORT_MAX_TOTAL_BYTES:
+            break
+        total_bytes += size
+        files.append(path)
+    return files
 
 
 def _sync_hosted_project_text_files_after_shell(ws_root: Path, cwd: Path, max_files: int = 500, max_bytes: int = 400_000) -> int:
@@ -1886,6 +1940,36 @@ def fs_list(req: ListReq):
         if split:
             _hydrate_hosted_project(root, split[0])
     return {"items": list_tree(_ws(), req.path)}
+
+
+@app.get("/api/projects/export")
+def export_project_zip(project_root: str):
+    root = _ws()
+    project = str(project_root or ".").strip().strip("/") or "."
+    if project == ".":
+        raise HTTPException(400, "Choose a project before exporting")
+    _hydrate_hosted_project(root, project)
+    project_dir = safe_join(root, project)
+    if not project_dir.exists() or not project_dir.is_dir():
+        raise HTTPException(404, "Project not found")
+
+    files = _iter_project_export_files(project_dir)
+    if not files:
+        raise HTTPException(404, "No exportable files found")
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in files:
+            rel = PurePosixPath(str(path.relative_to(project_dir))).as_posix()
+            archive.write(path, rel)
+    buffer.seek(0)
+
+    filename = f"{_safe_export_filename(project)}.zip"
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Cache-Control": "no-store",
+    }
+    return Response(content=buffer.getvalue(), media_type="application/zip", headers=headers)
 
 
 class ReadReq(BaseModel):

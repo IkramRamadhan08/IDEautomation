@@ -28,6 +28,9 @@ import {
   listHostedProjects,
   listProjectTemplates,
   createHostedProject,
+  renameHostedProject,
+  archiveHostedProject,
+  exportProjectZip,
   listCheckpoints,
   restoreCheckpoint,
   type HostedProject,
@@ -59,19 +62,25 @@ import {
   ArrowRight,
   Bot,
   Boxes,
+  Check,
   Code2,
   Database,
+  Download,
   Globe2,
   HelpCircle,
   Layers3,
   Moon,
+  Pencil,
   PlayCircle,
+  RefreshCw,
   Rocket,
   ShieldCheck,
   Sparkles,
   Sun,
   Terminal,
+  Trash2,
   Workflow,
+  X,
 } from "lucide-react";
 import { runAgentWorkflow } from "./agent/workflow";
 import { errorMessage, notifyToast } from "./app/feedback";
@@ -152,10 +161,16 @@ export default function App() {
     return saved === "dark" || saved === "light" ? saved : "light";
   });
   const [newProjectOpen, setNewProjectOpen] = useState(false);
+  const [projectManagerOpen, setProjectManagerOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [projectTemplates, setProjectTemplates] = useState<ProjectTemplate[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState("saas-dashboard");
   const [newProjectSaving, setNewProjectSaving] = useState(false);
+  const [projectsRefreshing, setProjectsRefreshing] = useState(false);
+  const [projectMutatingId, setProjectMutatingId] = useState<string>("");
+  const [projectExporting, setProjectExporting] = useState(false);
+  const [projectEditingId, setProjectEditingId] = useState<string>("");
+  const [projectRenameDraft, setProjectRenameDraft] = useState("");
   const [settings, setSettings] = useState<SettingsInfo | null>(null);
   const [llmProviderDraft, setLlmProviderDraft] = useState<ProviderChoice>("");
   const [buildMode, setBuildMode] = useState<BuildMode>("hybrid");
@@ -209,6 +224,21 @@ export default function App() {
 
   const toggleAppTheme = () => setAppTheme((theme) => theme === "dark" ? "light" : "dark");
 
+  const navigateTo = useCallback((path: string) => {
+    if (typeof window === "undefined") return;
+    const nextPath = path || "/";
+    if (window.location.pathname !== nextPath) {
+      window.history.pushState({}, "", nextPath);
+    }
+    setRoutePath(nextPath);
+  }, []);
+
+  useEffect(() => {
+    const handlePopState = () => setRoutePath(window.location.pathname || "/");
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
   const modelFromPreferences = (provider: ProviderChoice, prefs: UserPreferences | null): string => {
     if (!prefs) return "";
     if (provider === "nine_router") return prefs.nine_router_model || prefs.openrouter_model || "free-forever";
@@ -223,6 +253,10 @@ export default function App() {
     return "";
   };
   const [isResizingAssistPane, setIsResizingAssistPane] = useState(false);
+  const [routePath, setRoutePath] = useState(() => {
+    if (typeof window === "undefined") return "/";
+    return window.location.pathname || "/";
+  });
 
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
@@ -460,16 +494,24 @@ export default function App() {
     }
   };
 
-  const startGoogleLogin = async () => {
+  const startGoogleLogin = async (redirectPath = "/app") => {
     try {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
-        options: { redirectTo: window.location.origin },
+        options: { redirectTo: `${window.location.origin}${redirectPath}` },
       });
       if (error) throw error;
     } catch (e) {
       toast.error(errorMessage(e));
     }
+  };
+
+  const openAppora = () => {
+    if (googleAuth?.authenticated) {
+      navigateTo("/app");
+      return;
+    }
+    void startGoogleLogin("/app");
   };
 
   const logoutToStart = async () => {
@@ -486,6 +528,7 @@ export default function App() {
   // --- Workspace & Files ---
   const refreshProjects = async () => {
     const requestAuthUserKey = latestAuthUserKeyRef.current;
+    setProjectsRefreshing(true);
     try {
       const [detected, hosted, templates] = await Promise.all([
         detectProjects().catch(() => ({ ok: true, projects: [] as ProjectInfo[] })),
@@ -501,6 +544,8 @@ export default function App() {
       setProjects([]);
       setHostedProjects([]);
       setProjectTemplates([]);
+    } finally {
+      setProjectsRefreshing(false);
     }
   };
 
@@ -613,7 +658,9 @@ export default function App() {
     setSelectedProject(project);
     setActiveFile("");
     setOpenFiles([]);
+    setBuffers({});
     setPreviewUrl("");
+    setPreviewFrameKey((value) => value + 1);
   };
 
   const openSavedProject = async (projectRoot: string) => {
@@ -623,10 +670,76 @@ export default function App() {
         setWs(provisioned.path);
       }
       selectProject(projectRoot);
+      await refreshExplorer(projectRoot);
+      setProjectManagerOpen(false);
       setEditorStatus(`Project ready: ${projectRoot}`);
       toast.success("Project dibuka");
     } catch (e) {
       toast.error("Gagal membuka project: " + errorMessage(e));
+    }
+  };
+
+  const beginRenameProject = (project: HostedProjectType) => {
+    setProjectEditingId(project.id);
+    setProjectRenameDraft(project.name);
+  };
+
+  const saveProjectRename = async (project: HostedProjectType) => {
+    const name = projectRenameDraft.trim();
+    if (!name || projectMutatingId) return;
+    setProjectMutatingId(project.id);
+    try {
+      const res = await renameHostedProject(project.id, { name });
+      setHostedProjects((prev) => prev.map((item) => item.id === project.id ? res.project : item));
+      setProjectEditingId("");
+      setProjectRenameDraft("");
+      toast.success("Project renamed");
+    } catch (e) {
+      toast.error("Gagal rename project: " + errorMessage(e));
+    } finally {
+      setProjectMutatingId("");
+    }
+  };
+
+  const archiveProjectFromList = async (project: HostedProjectType) => {
+    setProjectMutatingId(project.id);
+    try {
+      await archiveHostedProject(project.id);
+      await refreshProjects();
+      if (selectedProject === project.root) {
+        const next = hostedProjects.find((item) => item.id !== project.id)?.root || ".";
+        selectProject(next);
+      }
+      toast.success("Project archived");
+    } catch (e) {
+      toast.error("Gagal archive project: " + errorMessage(e));
+    } finally {
+      setProjectMutatingId("");
+    }
+  };
+
+  const downloadProjectToDevice = async (projectRoot = selectedProject) => {
+    const target = (projectRoot || selectedProject || ".").trim();
+    if (!target || target === ".") {
+      toast.error("Pilih project dulu sebelum download");
+      return;
+    }
+    setProjectExporting(true);
+    try {
+      const exported = await exportProjectZip(target);
+      const url = URL.createObjectURL(exported.blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = exported.filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      toast.success(`Project disimpan: ${exported.filename}`);
+    } catch (e) {
+      toast.error("Gagal download project: " + errorMessage(e));
+    } finally {
+      setProjectExporting(false);
     }
   };
 
@@ -963,6 +1076,7 @@ export default function App() {
       onPointerMove={handleLandingPointerMove}
       onPointerLeave={handleLandingPointerLeave}
     >
+      <Toaster position="top-right" richColors />
       <div className="apporaCursorLiquid" aria-hidden="true">
         <span className="apporaCursorCore" />
         <span className="apporaCursorBlob one" />
@@ -985,7 +1099,7 @@ export default function App() {
           <button className="apporaThemeToggle" type="button" onClick={toggleAppTheme} title={`Switch to ${appTheme === "dark" ? "light" : "dark"} mode`} aria-label={`Switch to ${appTheme === "dark" ? "light" : "dark"} mode`}>
             {appTheme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
           </button>
-          <button className="apporaNavCta" onClick={startGoogleLogin}>
+          <button className="apporaNavCta" onClick={openAppora}>
             Start Building
             <ArrowRight size={16} />
           </button>
@@ -1001,7 +1115,7 @@ export default function App() {
               live preview, project memory, Supabase data, and Vercel-ready output.
             </p>
             <div className="apporaHeroActions">
-              <button className="apporaPrimaryButton" onClick={startGoogleLogin}>
+              <button className="apporaPrimaryButton" onClick={openAppora}>
                 Continue With Google
                 <ArrowRight size={17} />
               </button>
@@ -1173,7 +1287,7 @@ export default function App() {
 
         <section className="apporaFinalCta">
           <h2>Start With An Idea. Leave With A Project You Can Keep Improving.</h2>
-          <button className="apporaPrimaryButton" onClick={startGoogleLogin}>
+          <button className="apporaPrimaryButton" onClick={openAppora}>
             Open Appora
             <ArrowRight size={17} />
           </button>
@@ -1208,7 +1322,7 @@ export default function App() {
           </div>
           <div className="apporaFooterBottom">
             <span>Bring your own keys. Keep your projects saved.</span>
-            <button className="apporaFooterCta" type="button" onClick={startGoogleLogin}>
+            <button className="apporaFooterCta" type="button" onClick={openAppora}>
               Open Appora
               <ArrowRight size={15} />
             </button>
@@ -1280,6 +1394,115 @@ export default function App() {
     ) : null
   );
 
+  const renderSavedProjectsPanel = (variant: "setup" | "modal" = "setup") => (
+    <div className={`savedProjectsPanel ${variant === "modal" ? "projectManagerPanel" : ""}`}>
+      <div className="savedProjectsHeader">
+        <div>
+          <div className="savedProjectsEyebrow">Saved projects</div>
+          <div className="savedProjectsTitle">Project yang pernah dibuat</div>
+        </div>
+        <div className="savedProjectsHeaderActions">
+          <button className="btn subtleBtn" type="button" onClick={() => void refreshProjects()} disabled={projectsRefreshing}>
+            <RefreshCw size={14} className={projectsRefreshing ? "spinIcon" : ""} />
+            <span>{projectsRefreshing ? "Refreshing" : "Refresh"}</span>
+          </button>
+          <button className="btn subtleBtn" type="button" disabled={projectExporting || !selectedProject || selectedProject === "."} onClick={() => void downloadProjectToDevice()}>
+            <Download size={14} className={projectExporting ? "spinIcon" : ""} />
+            <span>{projectExporting ? "Saving" : "Save ZIP"}</span>
+          </button>
+          <button className="btn primary" type="button" onClick={() => setNewProjectOpen(true)}>
+            New project
+          </button>
+        </div>
+      </div>
+      {hostedProjects.length > 0 ? (
+        <div className="savedProjectsList">
+          {hostedProjects.map((project) => {
+            const editing = projectEditingId === project.id;
+            const busy = projectMutatingId === project.id;
+            return (
+              <div key={project.id} className={`savedProjectItem ${selectedProject === project.root ? "active" : ""}`}>
+                <span className="savedProjectMain">
+                  {editing ? (
+                    <input
+                      className="savedProjectRenameInput"
+                      value={projectRenameDraft}
+                      onChange={(event) => setProjectRenameDraft(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") void saveProjectRename(project);
+                        if (event.key === "Escape") {
+                          setProjectEditingId("");
+                          setProjectRenameDraft("");
+                        }
+                      }}
+                      autoFocus
+                    />
+                  ) : (
+                    <>
+                      <strong>{project.name}</strong>
+                      <small>{project.root}</small>
+                    </>
+                  )}
+                </span>
+                <span className="savedProjectActions">
+                  {editing ? (
+                    <>
+                      <button className="iconOnlyBtn" type="button" disabled={busy} onClick={() => void saveProjectRename(project)} title="Save rename">
+                        <Check size={14} />
+                      </button>
+                      <button className="iconOnlyBtn" type="button" disabled={busy} onClick={() => { setProjectEditingId(""); setProjectRenameDraft(""); }} title="Cancel rename">
+                        <X size={14} />
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button className="savedProjectOpen" type="button" disabled={busy} onClick={() => void openSavedProject(project.root)}>
+                        Open
+                      </button>
+                      <button className="iconOnlyBtn" type="button" disabled={projectExporting} onClick={() => void downloadProjectToDevice(project.root)} title="Download ZIP">
+                        <Download size={14} />
+                      </button>
+                      <button className="iconOnlyBtn" type="button" disabled={busy} onClick={() => beginRenameProject(project)} title="Rename project">
+                        <Pencil size={14} />
+                      </button>
+                      <button className="iconOnlyBtn danger" type="button" disabled={busy} onClick={() => void archiveProjectFromList(project)} title="Archive project">
+                        <Trash2 size={14} />
+                      </button>
+                    </>
+                  )}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="emptyState compactEmptyState savedProjectEmpty">
+          <div className="emptyStateTitle">Belum ada project tersimpan</div>
+          <div className="emptyStateText">Pilih template lalu buat project baru. Project yang dibuat akan muncul di sini.</div>
+        </div>
+      )}
+    </div>
+  );
+
+  const renderProjectManagerModal = () => (
+    projectManagerOpen ? (
+      <div className="modalBackdrop" onClick={() => setProjectManagerOpen(false)}>
+        <div className="newProjectModal projectManagerModal pane" onClick={(event) => event.stopPropagation()}>
+          <div className="newProjectModalHeader">
+            <div>
+              <div className="savedProjectsEyebrow">Project manager</div>
+              <div className="newProjectModalTitle">Kelola project</div>
+            </div>
+            <button className="btn subtleBtn" type="button" onClick={() => setProjectManagerOpen(false)}>
+              Close
+            </button>
+          </div>
+          {renderSavedProjectsPanel("modal")}
+        </div>
+      </div>
+    ) : null
+  );
+
   const renderWorkspaceOnboarding = () => (
     <div className="workspaceGateWrap workspaceSetupWrap" id="top">
       {renderNewProjectModal()}
@@ -1322,32 +1545,7 @@ export default function App() {
               <div className="gateFeatureText">Best when you want Clara or Raka to scaffold a fresh app from a simple brief.</div>
             </div>
           </div>
-          {hasVerifiedHostedAuth && hostedProjects.length > 0 ? (
-            <div className="savedProjectsPanel">
-              <div className="savedProjectsHeader">
-                <div>
-                  <div className="savedProjectsEyebrow">Saved projects</div>
-                  <div className="savedProjectsTitle">Project yang pernah dibuat</div>
-                </div>
-                <button className="btn subtleBtn" onClick={() => void refreshProjects()}>Refresh</button>
-              </div>
-              <div className="savedProjectsList">
-                {hostedProjects.map((project) => (
-                  <button
-                    key={project.id}
-                    className="savedProjectItem"
-                    onClick={() => void openSavedProject(project.root)}
-                  >
-                    <span>
-                      <strong>{project.name}</strong>
-                      <small>{project.root}</small>
-                    </span>
-                    <span className="savedProjectOpen">Open</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : null}
+          {hasVerifiedHostedAuth ? renderSavedProjectsPanel("setup") : null}
           {renderFolderInput()}
         </div>
       </main>
@@ -1362,8 +1560,9 @@ export default function App() {
     );
   }
 
+  if (routePath !== "/app") return renderGoogleLoginGate();
   if (!googleAuth?.authenticated) return renderGoogleLoginGate();
-  if (!ws) return renderWorkspaceOnboarding();
+  if (!ws || (hasVerifiedHostedAuth && hostedProjects.length === 0 && projects.length === 0 && selectedProject === ".")) return renderWorkspaceOnboarding();
 
   const renderHybridMode = () => (
     <HybridWorkspace
@@ -1478,6 +1677,7 @@ export default function App() {
         />
       </Suspense>
       {renderNewProjectModal()}
+      {renderProjectManagerModal()}
 
       <Topbar
         ws={ws}
@@ -1490,6 +1690,8 @@ export default function App() {
         onQuickSwitchBuildMode={quickSwitchBuildMode}
         onToggleTheme={toggleAppTheme}
         onOpenSettings={openSettings}
+        onOpenProjects={() => setProjectManagerOpen(true)}
+        onDownloadProject={() => void downloadProjectToDevice()}
         onEnsurePreviewRunning={ensurePreviewRunning}
         onToggleExplorerPane={() => setShowExplorerPane((v) => !v)}
         onToggleAssistPane={() => setShowAssistPane((v) => !v)}

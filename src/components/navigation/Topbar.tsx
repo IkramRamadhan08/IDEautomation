@@ -1,6 +1,6 @@
 import React from "react";
 import { type BuildMode, type IdentityInfo } from "../../types";
-import { Settings, Play, Command, PanelLeft, PanelRight, CircleDot, Search, Moon, Sun } from "lucide-react";
+import { Settings, Play, Command, PanelLeft, PanelRight, CircleDot, Search, Moon, Sun, FolderKanban, Download } from "lucide-react";
 
 interface TopbarProps {
   ws: string | null;
@@ -13,6 +13,8 @@ interface TopbarProps {
   onQuickSwitchBuildMode: (mode: BuildMode) => void;
   onToggleTheme: () => void;
   onOpenSettings: () => void;
+  onOpenProjects: () => void;
+  onDownloadProject: () => void;
   onEnsurePreviewRunning: () => void;
   onToggleExplorerPane: () => void;
   onToggleAssistPane: () => void;
@@ -29,6 +31,8 @@ export const Topbar: React.FC<TopbarProps> = ({
   onQuickSwitchBuildMode,
   onToggleTheme,
   onOpenSettings,
+  onOpenProjects,
+  onDownloadProject,
   onEnsurePreviewRunning,
   onToggleExplorerPane,
   onToggleAssistPane,
@@ -96,6 +100,16 @@ export const Topbar: React.FC<TopbarProps> = ({
         <button className="btn iconBtn" onClick={onOpenSettings} title="Settings">
           <Settings size={16} />
           <span>Settings</span>
+        </button>
+
+        <button className="btn iconBtn" onClick={onOpenProjects} title="Projects">
+          <FolderKanban size={16} />
+          <span>Projects</span>
+        </button>
+
+        <button className="btn iconBtn" disabled={!ws} onClick={onDownloadProject} title="Download project ZIP">
+          <Download size={16} />
+          <span>Save</span>
         </button>
 
         <button className="btn iconBtn themeToggleBtn" onClick={onToggleTheme} title={`Switch to ${appTheme === "dark" ? "light" : "dark"} mode`}>

@@ -6015,6 +6015,13 @@ a {
   color: #111717;
 }
 
+:root[data-app-theme="light"] .workspaceSetupCard .workspaceGateActions .btn.primary,
+:root[data-app-theme="light"] .savedProjectsHeaderActions .btn.primary,
+:root[data-app-theme="light"] .newProjectModal .btn.primary {
+  background: #111717;
+  color: #f8f5ec;
+}
+
 :root[data-app-theme="light"] .apporaLoadingShell {
   color: #111717;
 }
@@ -6052,23 +6059,76 @@ a {
 }
 
 :root[data-app-theme="light"] .savedProjectsPanel {
-  border-color: transparent;
-  background: rgba(255, 255, 255, 0.58);
+  border-color: rgba(17, 23, 23, 0.1);
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: 0 18px 44px rgba(36, 30, 17, 0.1);
 }
 
 :root[data-app-theme="light"] .savedProjectItem,
 :root[data-app-theme="light"] .templateChoice {
-  background: rgba(255, 255, 255, 0.62);
+  background: rgba(255, 255, 255, 0.84);
   color: #111717;
+  box-shadow: inset 0 0 0 1px rgba(17, 23, 23, 0.07);
 }
 
 :root[data-app-theme="light"] .savedProjectItem:hover,
 :root[data-app-theme="light"] .templateChoice:hover {
-  background: rgba(255, 255, 255, 0.82);
+  background: #ffffff;
+  box-shadow: inset 0 0 0 1px rgba(17, 23, 23, 0.12), 0 12px 28px rgba(36, 30, 17, 0.08);
+}
+
+:root[data-app-theme="light"] .savedProjectItem.active,
+:root[data-app-theme="light"] .templateChoice.selected {
+  background: linear-gradient(135deg, rgba(225, 255, 196, 0.94), rgba(215, 250, 255, 0.94));
+  box-shadow: inset 0 0 0 1px rgba(17, 23, 23, 0.1), 0 14px 34px rgba(36, 30, 17, 0.09);
 }
 
 :root[data-app-theme="light"] .savedProjectItem small {
   color: rgba(17, 23, 23, 0.54);
+}
+
+:root[data-app-theme="light"] .savedProjectOpen {
+  background: rgba(17, 23, 23, 0.08);
+  color: #111717;
+}
+
+:root[data-app-theme="light"] .iconOnlyBtn {
+  background: rgba(17, 23, 23, 0.06);
+  color: rgba(17, 23, 23, 0.7);
+}
+
+:root[data-app-theme="light"] .iconOnlyBtn:hover,
+:root[data-app-theme="light"] .savedProjectOpen:hover {
+  background: rgba(17, 23, 23, 0.1);
+}
+
+:root[data-app-theme="light"] .iconOnlyBtn.danger {
+  color: #b4233b;
+}
+
+:root[data-app-theme="light"] .savedProjectRenameInput,
+:root[data-app-theme="light"] .newProjectModal .input {
+  background: rgba(17, 23, 23, 0.06);
+  color: #111717;
+  box-shadow: inset 0 0 0 1px rgba(17, 23, 23, 0.09);
+}
+
+:root[data-app-theme="light"] .newProjectModalTitle,
+:root[data-app-theme="light"] .newProjectTemplateHeader span,
+:root[data-app-theme="light"] .newProjectField span {
+  color: #111717;
+}
+
+:root[data-app-theme="light"] .newProjectTemplateHeader small {
+  color: rgba(17, 23, 23, 0.54);
+}
+
+:root[data-app-theme="light"] .templateChoiceDescription {
+  color: rgba(17, 23, 23, 0.6);
+}
+
+:root[data-app-theme="light"] .templateChoiceBest {
+  color: rgba(17, 23, 23, 0.74);
 }
 
 .savedProjectsHeader {
@@ -6076,6 +6136,14 @@ a {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.savedProjectsHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .savedProjectsEyebrow {
@@ -6115,10 +6183,14 @@ a {
   background: rgba(255, 255, 255, 0.08);
   color: rgba(246, 250, 245, 0.92);
   text-align: left;
-  cursor: pointer;
+  cursor: default;
 }
 
-.savedProjectItem:focus-visible {
+.savedProjectItem.active {
+  background: linear-gradient(135deg, rgba(156, 255, 95, 0.2), rgba(97, 232, 255, 0.16));
+}
+
+.savedProjectItem:focus-within {
   outline: 2px solid rgba(97, 232, 255, 0.75);
   outline-offset: 2px;
 }
@@ -6127,10 +6199,11 @@ a {
   background: rgba(255, 255, 255, 0.13);
 }
 
-.savedProjectItem span:first-child {
+.savedProjectMain {
   min-width: 0;
   display: grid;
   gap: 3px;
+  flex: 1;
 }
 
 .savedProjectItem strong,
@@ -6151,10 +6224,78 @@ a {
 }
 
 .savedProjectOpen {
+  border: 0;
+  border-radius: 999px;
+  padding: 7px 10px;
+  background: rgba(97, 232, 255, 0.14);
   flex-shrink: 0;
-  color: #0f858d;
+  color: #61e8ff;
   font-size: 12px;
   font-weight: 700;
+  cursor: pointer;
+}
+
+.savedProjectActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.iconOnlyBtn {
+  width: 31px;
+  height: 31px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(246, 250, 245, 0.76);
+  cursor: pointer;
+}
+
+.iconOnlyBtn:hover,
+.savedProjectOpen:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.iconOnlyBtn.danger {
+  color: #ff9aa8;
+}
+
+.savedProjectRenameInput {
+  width: 100%;
+  min-height: 36px;
+  border: 0;
+  border-radius: 10px;
+  padding: 0 10px;
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(246, 250, 245, 0.94);
+  font: inherit;
+  outline: 0;
+}
+
+.projectManagerModal {
+  width: min(820px, calc(100vw - 24px));
+}
+
+.projectManagerPanel {
+  margin-top: 18px;
+}
+
+.savedProjectEmpty {
+  margin-top: 12px;
+}
+
+.spinIcon {
+  animation: apporaSpin 0.9s linear infinite;
+}
+
+@keyframes apporaSpin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .modalBackdrop {
@@ -6343,13 +6484,13 @@ a {
 
 .templateChoiceDescription,
 .templateChoiceBest {
-  color: rgba(17, 23, 23, 0.58);
+  color: rgba(246, 250, 245, 0.58);
   font-size: 11px;
   line-height: 1.45;
 }
 
 .templateChoiceBest {
-  color: rgba(17, 23, 23, 0.72);
+  color: rgba(246, 250, 245, 0.72);
 }
 
 .modalHeader {

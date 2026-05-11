@@ -24,6 +24,7 @@ playwright-report/
 
 # local runtime data
 .voiceide-users.json
+.voiceide-projects.json
 .voiceide-home/
 *.log
 
