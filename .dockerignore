@@ -13,3 +13,4 @@ __pycache__
 *.pyc
 .voiceide-home
 .voiceide-users.json
+.voiceide-projects.json

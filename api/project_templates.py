@@ -43,6 +43,18 @@ TEMPLATES: tuple[ProjectTemplate, ...] = (
         tags=("landing", "pricing", "marketing", "seo"),
     ),
     ProjectTemplate(
+        id="portfolio",
+        name="Portfolio",
+        category="Personal Site",
+        description="Creator/developer portfolio with hero, selected work, skills, process, contact CTA, and responsive project cards.",
+        best_for="Personal brands, designers, developers, freelancers, student portfolios, and agency-style showcases.",
+        prompt=(
+            "Build a modern personal portfolio site with hero, selected projects, skills, process, about section, contact CTA, "
+            "responsive project cards, accessible navigation, polished empty/loading/error copy, and elegant visual direction."
+        ),
+        tags=("portfolio", "personal-site", "projects", "contact"),
+    ),
+    ProjectTemplate(
         id="admin-crud",
         name="Admin CRUD",
         category="Operations",
@@ -120,6 +132,8 @@ def _apply_template_polish(files: dict[str, str], *, template: ProjectTemplate, 
         files["src/pages/Dashboard.tsx"] = _ai_tool_page(project_name)
     elif template.id == "landing-pricing":
         files["src/pages/Home.tsx"] = _landing_home_page(project_name)
+    elif template.id == "portfolio":
+        files["src/pages/Home.tsx"] = _portfolio_home_page(project_name)
 
     files["src/app.css"] = files.get("src/app.css", "") + _template_extra_css()
 
@@ -382,6 +396,69 @@ export default function HomePage() {{
 '''
 
 
+def _portfolio_home_page(project_name: str) -> str:
+    return f'''import Card from "../components/ui/Card";
+
+const projects = [
+  {{ title: "Studio dashboard", type: "Product design", result: "Clearer operating rhythm for a small team." }},
+  {{ title: "Launch system", type: "Frontend build", result: "Reusable marketing sections with fast iteration." }},
+  {{ title: "AI workflow", type: "Automation", result: "Prompt-to-result workspace for repeat client tasks." }},
+];
+
+const skills = ["React", "Product UX", "Design systems", "Supabase", "Vercel", "AI workflows"];
+
+export default function HomePage() {{
+  return (
+    <div className="stack">
+      <section className="portfolioHero">
+        <div>
+          <div className="pill">Portfolio starter</div>
+          <h1 className="heroTitle">{project_name}</h1>
+          <p className="heroLead">A polished portfolio base for showing selected work, product thinking, and a clear path for people to contact you.</p>
+          <div className="row">
+            <button className="btn btnPrimary">View work</button>
+            <button className="btn btnGhost">Contact me</button>
+          </div>
+        </div>
+        <div className="portfolioPortrait" aria-label="Portfolio identity card">
+          <span>{project_name[:1].upper()}</span>
+          <strong>Available for thoughtful product work</strong>
+        </div>
+      </section>
+
+      <section className="templatePanel">
+        <div className="templatePanelHeader">
+          <div>
+            <h2>Selected work</h2>
+            <p>Replace these cards with real projects, screenshots, metrics, and links.</p>
+          </div>
+          <span className="templateBadge">3 case studies</span>
+        </div>
+        <div className="portfolioProjectGrid">
+          {{projects.map((project) => (
+            <Card key={{project.title}} title={{project.title}} eyebrow={{project.type}}>
+              <p className="muted">{{project.result}}</p>
+            </Card>
+          ))}}
+        </div>
+      </section>
+
+      <div className="templateSplit">
+        <Card title="Skills" eyebrow="Toolkit">
+          <div className="templateList">
+            {{skills.map((skill) => <span key={{skill}}>{{skill}}</span>)}}
+          </div>
+        </Card>
+        <Card title="Process" eyebrow="How I work">
+          <p className="muted">Discovery, interface direction, build, preview review, and launch polish. Keep this section honest and specific.</p>
+        </Card>
+      </div>
+    </div>
+  );
+}}
+'''
+
+
 def _template_extra_css() -> str:
     return '''
 
@@ -498,13 +575,60 @@ def _template_extra_css() -> str:
   border: 1px solid var(--border);
   color: var(--muted);
 }
+.portfolioHero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(220px, 0.85fr);
+  gap: 18px;
+  align-items: stretch;
+  padding: 22px;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  background:
+    radial-gradient(circle at 84% 24%, color-mix(in srgb, var(--brandA) 20%, transparent), transparent 34%),
+    var(--panel);
+  box-shadow: var(--shadow);
+}
+.portfolioPortrait {
+  min-height: 220px;
+  display: grid;
+  align-content: end;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--brandA) 22%, transparent), color-mix(in srgb, var(--brandB) 16%, transparent));
+  border: 1px solid var(--border);
+}
+.portfolioPortrait span {
+  width: 70px;
+  height: 70px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 24px;
+  background: var(--text);
+  color: var(--bg);
+  font-size: 34px;
+  font-weight: 900;
+}
+.portfolioPortrait strong {
+  max-width: 220px;
+  font-size: 1.35rem;
+  line-height: 1.05;
+}
+.portfolioProjectGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
 @media (max-width: 760px) {
   .templateHero,
   .templatePanelHeader {
     flex-direction: column;
   }
   .templateSplit,
-  .templateTableRow {
+  .templateTableRow,
+  .portfolioHero,
+  .portfolioProjectGrid {
     grid-template-columns: 1fr;
   }
 }

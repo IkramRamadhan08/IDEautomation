@@ -479,7 +479,7 @@ export async function detectProjects(): Promise<{ ok: boolean; projects: Array<{
   return r.json();
 }
 
-export async function runStart(project_root: string, port?: number): Promise<{ ok: boolean; id: string; pid: number; url: string; project_root: string }> {
+export async function runStart(project_root: string, port?: number): Promise<{ ok: boolean; id: string; pid: number; url: string; direct_url?: string; project_root: string }> {
   const r = await apiFetch(`/api/run/start`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

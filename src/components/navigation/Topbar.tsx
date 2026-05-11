@@ -35,8 +35,6 @@ export const Topbar: React.FC<TopbarProps> = ({
 }) => {
   const userLabel = identity?.display_name || identity?.email || "Signed in";
   const userInitial = userLabel.trim().charAt(0).toUpperCase() || "V";
-  const browserHost = typeof window !== "undefined" ? window.location.hostname.toLowerCase() : "";
-  const hostedPreviewUnavailable = Boolean(browserHost && !["localhost", "127.0.0.1", "::1"].includes(browserHost) && !previewUrl);
 
   return (
     <header className="topbar">
@@ -105,9 +103,9 @@ export const Topbar: React.FC<TopbarProps> = ({
           <span>{appTheme === "dark" ? "Light" : "Dark"}</span>
         </button>
 
-        <button className="btn primary iconBtn" disabled={!ws || hostedPreviewUnavailable} onClick={onEnsurePreviewRunning} title={hostedPreviewUnavailable ? "Preview tidak tersedia di deployment ini" : "Preview"}>
+        <button className="btn primary iconBtn" disabled={!ws} onClick={onEnsurePreviewRunning} title="Preview">
           <Play size={16} />
-          <span>{hostedPreviewUnavailable ? "Off" : "Preview"}</span>
+          <span>Preview</span>
         </button>
 
         <div className="topbarUserBadge" title={userLabel}>

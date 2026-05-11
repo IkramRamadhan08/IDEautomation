@@ -1464,10 +1464,12 @@ class ProjectTemplateRegressionTests(unittest.TestCase):
 
         self.assertIn("saas-dashboard", template_ids)
         self.assertIn("landing-pricing", template_ids)
+        self.assertIn("portfolio", template_ids)
         self.assertIn("admin-crud", template_ids)
         self.assertIn("ai-tool-app", template_ids)
 
         files = render_project_template(template_id="ai-tool-app", project_root="demo", project_name="Demo AI")
+        portfolio_files = render_project_template(template_id="portfolio", project_root="portfolio", project_name="Demo Portfolio")
 
         self.assertIn("package.json", files)
         self.assertIn("index.html", files)
@@ -1477,6 +1479,7 @@ class ProjectTemplateRegressionTests(unittest.TestCase):
         self.assertIn(".voiceide/memory/project.md", files)
         self.assertIn("react-router-dom", files["package.json"])
         self.assertIn("Template: AI Tool App", files[".voiceide/memory/project.md"])
+        self.assertIn("Selected work", portfolio_files["src/pages/Home.tsx"])
 
     def test_create_project_uses_selected_template(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

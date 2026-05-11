@@ -6185,7 +6185,7 @@ a {
   max-height: calc(100vh - 24px);
   padding: 22px;
   border-radius: 26px;
-  overflow: auto;
+  overflow: hidden;
   border: 0;
   background:
     radial-gradient(circle at 12% 0%, rgba(156, 255, 95, 0.14), transparent 28%),
@@ -6292,6 +6292,9 @@ a {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+  max-height: min(42vh, 430px);
+  overflow: auto;
+  padding-right: 2px;
 }
 
 .templateChoice {

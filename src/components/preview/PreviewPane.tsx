@@ -22,13 +22,10 @@ export const PreviewPane: React.FC<PreviewPaneProps> = ({
   const hostedBrowser = Boolean(browserHost && !["localhost", "127.0.0.1", "::1"].includes(browserHost));
   const localPreviewTarget = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|::1)(:\d+)?/i.test(previewUrl);
   const unreachableHostedPreview = hostedBrowser && localPreviewTarget;
-  const hostedPreviewUnavailable = hostedBrowser && !previewUrl;
   const previewState = previewUrl ? "Live preview" : "Preview idle";
   const previewMeta = unreachableHostedPreview
     ? "This deployment cannot open private preview targets from your browser."
-    : hostedPreviewUnavailable
-      ? "Preview is not available in this deployment."
-      : previewUrl || "Start the app to open a clean embedded viewport.";
+    : previewUrl || "Start the app to open a clean embedded viewport.";
   const containerClassName = isSmall ? "previewMiniShell" : "pane previewPane fullAgentPreviewPane";
   const bodyClassName = isSmall ? "previewMiniBody" : "consoleBody sidebarBody previewBody";
   const viewportClassName = isSmall ? "previewEmbedSmall" : "previewViewport";
@@ -41,9 +38,9 @@ export const PreviewPane: React.FC<PreviewPaneProps> = ({
           <div className="paneHeading">Preview</div>
         </div>
         <div className="editorActions">
-          <button className="btn subtleBtn" onClick={onEnsurePreviewRunning} disabled={!ws || hostedPreviewUnavailable}>
+          <button className="btn subtleBtn" onClick={onEnsurePreviewRunning} disabled={!ws}>
             <RefreshCw size={14} />
-            <span>{previewUrl ? "Reload" : hostedPreviewUnavailable ? "Hosted only" : "Start"}</span>
+            <span>{previewUrl ? "Reload" : "Start"}</span>
           </button>
           {previewUrl && !unreachableHostedPreview ? (
             <a className="btn subtleBtn" href={previewUrl} target="_blank" rel="noreferrer">
@@ -67,10 +64,10 @@ export const PreviewPane: React.FC<PreviewPaneProps> = ({
                 <Play size={18} />
               </div>
               <div className="emptyPreviewTitle">Preview is not running</div>
-              <div className="emptyStateText">{hostedPreviewUnavailable ? "This deployment supports editing and agent workflows, but embedded runtime preview is not available here." : "Launch the selected project and you will get a clean in-app browser surface here."}</div>
-              <button className="btn primary" onClick={onEnsurePreviewRunning} disabled={!ws || hostedPreviewUnavailable}>
+              <div className="emptyStateText">Launch the selected project and you will get a clean in-app browser surface here.</div>
+              <button className="btn primary" onClick={onEnsurePreviewRunning} disabled={!ws}>
                 <Play size={14} />
-                <span>{hostedPreviewUnavailable ? "Preview unavailable here" : "Start preview"}</span>
+                <span>Start preview</span>
               </button>
             </div>
           ) : unreachableHostedPreview ? (

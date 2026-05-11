@@ -28,12 +28,6 @@ export async function ensurePreviewRunningFlow({
   errorMessage,
 }: EnsurePreviewRunningArgs): Promise<string> {
   if (!workspacePath) return "";
-  if (isHostedBrowser()) {
-    const msg = "Embedded preview belum tersedia di deployment ini.";
-    setEditorStatus("Preview tidak tersedia di deployment ini");
-    notifyInfo(msg);
-    return "";
-  }
 
   setEditorStatus(`Starting preview for ${selectedProject}...`);
   try {

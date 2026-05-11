@@ -18,7 +18,7 @@ from urllib.request import Request as URLRequest, urlopen
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from api.settings import ROOT, ENV_PATH, load_settings
@@ -117,6 +117,8 @@ def _requires_verified_hosted_user(path: str) -> bool:
     if not has_supabase():
         return False
     if path in {"/api/healthz", "/api/settings", "/api/models", "/api/agent/worker/run"}:
+        return False
+    if path == "/api/run/proxy" or path.startswith("/api/run/proxy/"):
         return False
     return any(path == prefix or path.startswith(prefix + "/") for prefix in SENSITIVE_HOSTED_API_PREFIXES)
 
@@ -1665,7 +1667,7 @@ class RunStartReq(BaseModel):
 
 
 @app.post("/api/run/start")
-def run_start(req: RunStartReq):
+def run_start(req: RunStartReq, request: Request):
     import subprocess
     import threading
     import time
@@ -1684,7 +1686,7 @@ def run_start(req: RunStartReq):
     _ensure_runner_capacity(req.project_root)
 
     port = req.port or _next_port()
-    rid = uuid.uuid4().hex[:8]
+    rid = uuid.uuid4().hex[:16]
     logs: list[str] = []
 
     def pump(proc):
@@ -1757,7 +1759,68 @@ def run_start(req: RunStartReq):
         "project_root": req.project_root,
         "session_id": CURRENT_SESSION_ID.get(),
     }
-    return {"ok": True, "id": rid, "pid": proc.pid, "url": f"http://localhost:{port}", "project_root": req.project_root}
+    direct_url = f"http://localhost:{port}"
+    preview_url = direct_url
+    if _is_serverless_runtime():
+        preview_url = str(request.url_for("run_proxy", run_id=rid))
+    return {"ok": True, "id": rid, "pid": proc.pid, "url": preview_url, "direct_url": direct_url, "project_root": req.project_root}
+
+
+def _rewrite_preview_text(text: str, *, run_id: str) -> str:
+    prefix = f"/api/run/proxy/{run_id}/"
+    replacements = [
+        ('="/', f'="{prefix}'),
+        ("='/", f"='{prefix}"),
+        ('"/@', f'"{prefix}@'),
+        ("'/@", f"'{prefix}@"),
+        ('"/src/', f'"{prefix}src/'),
+        ("'/src/", f"'{prefix}src/"),
+        ('"/node_modules/', f'"{prefix}node_modules/'),
+        ("'/node_modules/", f"'{prefix}node_modules/"),
+        ('"/assets/', f'"{prefix}assets/'),
+        ("'/assets/", f"'{prefix}assets/"),
+        ('from "/', f'from "{prefix}'),
+        ("from '/", f"from '{prefix}"),
+        ('import("/', f'import("{prefix}'),
+        ("import('/", f"import('{prefix}"),
+    ]
+    out = text
+    for old, new in replacements:
+        out = out.replace(old, new)
+    return out
+
+
+@app.get("/api/run/proxy/{run_id}", name="run_proxy")
+@app.get("/api/run/proxy/{run_id}/{path:path}", name="run_proxy_path")
+def run_proxy(run_id: str, path: str = "", request: Request = None):
+    r = _runners().get(run_id)
+    if not r:
+        raise HTTPException(404, "preview runner not found")
+    proc = r.get("proc")
+    if not proc or proc.poll() is not None:
+        raise HTTPException(410, "preview runner is not running")
+    port = r.get("port")
+    if not isinstance(port, int):
+        raise HTTPException(500, "preview runner has no port")
+    clean_path = str(path or "").lstrip("/")
+    target = f"http://127.0.0.1:{port}/{clean_path}"
+    query = str(request.url.query or "") if request else ""
+    if query:
+        target = f"{target}?{query}"
+    try:
+        upstream = URLRequest(target, headers={"User-Agent": "ApporaPreviewProxy/1.0"})
+        with urlopen(upstream, timeout=20) as resp:  # nosec B310 - internal runner proxy
+            body = resp.read()
+            content_type = resp.headers.get("content-type") or "application/octet-stream"
+            headers = {"Cache-Control": "no-store"}
+            if any(kind in content_type for kind in ("text/html", "javascript", "text/css")):
+                text = body.decode("utf-8", errors="replace")
+                body = _rewrite_preview_text(text, run_id=run_id).encode("utf-8")
+            return Response(content=body, status_code=resp.status, media_type=content_type.split(";", 1)[0], headers=headers)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(502, f"Preview proxy failed: {exc}")
 
 
 @app.get("/api/run/list")
