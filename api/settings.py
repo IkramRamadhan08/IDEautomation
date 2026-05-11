@@ -11,7 +11,7 @@ from pydantic import BaseModel
 ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = ROOT / ".env"
 
-Provider = Literal["openai", "anthropic", "openrouter", "groq", "gemini", "together", "cerebras", "xai"]
+Provider = Literal["nine_router", "openai", "anthropic", "openrouter", "groq", "gemini", "together", "cerebras", "xai"]
 BuildMode = Literal["full-agent", "hybrid"]
 
 
@@ -23,6 +23,8 @@ class Settings(BaseModel):
     default_workspace: str | None = None
     llm_provider: Provider | None = None
     build_mode: BuildMode = "hybrid"
+    nine_router_base_url: str = "http://127.0.0.1:20128/v1"
+    nine_router_model: str = "free-forever"
     openai_model: str = "gpt-5.5"
     anthropic_model: str = "claude-opus-4-7"
     openrouter_model: str = "openrouter/free"
@@ -36,6 +38,7 @@ class Settings(BaseModel):
     agent_min_gap_seconds: float = 4.0
     agent_requests_per_minute: int = 8
     agent_context_char_budget: int = 48_000
+    nine_router_api_key_set: bool = False
     openai_requests_per_minute: int | None = None
     anthropic_requests_per_minute: int | None = None
     openrouter_requests_per_minute: int | None = None
@@ -84,7 +87,9 @@ def load_settings() -> Settings:
     raw_provider = str(g("LLM_PROVIDER", "") or "").strip().lower()
     if raw_provider == "openai-codex":
         raw_provider = "openai"
-    llm_provider = raw_provider if raw_provider in {"openai", "anthropic", "openrouter", "groq", "gemini", "together", "cerebras", "xai"} else None
+    if raw_provider in {"9router", "nine-router", "ninerouter"}:
+        raw_provider = "nine_router"
+    llm_provider = raw_provider if raw_provider in {"nine_router", "openai", "anthropic", "openrouter", "groq", "gemini", "together", "cerebras", "xai"} else "nine_router"
 
     build_mode = str(g("BUILD_MODE", "hybrid") or "hybrid").strip().lower()
     if build_mode not in {"full-agent", "hybrid"}:
@@ -132,6 +137,8 @@ def load_settings() -> Settings:
         default_workspace=(g("DEFAULT_WORKSPACE", "") or "").strip() or None,
         llm_provider=llm_provider,  # type: ignore[arg-type]
         build_mode=build_mode,  # type: ignore[arg-type]
+        nine_router_base_url=str(g("NINE_ROUTER_BASE_URL", g("APPORA_9ROUTER_BASE_URL", "http://127.0.0.1:20128/v1")) or "http://127.0.0.1:20128/v1").strip().rstrip("/"),
+        nine_router_model=str(g("NINE_ROUTER_MODEL", g("APPORA_9ROUTER_MODEL", "free-forever")) or "free-forever").strip(),
         openai_model=str(g("OPENAI_MODEL", g("OPENAI_CODEX_MODEL", "gpt-5.5")) or "gpt-5.5").strip(),
         anthropic_model=str(g("ANTHROPIC_MODEL", "claude-opus-4-7") or "claude-opus-4-7").strip(),
         openrouter_model=str(g("OPENROUTER_MODEL", "openrouter/free") or "openrouter/free").strip(),
@@ -145,6 +152,7 @@ def load_settings() -> Settings:
         agent_min_gap_seconds=agent_min_gap_seconds,
         agent_requests_per_minute=parse_optional_int("AGENT_REQUESTS_PER_MINUTE", default_agent_rpm) or default_agent_rpm,
         agent_context_char_budget=parse_optional_int("AGENT_CONTEXT_CHAR_BUDGET", default_context_budget) or default_context_budget,
+        nine_router_api_key_set=bool(first_non_empty("NINE_ROUTER_API_KEY", "APPORA_9ROUTER_API_KEY")),
         openai_requests_per_minute=parse_optional_int("OPENAI_REQUESTS_PER_MINUTE"),
         anthropic_requests_per_minute=parse_optional_int("ANTHROPIC_REQUESTS_PER_MINUTE"),
         openrouter_requests_per_minute=parse_optional_int("OPENROUTER_REQUESTS_PER_MINUTE"),

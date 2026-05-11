@@ -161,6 +161,8 @@ export default function App() {
   const [buildMode, setBuildMode] = useState<BuildMode>("hybrid");
   const [buildModeDraft, setBuildModeDraft] = useState<BuildMode>("hybrid");
   const [modelDraft, setModelDraft] = useState<string>("");
+  const [nineRouterBaseUrlDraft, setNineRouterBaseUrlDraft] = useState<string>("http://127.0.0.1:20128/v1");
+  const [nineRouterApiKeyDraft, setNineRouterApiKeyDraft] = useState<string>("");
   const [openaiApiKeyDraft, setOpenaiApiKeyDraft] = useState<string>("");
   const [anthropicApiKeyDraft, setAnthropicApiKeyDraft] = useState<string>("");
   const [openrouterApiKeyDraft, setOpenrouterApiKeyDraft] = useState<string>("");
@@ -188,6 +190,7 @@ export default function App() {
 
   const modelFromSettings = (provider: ProviderChoice, source: SettingsInfo | null): string => {
     if (!source) return "";
+    if (provider === "nine_router") return source.nine_router_model || source.openrouter_model || "free-forever";
     if (provider === "openai") return source.openai_model || "";
     if (provider === "anthropic") return source.anthropic_model || "";
     if (provider === "openrouter") return source.openrouter_model || "";
@@ -208,6 +211,7 @@ export default function App() {
 
   const modelFromPreferences = (provider: ProviderChoice, prefs: UserPreferences | null): string => {
     if (!prefs) return "";
+    if (provider === "nine_router") return prefs.openrouter_model || "free-forever";
     if (provider === "openai") return prefs.openai_model || "";
     if (provider === "anthropic") return prefs.anthropic_model || "";
     if (provider === "openrouter") return prefs.openrouter_model || "";
@@ -429,8 +433,10 @@ export default function App() {
 
       setBuildMode(nextBuildMode);
       setBuildModeDraft(nextBuildMode);
+      nextProvider = "nine_router";
       setLlmProviderDraft(nextProvider);
       setModelDraft(nextModel || modelFromSettings(nextProvider, s));
+      setNineRouterBaseUrlDraft(s.nine_router_base_url || "http://127.0.0.1:20128/v1");
     } catch { /* ignore */ }
   };
 
@@ -786,7 +792,7 @@ export default function App() {
   // --- Settings ---
   const openSettings = async () => {
     setSettingsOpen(true);
-    if (llmProviderDraft) await loadProviderModels(llmProviderDraft);
+    await loadProviderModels("nine_router");
   };
 
   const loadProviderModels = async (p: ProviderChoice) => {
@@ -817,10 +823,13 @@ export default function App() {
   const saveSettings = async () => {
     try {
       const patch: SettingsUpdate = {
-        llm_provider: llmProviderDraft,
+        llm_provider: "nine_router",
         build_mode: buildModeDraft,
+        nine_router_base_url: nineRouterBaseUrlDraft,
       };
       if (modelDraft) {
+        patch.nine_router_model = modelDraft;
+        patch.openrouter_model = modelDraft;
         if (llmProviderDraft === "openai") patch.openai_model = modelDraft;
         else if (llmProviderDraft === "anthropic") patch.anthropic_model = modelDraft;
         else if (llmProviderDraft === "openrouter") patch.openrouter_model = modelDraft;
@@ -830,6 +839,7 @@ export default function App() {
         else if (llmProviderDraft === "cerebras") patch.cerebras_model = modelDraft;
         else if (llmProviderDraft === "xai") patch.xai_model = modelDraft;
       }
+      if (nineRouterApiKeyDraft) patch.nine_router_api_key = nineRouterApiKeyDraft;
       if (openaiApiKeyDraft) patch.openai_api_key = openaiApiKeyDraft;
       if (anthropicApiKeyDraft) patch.anthropic_api_key = anthropicApiKeyDraft;
       if (openrouterApiKeyDraft) patch.openrouter_api_key = openrouterApiKeyDraft;
@@ -843,11 +853,11 @@ export default function App() {
 
       if (hasVerifiedHostedAuth) {
         await updateUserPreferences({
-          llm_provider: llmProviderDraft || null,
+          llm_provider: "nine_router",
           build_mode: buildModeDraft,
           openai_model: llmProviderDraft === "openai" ? modelDraft : null,
           anthropic_model: llmProviderDraft === "anthropic" ? modelDraft : null,
-          openrouter_model: llmProviderDraft === "openrouter" ? modelDraft : null,
+          openrouter_model: modelDraft,
           groq_model: llmProviderDraft === "groq" ? modelDraft : null,
           gemini_model: llmProviderDraft === "gemini" ? modelDraft : null,
           together_model: llmProviderDraft === "together" ? modelDraft : null,
@@ -1428,6 +1438,8 @@ export default function App() {
           llmProviderDraft={llmProviderDraft}
           buildModeDraft={buildModeDraft}
           modelDraft={modelDraft}
+          nineRouterBaseUrlDraft={nineRouterBaseUrlDraft}
+          nineRouterApiKeyDraft={nineRouterApiKeyDraft}
           openaiApiKeyDraft={openaiApiKeyDraft}
           anthropicApiKeyDraft={anthropicApiKeyDraft}
           openrouterApiKeyDraft={openrouterApiKeyDraft}
@@ -1441,13 +1453,17 @@ export default function App() {
           modelsError={modelsError}
           onClose={() => setSettingsOpen(false)}
           onLlmProviderChange={p => {
-            setLlmProviderDraft(p);
-            setModelDraft(modelFromSettings(p, settings));
-            void loadProviderModels(p);
+            const provider = p || "nine_router";
+            setLlmProviderDraft(provider);
+            setModelDraft(modelFromSettings(provider, settings));
+            void loadProviderModels(provider);
           }}
           onBuildModeDraftChange={setBuildModeDraft}
           onModelDraftChange={setModelDraft}
+          onNineRouterBaseUrlChange={setNineRouterBaseUrlDraft}
           onApiKeyChange={(p, k) => {
+            if (p === "nine_router") setNineRouterApiKeyDraft(k);
+            else
             if (p === "openai") setOpenaiApiKeyDraft(k);
             else if (p === "anthropic") setAnthropicApiKeyDraft(k);
             else if (p === "openrouter") setOpenrouterApiKeyDraft(k);

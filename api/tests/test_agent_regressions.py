@@ -1235,9 +1235,10 @@ class ProviderCatalogRegressionTests(unittest.TestCase):
         models = list_provider_models("openrouter")
         catalog = provider_catalog()
 
-        self.assertEqual(models[0], "openrouter/free")
+        self.assertEqual(models[0], "free-forever")
         self.assertEqual(catalog["openrouter"]["recommended_model"], models[0])
         self.assertTrue(any(model.endswith(":free") for model in catalog["openrouter"]["free_tier_models"]))
+        self.assertIn("openrouter/free", models)
         self.assertIn("x-ai/grok-4.3", models)
 
     def test_openai_is_familiar_credit_path_not_fake_free_tier(self) -> None:
@@ -1322,6 +1323,37 @@ class ProviderCatalogRegressionTests(unittest.TestCase):
         self.assertIn("gemini-3-flash-preview", gemini_models)
         self.assertNotIn("gemini-3-pro-preview", gemini_models)
         self.assertEqual(openai_models, [])
+
+    def test_free_forever_route_expands_to_real_provider_models(self) -> None:
+        snapshot = {
+            "openrouter": {"connected": True},
+            "gemini": {"connected": True},
+            "groq": {"connected": True},
+            "cerebras": {"connected": False},
+        }
+        attempted: list[tuple[str, str]] = []
+
+        def fake_once(provider: str, model: str, *, system: str, user: str):
+            attempted.append((provider, model))
+            if provider == "openrouter":
+                raise RuntimeError("rate limit")
+            return {"spoken": "ok", "changes": [], "actions": []}
+
+        with patch.object(agent_mod.settings_mod.settings, "llm_provider", "openrouter"), \
+            patch.object(agent_mod.settings_mod.settings, "openrouter_model", "free-forever"), \
+            patch.object(agent_mod.settings_mod.settings, "friendly_free_tier_mode", True), \
+            patch("api.agent.auth_snapshot", return_value=snapshot), \
+            patch("api.agent.require_provider_connected", return_value=None), \
+            patch("api.agent.get_provider_cooldown_remaining", return_value=0), \
+            patch("api.agent._throttle_llm_calls", return_value=None), \
+            patch("api.agent._generate_json_once", side_effect=fake_once):
+            provider, model, data = agent_mod._generate_json(system="system", user="user")
+
+        self.assertEqual(provider, "gemini")
+        self.assertEqual(model, "gemini-3-flash-preview")
+        self.assertEqual(data["spoken"], "ok")
+        self.assertIn(("openrouter", "openrouter/free"), attempted)
+        self.assertNotIn(("openrouter", "free-forever"), attempted)
 
     def test_generate_json_can_use_connected_provider_when_none_selected(self) -> None:
         snapshot = {

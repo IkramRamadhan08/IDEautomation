@@ -16,6 +16,7 @@ from urllib.error import HTTPError, URLError
 from api.secrets_store import get_provider_secret, has_provider_secret
 
 OPENAI_PROVIDER = "openai"
+NINE_ROUTER_PROVIDER = "nine_router"
 ANTHROPIC_PROVIDER = "anthropic"
 OPENROUTER_PROVIDER = "openrouter"
 GROQ_PROVIDER = "groq"
@@ -24,6 +25,7 @@ TOGETHER_PROVIDER = "together"
 CEREBRAS_PROVIDER = "cerebras"
 XAI_PROVIDER = "xai"
 SUPPORTED_PROVIDERS = (
+    NINE_ROUTER_PROVIDER,
     OPENAI_PROVIDER,
     ANTHROPIC_PROVIDER,
     OPENROUTER_PROVIDER,
@@ -45,6 +47,7 @@ GROQ_LOGIN_HINT = "Masukkan Groq API key di Settings. Groq cocok buat user yang 
 GEMINI_LOGIN_HINT = "Masukkan Gemini API key dari Google AI Studio. Gemini cocok buat user Google yang mau mulai dari free quota/rate limit."
 TOGETHER_LOGIN_HINT = "Masukkan Together AI API key. Together cocok buat akses banyak model open-source lewat API OpenAI-compatible."
 CEREBRAS_LOGIN_HINT = "Masukkan Cerebras API key. Cerebras cocok buat model open-source cepat dengan free/dev tier limit."
+NINE_ROUTER_LOGIN_HINT = "Masukkan 9Router API key dan endpoint 9Router. Appora akan memakai satu OpenAI-compatible router; semua provider/model diatur dari 9Router."
 XAI_LOGIN_HINT = "Masukkan xAI API key. xAI cocok buat user yang ingin model Grok, biasanya paid/API-credit based."
 
 CURRENT_PROFILE_ID: ContextVar[str | None] = ContextVar("voiceide_profile_id", default=None)
@@ -52,11 +55,33 @@ _PROVIDER_COOLDOWN_LOCK = threading.Lock()
 _PROVIDER_COOLDOWN_UNTIL: dict[str, float] = {}
 
 HOSTED_PROVIDER_CATALOG: dict[str, dict[str, Any]] = {
+    NINE_ROUTER_PROVIDER: {
+        "label": "9Router",
+        "positioning": "Single OpenAI-compatible router for Claude Code, Codex, Cursor, Kiro, OpenCode, OpenRouter, Gemini, Groq, and other 9Router models.",
+        "recommended_model": "free-forever",
+        "free_tier_models": [
+            "free-forever",
+            "kr/claude-sonnet-4.5",
+            "kr/glm-5",
+            "oc/<auto>",
+            "openrouter/openrouter/free",
+        ],
+        "paid_models": [
+            "cx/gpt-5.5",
+            "cx/gpt-5.4",
+            "cc/claude-opus-4-7",
+            "cc/claude-sonnet-4-6",
+            "gh/claude-sonnet-4.6",
+            "cu/gpt-5.3-codex",
+        ],
+        "hint": "Recommended. Jalankan/host 9Router, lalu paste endpoint /v1 dan API key dari dashboard 9Router.",
+    },
     OPENROUTER_PROVIDER: {
         "label": "OpenRouter",
-        "positioning": "Best for trial users and free/cheap model routing.",
-        "recommended_model": "openrouter/free",
+        "positioning": "Best for trial users, smart free-first routing, and free/cheap model routing.",
+        "recommended_model": "free-forever",
         "free_tier_models": [
+            "free-forever",
             "openrouter/free",
             "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
             "deepseek/deepseek-v4-flash:free",
@@ -181,6 +206,7 @@ def _provider_key_from_env_or_secret(provider: str) -> str:
 
 def _env_key_for_provider(provider: str) -> str:
     env_map = {
+        NINE_ROUTER_PROVIDER: "NINE_ROUTER_API_KEY",
         OPENAI_PROVIDER: "OPENAI_API_KEY",
         ANTHROPIC_PROVIDER: "ANTHROPIC_API_KEY",
         OPENROUTER_PROVIDER: "OPENROUTER_API_KEY",
@@ -191,7 +217,14 @@ def _env_key_for_provider(provider: str) -> str:
         XAI_PROVIDER: "XAI_API_KEY",
     }
     env_key = env_map.get(provider, "")
-    return (os.getenv(env_key) or "").strip() if env_key else ""
+    if not env_key:
+        return ""
+    value = (os.getenv(env_key) or "").strip()
+    if value:
+        return value
+    if provider == NINE_ROUTER_PROVIDER:
+        return (os.getenv("APPORA_9ROUTER_API_KEY") or "").strip()
+    return ""
 
 
 def _provider_key_info(provider: str) -> dict[str, Any]:
@@ -236,6 +269,12 @@ def openai_status() -> dict[str, Any]:
     return {**_provider_status(OPENAI_PROVIDER, OPENAI_LOGIN_HINT), "profile_id": None, "account_id": None}
 
 
+def nine_router_status() -> dict[str, Any]:
+    status = _provider_status(NINE_ROUTER_PROVIDER, NINE_ROUTER_LOGIN_HINT)
+    status["base_url"] = _nine_router_base_url()
+    return status
+
+
 def anthropic_status() -> dict[str, Any]:
     return _provider_status(ANTHROPIC_PROVIDER, ANTHROPIC_LOGIN_HINT)
 
@@ -254,6 +293,7 @@ def _catalog_status(provider: str, login_hint: str) -> dict[str, Any]:
 
 def auth_snapshot(workspace: Path | None = None) -> dict[str, Any]:
     return {
+        "nine_router": nine_router_status(),
         "openai": openai_status(),
         "anthropic": anthropic_status(),
         "openrouter": openrouter_status(),
@@ -271,6 +311,8 @@ def require_provider_connected(provider: str, workspace: Path | None = None) -> 
     if not status:
         raise RuntimeError(f"Unsupported provider: {provider}")
     if not status.get("connected"):
+        if provider == NINE_ROUTER_PROVIDER:
+            raise RuntimeError("9Router belum connected. Isi NINE_ROUTER_API_KEY dan NINE_ROUTER_BASE_URL di Settings.")
         if provider == OPENAI_PROVIDER:
             raise RuntimeError("OpenAI belum connected. Isi OPENAI_API_KEY (BYOK) di Settings.")
         if provider == ANTHROPIC_PROVIDER:
@@ -403,6 +445,26 @@ def get_provider_cooldown_remaining(provider: str | None) -> float:
     return max(0.0, until - time.time())
 
 
+def _nine_router_base_url() -> str:
+    from api import settings as settings_mod
+
+    profile_id = CURRENT_PROFILE_ID.get()
+    if profile_id:
+        try:
+            stored_url = (get_provider_secret(profile_id=profile_id, provider="nine_router_base_url") or "").strip()
+            if stored_url:
+                return stored_url.rstrip("/")
+        except Exception:
+            pass
+    value = (
+        os.getenv("NINE_ROUTER_BASE_URL")
+        or os.getenv("APPORA_9ROUTER_BASE_URL")
+        or getattr(settings_mod.settings, "nine_router_base_url", "")
+        or "http://localhost:20128/v1"
+    )
+    return str(value).strip().rstrip("/") or "http://localhost:20128/v1"
+
+
 def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str], *, provider: str | None = None) -> tuple[int, dict[str, Any] | None, str]:
     body = json.dumps(payload).encode("utf-8")
     req = Request(url, data=body, method="POST", headers={"Content-Type": "application/json", **headers})
@@ -453,6 +515,8 @@ def _friendly_error(provider: str, status: int, data: dict[str, Any] | None, fal
     if status in {401, 403}:
         return f"{provider} key ditolak. Cek ulang API key di Settings."
     if status == 402 or "quota" in lowered or "credit" in lowered or "billing" in lowered:
+        if provider == NINE_ROUTER_PROVIDER:
+            return "9Router route/model ini belum punya quota/credential aktif. Buka dashboard 9Router, connect provider atau pilih combo/model free lain."
         if provider == OPENROUTER_PROVIDER:
             return "OpenRouter belum punya credit untuk model ini, atau model free sedang penuh. Pilih model ':free' lain di Settings."
         return f"{provider} butuh billing/API credit untuk model ini. Pakai OpenRouter + model ':free' kalau mau coba gratis."
@@ -461,10 +525,143 @@ def _friendly_error(provider: str, status: int, data: dict[str, Any] | None, fal
     return message
 
 
+_NINE_ROUTER_MODELS = [
+    "free-forever",
+    "fast-free",
+    "coding-auto",
+    "cheap-auto",
+    "quality-auto",
+    "kr/claude-sonnet-4.5",
+    "kr/claude-haiku-4.5",
+    "kr/deepseek-3.2",
+    "kr/qwen3-coder-next",
+    "kr/glm-5",
+    "kr/MiniMax-M2.5",
+    "oc/<auto>",
+    "cc/claude-opus-4-7",
+    "cc/claude-opus-4-6",
+    "cc/claude-sonnet-4-6",
+    "cc/claude-opus-4-5-20251101",
+    "cc/claude-sonnet-4-5-20250929",
+    "cc/claude-haiku-4-5-20251001",
+    "cx/gpt-5.5",
+    "cx/gpt-5.4",
+    "cx/gpt-5.3-codex",
+    "cx/gpt-5.3-codex-xhigh",
+    "cx/gpt-5.3-codex-high",
+    "cx/gpt-5.3-codex-low",
+    "cx/gpt-5.3-codex-spark",
+    "cx/gpt-5.2-codex",
+    "cx/gpt-5.2",
+    "cx/gpt-5.1-codex-max",
+    "cx/gpt-5.1-codex",
+    "cx/gpt-5.1",
+    "cx/gpt-5-codex",
+    "cx/gpt-5-codex-mini",
+    "gc/gemini-3-flash-preview",
+    "gc/gemini-3-pro-preview",
+    "ag/gemini-3.1-pro-high",
+    "ag/gemini-3.1-pro-low",
+    "ag/gemini-3-flash",
+    "ag/claude-sonnet-4-6",
+    "ag/claude-opus-4-6-thinking",
+    "gh/gpt-5.4",
+    "gh/gpt-5.4-mini",
+    "gh/gpt-5.3-codex",
+    "gh/gpt-5.2-codex",
+    "gh/gpt-5.2",
+    "gh/claude-sonnet-4.6",
+    "gh/claude-opus-4.7",
+    "gh/claude-sonnet-4.5",
+    "gh/gemini-3.1-pro-preview",
+    "gh/gemini-3-flash-preview",
+    "gh/grok-code-fast-1",
+    "cu/default",
+    "cu/claude-4.5-sonnet",
+    "cu/claude-4.5-sonnet-thinking",
+    "cu/claude-4.5-opus",
+    "cu/claude-4.6-opus-max",
+    "cu/gpt-5.3-codex",
+    "cu/gpt-5.2",
+    "cu/kimi-k2.5",
+    "cu/gemini-3-flash-preview",
+    "qw/qwen3-coder-plus",
+    "qw/qwen3-coder-flash",
+    "if/qwen3-coder-plus",
+    "if/qwen3-max",
+    "if/qwen3-235b",
+    "if/deepseek-v3.2",
+    "if/deepseek-r1",
+    "if/glm-4.7",
+    "kmc/kimi-k2.6",
+    "kmc/kimi-k2.5",
+    "kmc/kimi-k2.5-thinking",
+    "opencode-go/kimi-k2.6",
+    "opencode-go/glm-5.1",
+    "opencode-go/glm-5",
+    "opencode-go/qwen3.6-plus",
+    "opencode-go/minimax-m2.7",
+    "openai/gpt-5.4",
+    "openai/gpt-5.4-mini",
+    "openai/gpt-5.4-nano",
+    "openai/gpt-5.2",
+    "openai/gpt-5.1",
+    "openai/gpt-4.1",
+    "openai/gpt-4o-mini",
+    "anthropic/claude-sonnet-4-20250514",
+    "anthropic/claude-opus-4-20250514",
+    "gemini/gemini-3.1-pro-preview",
+    "gemini/gemini-3-flash-preview",
+    "gemini/gemini-2.5-pro",
+    "gemini/gemini-2.5-flash",
+    "openrouter/openrouter/free",
+    "openrouter/deepseek/deepseek-v4-flash:free",
+    "openrouter/deepseek/deepseek-chat-v3-0324:free",
+    "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+    "openrouter/x-ai/grok-4.3",
+    "openrouter/anthropic/claude-opus-4.7",
+    "openrouter/google/gemini-3.1-pro-preview",
+    "openrouter/moonshotai/kimi-k2.6",
+    "groq/llama-3.3-70b-versatile",
+    "groq/qwen/qwen3-32b",
+    "groq/openai/gpt-oss-120b",
+    "together/deepseek-ai/DeepSeek-R1",
+    "together/Qwen/Qwen3-235B-A22B",
+    "together/meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    "cerebras/gpt-oss-120b",
+    "cerebras/zai-glm-4.7",
+    "cerebras/qwen-3-235b-a22b-instruct-2507",
+    "xai/grok-4",
+    "xai/grok-4-fast-reasoning",
+    "xai/grok-code-fast-1",
+    "deepseek/deepseek-v4-pro",
+    "deepseek/deepseek-v4-flash",
+    "deepseek/deepseek-chat",
+    "commandcode/deepseek/deepseek-v4-pro",
+    "commandcode/moonshotai/Kimi-K2.6",
+    "commandcode/zai-org/GLM-5.1",
+    "cloudflare-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "cloudflare-ai/@cf/moonshotai/kimi-k2.6",
+    "cloudflare-ai/@cf/zai-org/glm-4.7-flash",
+    "vertex/gemini-3.1-pro-preview",
+    "vertex/gemini-3-flash-preview",
+    "vertex-partner/zai-org/glm-5-maas",
+    "grok-web/grok-4.2",
+    "grok-web/grok-4.1-fast",
+    "perplexity-web/pplx-auto",
+    "perplexity-web/pplx-sonnet",
+    "perplexity-web/pplx-gemini",
+]
+
+
 def list_models(provider: str) -> list[str]:
     provider = provider.strip().lower()
+    if provider in {"9router", "nine-router"}:
+        provider = NINE_ROUTER_PROVIDER
     if provider not in SUPPORTED_PROVIDERS:
         raise RuntimeError(f"Unsupported provider: {provider}")
+    if provider == NINE_ROUTER_PROVIDER:
+        return list(dict.fromkeys(_NINE_ROUTER_MODELS))
     if provider == OPENAI_PROVIDER:
         return [
             "gpt-5.5",
@@ -501,6 +698,9 @@ def list_models(provider: str) -> list[str]:
         ]
     if provider == OPENROUTER_PROVIDER:
         return [
+            "free-forever",
+            "fast-free",
+            "coding-auto",
             "openrouter/free",
             "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
             "deepseek/deepseek-v4-flash:free",
@@ -604,6 +804,32 @@ def list_models(provider: str) -> list[str]:
 
 def provider_catalog() -> dict[str, dict[str, Any]]:
     return HOSTED_PROVIDER_CATALOG
+
+
+def nine_router_generate_json(*, model: str, system: str, user: str) -> dict[str, Any]:
+    api_key = _provider_key_from_env_or_secret(NINE_ROUTER_PROVIDER)
+    if not api_key:
+        return {"text": "", "error_message": NINE_ROUTER_LOGIN_HINT}
+    status, data, _raw = _post_json(
+        _nine_router_base_url() + "/chat/completions",
+        {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "max_tokens": 2800 if _friendly_free_tier_mode() else 4000,
+            "temperature": 0.2,
+        },
+        {"Authorization": f"Bearer {api_key}"},
+        provider=NINE_ROUTER_PROVIDER,
+    )
+    if status < 200 or status >= 300:
+        return {"text": "", "error_message": _friendly_error(NINE_ROUTER_PROVIDER, status, data, f"9Router error {status}")}
+    choices = (data or {}).get("choices") if isinstance(data, dict) else []
+    first = choices[0] if isinstance(choices, list) and choices else {}
+    message = first.get("message") if isinstance(first, dict) else {}
+    return {"text": str((message or {}).get("content") or "")}
 
 
 def openai_generate_json(*, model: str, system: str, user: str) -> dict[str, Any]:

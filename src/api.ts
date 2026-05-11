@@ -44,12 +44,14 @@ export type ProviderStatus = {
 
 export type BuildMode = "full-agent" | "hybrid";
 
-export type ProviderChoice = "openai" | "anthropic" | "openrouter" | "groq" | "gemini" | "together" | "cerebras" | "xai" | "";
+export type ProviderChoice = "nine_router" | "openai" | "anthropic" | "openrouter" | "groq" | "gemini" | "together" | "cerebras" | "xai" | "";
 
 export type SettingsInfo = {
   default_workspace: string | null;
   llm_provider: Exclude<ProviderChoice, ""> | null;
   build_mode: BuildMode;
+  nine_router_base_url: string;
+  nine_router_model: string;
   openai_model: string;
   anthropic_model: string;
   openrouter_model: string;
@@ -61,6 +63,7 @@ export type SettingsInfo = {
   friendly_free_tier_mode: boolean;
   agent_refinement_mode: "auto" | "off" | "always";
   agent_min_gap_seconds: number;
+  nine_router_api_key_set: boolean;
   openai_api_key_set: boolean;
   anthropic_api_key_set: boolean;
   openrouter_api_key_set: boolean;
@@ -78,6 +81,7 @@ export type SettingsInfo = {
   supabase_warning: string | null;
   supabase_missing_env: string[];
   providers: {
+    nine_router: ProviderStatus;
     openai: ProviderStatus;
     anthropic: ProviderStatus;
     openrouter: ProviderStatus;
@@ -93,6 +97,8 @@ export type SettingsUpdate = Partial<{
   default_workspace: string | null;
   llm_provider: ProviderChoice;
   build_mode: BuildMode;
+  nine_router_base_url: string;
+  nine_router_model: string;
   openai_model: string;
   anthropic_model: string;
   openrouter_model: string;
@@ -104,6 +110,7 @@ export type SettingsUpdate = Partial<{
   friendly_free_tier_mode: boolean;
   agent_refinement_mode: "auto" | "off" | "always";
   agent_min_gap_seconds: number;
+  nine_router_api_key: string | null;
   openai_api_key: string | null;
   anthropic_api_key: string | null;
   openrouter_api_key: string | null;

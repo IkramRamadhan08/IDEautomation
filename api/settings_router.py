@@ -29,6 +29,8 @@ class SettingsInfo(BaseModel):
     default_workspace: str | None
     llm_provider: str | None
     build_mode: str
+    nine_router_base_url: str = "http://127.0.0.1:20128/v1"
+    nine_router_model: str = "free-forever"
     openai_model: str
     anthropic_model: str
     openrouter_model: str
@@ -41,6 +43,7 @@ class SettingsInfo(BaseModel):
     agent_refinement_mode: str = "auto"
     agent_min_gap_seconds: float = 4.0
     agent_requests_per_minute: int = 8
+    nine_router_api_key_set: bool = False
     openai_requests_per_minute: int | None = None
     anthropic_requests_per_minute: int | None = None
     openrouter_requests_per_minute: int | None = None
@@ -72,6 +75,8 @@ class SettingsUpdateReq(BaseModel):
     default_workspace: str | None = None
     llm_provider: str | None = None
     build_mode: str | None = None
+    nine_router_base_url: str | None = None
+    nine_router_model: str | None = None
     openai_model: str | None = None
     anthropic_model: str | None = None
     openrouter_model: str | None = None
@@ -84,6 +89,7 @@ class SettingsUpdateReq(BaseModel):
     agent_refinement_mode: str | None = None
     agent_min_gap_seconds: float | None = None
     agent_requests_per_minute: int | None = None
+    nine_router_api_key: str | None = None
     openai_requests_per_minute: int | None = None
     anthropic_requests_per_minute: int | None = None
     openrouter_requests_per_minute: int | None = None
@@ -129,6 +135,8 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
             default_workspace=s.default_workspace,
             llm_provider=s.llm_provider,
             build_mode=s.build_mode,
+            nine_router_base_url=str((statuses.get("nine_router") or {}).get("base_url") or getattr(s, "nine_router_base_url", "http://127.0.0.1:20128/v1")),
+            nine_router_model=getattr(s, "nine_router_model", "free-forever"),
             openai_model=s.openai_model,
             anthropic_model=getattr(s, "anthropic_model", "claude-sonnet-4-0"),
             openrouter_model=getattr(s, "openrouter_model", "openrouter/free"),
@@ -141,6 +149,7 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
             agent_refinement_mode=str(getattr(s, "agent_refinement_mode", "auto")),
             agent_min_gap_seconds=float(getattr(s, "agent_min_gap_seconds", 4.0) or 4.0),
             agent_requests_per_minute=int(getattr(s, "agent_requests_per_minute", 8) or 8),
+            nine_router_api_key_set=getattr(s, "nine_router_api_key_set", False),
             openai_requests_per_minute=getattr(s, "openai_requests_per_minute", None),
             anthropic_requests_per_minute=getattr(s, "anthropic_requests_per_minute", None),
             openrouter_requests_per_minute=getattr(s, "openrouter_requests_per_minute", None),
@@ -166,6 +175,7 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
             supabase_warning=supabase_warning,
             supabase_missing_env=list(getattr(s, "supabase_missing_env", []) or []),
             providers={
+                "nine_router": ProviderStatus(**statuses.get("nine_router", {})),
                 "openai": ProviderStatus(**statuses.get("openai", statuses.get("openai_codex", {}))),
                 "anthropic": ProviderStatus(**statuses.get("anthropic", {})),
                 "openrouter": ProviderStatus(**statuses.get("openrouter", {})),
@@ -209,6 +219,7 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
         secrets_ready = has_supabase() and bool((os.getenv("VOICEIDE_SECRET_KEY") or "").strip())
         hosted_mode = secrets_ready and user.auth_source == "supabase"
         secret_updates = [
+            req.nine_router_api_key,
             req.openai_api_key,
             req.anthropic_api_key,
             req.openrouter_api_key,
@@ -230,6 +241,8 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
             req.default_workspace,
             req.llm_provider,
             req.build_mode,
+            req.nine_router_base_url,
+            req.nine_router_model,
             req.openai_model,
             req.anthropic_model,
             req.openrouter_model,
@@ -242,6 +255,7 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
             req.agent_refinement_mode,
             req.agent_min_gap_seconds,
             req.agent_requests_per_minute,
+            req.nine_router_api_key,
             req.openai_requests_per_minute,
             req.anthropic_requests_per_minute,
             req.openrouter_requests_per_minute,
@@ -265,6 +279,20 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
                 if not secret_profile_id:
                     raise HTTPException(400, "Hosted secret storage membutuhkan profile internal yang valid.")
 
+                if req.nine_router_api_key is not None:
+                    key = req.nine_router_api_key.strip()
+                    if key:
+                        upsert_provider_secret(profile_id=secret_profile_id, provider="nine_router", api_key=key)
+                    else:
+                        delete_provider_secret(profile_id=secret_profile_id, provider="nine_router")
+                    changed.append("nine_router_api_key")
+                if req.nine_router_base_url is not None:
+                    base_url = req.nine_router_base_url.strip().rstrip("/")
+                    if base_url:
+                        upsert_provider_secret(profile_id=secret_profile_id, provider="nine_router_base_url", api_key=base_url)
+                    else:
+                        delete_provider_secret(profile_id=secret_profile_id, provider="nine_router_base_url")
+                    changed.append("nine_router_base_url")
                 if req.openai_api_key is not None:
                     key = req.openai_api_key.strip()
                     if key:
@@ -310,11 +338,11 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
 
                 pref_profile_id = user.user_id
                 pref_req = UserPreferencesUpdateReq(
-                    llm_provider=req.llm_provider,
+                    llm_provider=("nine_router" if req.llm_provider in {"9router", "nine-router"} else req.llm_provider),
                     build_mode=req.build_mode,
                     openai_model=req.openai_model,
                     anthropic_model=req.anthropic_model,
-                    openrouter_model=req.openrouter_model,
+                    openrouter_model=req.nine_router_model or req.openrouter_model,
                     groq_model=req.groq_model,
                     gemini_model=req.gemini_model,
                     together_model=req.together_model,
@@ -330,6 +358,10 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
                 changed.append("llm_provider")
             if req.build_mode is not None:
                 changed.append("build_mode")
+            if req.nine_router_base_url is not None:
+                changed.append("nine_router_base_url")
+            if req.nine_router_model is not None:
+                changed.append("nine_router_model")
             if req.openai_model is not None:
                 changed.append("openai_model")
             if req.anthropic_model is not None:
@@ -350,8 +382,10 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
 
         mapping: list[tuple[str, str | None]] = [
             ("DEFAULT_WORKSPACE", req.default_workspace if req.default_workspace is not None else None),
-            ("LLM_PROVIDER", req.llm_provider),
+            ("LLM_PROVIDER", ("nine_router" if req.llm_provider in {"9router", "nine-router"} else req.llm_provider)),
             ("BUILD_MODE", req.build_mode),
+            ("NINE_ROUTER_BASE_URL", req.nine_router_base_url.strip().rstrip("/") if req.nine_router_base_url is not None else None),
+            ("NINE_ROUTER_MODEL", req.nine_router_model),
             ("OPENAI_MODEL", req.openai_model),
             ("OPENAI_CODEX_MODEL", req.openai_model),
             ("ANTHROPIC_MODEL", req.anthropic_model),
@@ -365,6 +399,7 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
             ("AGENT_REFINEMENT_MODE", req.agent_refinement_mode),
             ("AGENT_MIN_GAP_SECONDS", None if req.agent_min_gap_seconds is None else str(req.agent_min_gap_seconds)),
             ("AGENT_REQUESTS_PER_MINUTE", None if req.agent_requests_per_minute is None else str(req.agent_requests_per_minute)),
+            ("NINE_ROUTER_API_KEY", req.nine_router_api_key),
             ("OPENAI_REQUESTS_PER_MINUTE", None if req.openai_requests_per_minute is None else str(req.openai_requests_per_minute)),
             ("ANTHROPIC_REQUESTS_PER_MINUTE", None if req.anthropic_requests_per_minute is None else str(req.anthropic_requests_per_minute)),
             ("OPENROUTER_REQUESTS_PER_MINUTE", None if req.openrouter_requests_per_minute is None else str(req.openrouter_requests_per_minute)),
@@ -395,7 +430,7 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
         for env_key, val in mapping:
             if val is None:
                 continue
-            if env_key in {"LLM_PROVIDER", "DEFAULT_WORKSPACE", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "GROQ_API_KEY", "GEMINI_API_KEY", "TOGETHER_API_KEY", "CEREBRAS_API_KEY", "XAI_API_KEY"} and not str(val).strip():
+            if env_key in {"LLM_PROVIDER", "DEFAULT_WORKSPACE", "NINE_ROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "GROQ_API_KEY", "GEMINI_API_KEY", "TOGETHER_API_KEY", "CEREBRAS_API_KEY", "XAI_API_KEY"} and not str(val).strip():
                 env_unset(env_key)
                 changed.append(env_key)
                 continue

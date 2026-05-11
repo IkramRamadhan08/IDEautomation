@@ -12,9 +12,11 @@ RUN apt-get update \
 
 COPY api/requirements.txt /app/api/requirements.txt
 RUN pip install --no-cache-dir -r /app/api/requirements.txt
+RUN npm install -g 9router
 
 COPY api /app/api
+COPY scripts /app/scripts
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "sh /app/scripts/start-railway.sh"]

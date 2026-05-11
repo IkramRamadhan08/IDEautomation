@@ -13,6 +13,8 @@ interface SettingsModalProps {
   llmProviderDraft: ProviderChoice;
   buildModeDraft: BuildMode;
   modelDraft: string;
+  nineRouterBaseUrlDraft: string;
+  nineRouterApiKeyDraft: string;
   openaiApiKeyDraft: string;
   anthropicApiKeyDraft: string;
   openrouterApiKeyDraft: string;
@@ -28,6 +30,7 @@ interface SettingsModalProps {
   onLlmProviderChange: (provider: ProviderChoice) => void;
   onBuildModeDraftChange: (mode: BuildMode) => void;
   onModelDraftChange: (model: string) => void;
+  onNineRouterBaseUrlChange: (url: string) => void;
   onApiKeyChange: (provider: ProviderChoice, key: string) => void;
   onLogout: () => void;
   onSave: () => void;
@@ -40,6 +43,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   llmProviderDraft,
   buildModeDraft,
   modelDraft,
+  nineRouterBaseUrlDraft,
+  nineRouterApiKeyDraft,
   openaiApiKeyDraft,
   anthropicApiKeyDraft,
   openrouterApiKeyDraft,
@@ -55,13 +60,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onLlmProviderChange,
   onBuildModeDraftChange,
   onModelDraftChange,
+  onNineRouterBaseUrlChange,
   onApiKeyChange,
   onLogout,
   onSave,
 }) => {
   if (!settingsOpen) return null;
 
-  const providerKey = llmProviderDraft;
+  const providerKey = "nine_router" as ProviderChoice;
   const providerStatus = providerKey ? settings?.providers?.[providerKey] ?? null : null;
   const modelOptionsId = `model-options-${providerKey || "none"}`;
   const freeModels = providerStatus?.free_tier_models || [];
@@ -111,21 +117,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           <div className="settingsSection compactSettingsSection">
             <label className="settingsLabel">Provider</label>
-            <select
-              className="settingsInput settingsSelect"
-              value={llmProviderDraft}
-              onChange={(e) => onLlmProviderChange(e.target.value as ProviderChoice)}
-            >
-              <option value="">Choose provider…</option>
-              <option value="openai">OpenAI - familiar / trial credits</option>
-              <option value="openrouter">OpenRouter - free/cheap models</option>
-              <option value="groq">Groq - fast free plan</option>
-              <option value="gemini">Gemini - Google free quota</option>
-              <option value="together">Together AI - many open models</option>
-              <option value="cerebras">Cerebras - very fast open models</option>
-              <option value="xai">xAI - Grok models</option>
-              <option value="anthropic">Anthropic - careful edits if you have credits</option>
-            </select>
+            <input className="settingsInput" value="9Router OpenAI-compatible gateway" readOnly />
             {providerStatus ? (
               <div className="providerStatusLine compactStatusLine">
                 <span className={`providerStatusChip ${providerStatus.connected ? "connected" : "disconnected"}`}>
@@ -138,32 +130,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </div>
 
           <div className="settingsSection">
-            <label className="settingsLabel">API key</label>
-            {llmProviderDraft === "openai" && (
-              <input type="password" value={openaiApiKeyDraft} onChange={(e) => onApiKeyChange("openai", e.target.value)} className="settingsInput" placeholder="sk-..." />
-            )}
-            {llmProviderDraft === "anthropic" && (
-              <input type="password" value={anthropicApiKeyDraft} onChange={(e) => onApiKeyChange("anthropic", e.target.value)} className="settingsInput" placeholder="sk-ant-..." />
-            )}
-            {llmProviderDraft === "openrouter" && (
-              <input type="password" value={openrouterApiKeyDraft} onChange={(e) => onApiKeyChange("openrouter", e.target.value)} className="settingsInput" placeholder="sk-or-..." />
-            )}
-            {llmProviderDraft === "groq" && (
-              <input type="password" value={groqApiKeyDraft} onChange={(e) => onApiKeyChange("groq", e.target.value)} className="settingsInput" placeholder="gsk_..." />
-            )}
-            {llmProviderDraft === "gemini" && (
-              <input type="password" value={geminiApiKeyDraft} onChange={(e) => onApiKeyChange("gemini", e.target.value)} className="settingsInput" placeholder="AIza..." />
-            )}
-            {llmProviderDraft === "together" && (
-              <input type="password" value={togetherApiKeyDraft} onChange={(e) => onApiKeyChange("together", e.target.value)} className="settingsInput" placeholder="tgp_..." />
-            )}
-            {llmProviderDraft === "cerebras" && (
-              <input type="password" value={cerebrasApiKeyDraft} onChange={(e) => onApiKeyChange("cerebras", e.target.value)} className="settingsInput" placeholder="csk-..." />
-            )}
-            {llmProviderDraft === "xai" && (
-              <input type="password" value={xaiApiKeyDraft} onChange={(e) => onApiKeyChange("xai", e.target.value)} className="settingsInput" placeholder="xai-..." />
-            )}
-            {!llmProviderDraft ? <div className="settingsSubtle">Pick a provider first.</div> : null}
+            <label className="settingsLabel">9Router endpoint</label>
+            <input
+              value={nineRouterBaseUrlDraft}
+              onChange={(e) => onNineRouterBaseUrlChange(e.target.value)}
+              className="settingsInput"
+              placeholder="http://127.0.0.1:20128/v1 or https://your-9router.app/v1"
+            />
+            <label className="settingsLabel settingsLabelStacked">9Router API key</label>
+            <input type="password" value={nineRouterApiKeyDraft} onChange={(e) => onApiKeyChange("nine_router", e.target.value)} className="settingsInput" placeholder="Paste key from 9Router dashboard" />
             {settings?.supabase_enabled ? <div className="settingsSubtle compactHint">Saved per account for this hosted deployment.</div> : null}
             {settings?.supabase_warning ? <div className="settingsSubtle compactHint">{settings.supabase_warning}</div> : null}
             {settings?.supabase_missing_env?.length ? (
@@ -178,8 +153,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               value={modelDraft}
               onChange={(e) => onModelDraftChange(e.target.value)}
               list={modelOptionsId}
-              placeholder={llmProviderDraft ? "Pilih dari list atau ketik manual…" : "Pilih provider dulu…"}
-              disabled={!llmProviderDraft || modelsLoading}
+              placeholder="free-forever, kr/claude-sonnet-4.5, cx/gpt-5.4…"
+              disabled={modelsLoading}
             />
             <datalist id={modelOptionsId}>
               {models.map((model) => <option key={model} value={model}>{model}</option>)}
@@ -188,6 +163,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               {modelsLoading
                 ? "Loading…"
                 : modelsError
+                  || (modelDraft === "free-forever"
+                    ? "free-forever memakai combo 9Router. Biaya Appora $0; quota/provider tetap ikut 9Router."
+                    : "")
                   || (freeModels.length > 0
                     ? `Free-friendly: ${freeModels.slice(0, 2).join(", ")}. Bisa pilih dari list atau ketik manual.`
                     : providerStatus?.recommended_model
