@@ -164,9 +164,9 @@ export default function App() {
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [appTheme, setAppTheme] = useState<AppTheme>(() => {
-    if (typeof window === "undefined") return "light";
+    if (typeof window === "undefined") return "dark";
     const saved = window.localStorage.getItem("appora-theme");
-    return saved === "dark" || saved === "light" ? saved : "light";
+    return saved === "dark" || saved === "light" ? saved : "dark";
   });
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [projectManagerOpen, setProjectManagerOpen] = useState(false);
