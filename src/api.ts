@@ -173,7 +173,8 @@ const isViteDev = Boolean(import.meta.env.DEV);
 const localDevBase = typeof window !== "undefined"
   ? `${window.location.protocol}//${window.location.hostname || "localhost"}:8787`
   : "http://localhost:8787";
-const BASE = envBase || (isViteDev ? localDevBase : "");
+const hostedApiBase = "https://appora-api-production.up.railway.app";
+const BASE = envBase || (isViteDev ? localDevBase : hostedApiBase);
 const SESSION_STORAGE_KEY = "voiceide-session-id";
 const USER_STORAGE_KEY = "voiceide-user-id";
 

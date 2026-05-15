@@ -999,7 +999,6 @@ export default function App() {
     setEditorStatus(`Creating project ${name}...`);
     try {
       await ensureHostedSession("membuat project");
-      await ensureWorkspaceReady();
 
       const res = await createHostedProject({ name, template_id: selectedTemplateId || "blank" });
       if (hasVerifiedHostedAuth) {
