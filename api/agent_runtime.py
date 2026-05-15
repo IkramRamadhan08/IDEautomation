@@ -479,6 +479,8 @@ def _friendly_free_tier_mode() -> bool:
 def _max_tool_loops_for_run(ctx: PreparedAgentContext) -> int:
     if not _friendly_free_tier_mode():
         return _MAX_MCP_TOOL_LOOPS
+    if ctx.is_full_agent and ctx.intent.should_write_files:
+        return _MAX_MCP_TOOL_LOOPS
     if ctx.intent.kind == "inspection":
         return 1
     if ctx.intent.should_write_files:
@@ -539,9 +541,9 @@ def _should_run_refinement(*, build_mode: str, instruction: str, active_rel: str
     if refinement_mode == "always":
         return True
 
-    friendly_mode = _friendly_free_tier_mode()
     if build_mode == "full-agent":
-        return not friendly_mode
+        return True
+    friendly_mode = _friendly_free_tier_mode()
     if preview_url or attached_assets:
         return not friendly_mode
 

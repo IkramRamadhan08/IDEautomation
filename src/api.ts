@@ -264,6 +264,24 @@ export async function archiveHostedProject(projectId: string): Promise<{ ok: boo
   return r.json();
 }
 
+export async function duplicateHostedProject(projectId: string, payload: { name?: string | null } = {}): Promise<{ ok: boolean; project: HostedProject }> {
+  const r = await apiFetch(`/api/projects/${encodeURIComponent(projectId)}/duplicate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function saveHostedProjectSnapshot(projectId: string): Promise<{ ok: boolean; project: HostedProject }> {
+  const r = await apiFetch(`/api/projects/${encodeURIComponent(projectId)}/snapshot`, {
+    method: "POST",
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
 export async function exportProjectZip(projectRoot: string): Promise<{ blob: Blob; filename: string }> {
   const r = await apiFetch(`/api/projects/export?project_root=${encodeURIComponent(projectRoot)}`);
   if (!r.ok) throw new Error(await r.text());

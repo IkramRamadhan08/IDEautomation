@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent, type PointerEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { Toaster, toast } from "sonner";
 import { supabase } from "./lib/supabase";
@@ -30,7 +30,9 @@ import {
   createHostedProject,
   renameHostedProject,
   archiveHostedProject,
+  duplicateHostedProject,
   exportProjectZip,
+  saveHostedProjectSnapshot,
   listCheckpoints,
   restoreCheckpoint,
   type HostedProject,
@@ -64,6 +66,7 @@ import {
   Boxes,
   Check,
   Code2,
+  Copy,
   Database,
   Download,
   Globe2,
@@ -74,6 +77,7 @@ import {
   PlayCircle,
   RefreshCw,
   Rocket,
+  Save,
   ShieldCheck,
   Sparkles,
   Sun,
@@ -104,6 +108,7 @@ function ApporaLoading({ title, subtitle }: { title: string; subtitle?: string }
           muted
           loop
           playsInline
+          preload="auto"
         />
       </div>
       <div className="apporaLoadingCopy">
@@ -131,6 +136,7 @@ export default function App() {
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [hostedProjects, setHostedProjects] = useState<HostedProjectType[]>([]);
   const [selectedProject, setSelectedProject] = useState<string>(".");
+  const [workspaceSetupComplete, setWorkspaceSetupComplete] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string>("");
   const [previewFrameKey, setPreviewFrameKey] = useState(0);
 
@@ -303,6 +309,7 @@ export default function App() {
     setProjects([]);
     setHostedProjects([]);
     setSelectedProject(".");
+    setWorkspaceSetupComplete(false);
     setPreviewUrl("");
     setPreviewFrameKey((prev) => prev + 1);
     setAgentInput("");
@@ -345,6 +352,7 @@ export default function App() {
 
   // --- Auth & Init ---
   useEffect(() => {
+    let mounted = true;
     if (typeof window !== "undefined") {
       window.localStorage.removeItem("voiceide-demo-mode");
     }
@@ -367,16 +375,21 @@ export default function App() {
       setGoogleAuth({ ok: true, authenticated: false, phase: "idle", user: null });
     };
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    const minimumLoader = new Promise((resolve) => window.setTimeout(resolve, 850));
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
       applySessionAuth(session);
-      setGoogleAuthLoading(false);
+      await minimumLoader;
+      if (mounted) setGoogleAuthLoading(false);
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       applySessionAuth(session);
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
@@ -532,13 +545,13 @@ export default function App() {
     try {
       const [detected, hosted, templates] = await Promise.all([
         detectProjects().catch(() => ({ ok: true, projects: [] as ProjectInfo[] })),
-        hasVerifiedHostedAuth ? listHostedProjects().catch(() => ({ ok: true, projects: [] as HostedProject[] })) : Promise.resolve({ ok: true, projects: [] as HostedProject[] }),
-        hasVerifiedHostedAuth ? listProjectTemplates().catch(() => ({ ok: true, templates: [] as ProjectTemplate[] })) : Promise.resolve({ ok: true, templates: [] as ProjectTemplate[] }),
+        hasVerifiedHostedAuth ? listHostedProjects().catch(() => null) : Promise.resolve({ ok: true, projects: [] as HostedProject[] }),
+        hasVerifiedHostedAuth ? listProjectTemplates().catch(() => null) : Promise.resolve({ ok: true, templates: [] as ProjectTemplate[] }),
       ]);
       if (requestAuthUserKey !== latestAuthUserKeyRef.current) return;
       setProjects(detected.projects || []);
-      setHostedProjects(hosted.projects || []);
-      setProjectTemplates(templates.templates || []);
+      if (hosted) setHostedProjects(hosted.projects || []);
+      if (templates) setProjectTemplates(templates.templates || []);
     } catch {
       if (requestAuthUserKey !== latestAuthUserKeyRef.current) return;
       setProjects([]);
@@ -669,6 +682,7 @@ export default function App() {
         const provisioned = await provisionWorkspace();
         setWs(provisioned.path);
       }
+      setWorkspaceSetupComplete(true);
       selectProject(projectRoot);
       await refreshExplorer(projectRoot);
       setProjectManagerOpen(false);
@@ -713,6 +727,46 @@ export default function App() {
       toast.success("Project archived");
     } catch (e) {
       toast.error("Gagal archive project: " + errorMessage(e));
+    } finally {
+      setProjectMutatingId("");
+    }
+  };
+
+  const duplicateProjectFromList = async (project: HostedProjectType) => {
+    setProjectMutatingId(project.id);
+    try {
+      const res = await duplicateHostedProject(project.id, { name: `${project.name} Copy` });
+      setHostedProjects((prev) => [res.project, ...prev.filter((item) => item.id !== res.project.id)]);
+      setWorkspaceSetupComplete(true);
+      selectProject(res.project.root);
+      await refreshExplorer(res.project.root);
+      void refreshProjects();
+      toast.success(`Project duplicated: ${res.project.name}`);
+    } catch (e) {
+      toast.error("Gagal duplicate project: " + errorMessage(e));
+    } finally {
+      setProjectMutatingId("");
+    }
+  };
+
+  const saveCurrentHostedProject = async (projectRoot = selectedProject) => {
+    const hosted = hostedProjects.find((project) => project.root === projectRoot);
+    if (!hosted) {
+      toast.error("Pilih project tersimpan dulu sebelum save");
+      return;
+    }
+    setProjectMutatingId(hosted.id);
+    try {
+      if (activeFile && buffers[activeFile]?.dirty) {
+        await writeFile(activeFile, buffers[activeFile].content);
+        setBuffers((prev) => ({ ...prev, [activeFile]: { ...prev[activeFile], dirty: false } }));
+      }
+      const res = await saveHostedProjectSnapshot(hosted.id);
+      setHostedProjects((prev) => prev.map((item) => item.id === hosted.id ? res.project : item));
+      setEditorStatus(`Project saved: ${res.project.name}`);
+      toast.success("Project saved to Appora");
+    } catch (e) {
+      toast.error("Gagal save project: " + errorMessage(e));
     } finally {
       setProjectMutatingId("");
     }
@@ -816,6 +870,7 @@ export default function App() {
       if (picked?.ok && picked.path) {
         const res = await setWorkspace(picked.path);
         setWs(res.path);
+        setWorkspaceSetupComplete(true);
         return;
       }
     } catch {
@@ -836,9 +891,13 @@ export default function App() {
 
       const res = await createHostedProject({ name, template_id: selectedTemplateId || "blank" });
       if (hasVerifiedHostedAuth) {
-        await updateProjectPreferences(res.project.id, { build_mode: buildModeDraft });
+        updateProjectPreferences(res.project.id, { build_mode: buildModeDraft }).catch(() => {
+          // Project creation must not be blocked by optional preference persistence.
+        });
       }
-      await refreshProjects();
+      setHostedProjects((prev) => [res.project, ...prev.filter((project) => project.id !== res.project.id)]);
+      void refreshProjects();
+      setWorkspaceSetupComplete(true);
       setSelectedProject(res.project.root);
       setEditorStatus(`Project ready: ${res.project.name}`);
       setNewProjectName("");
@@ -859,6 +918,7 @@ export default function App() {
     try {
       const res = await importBrowserFolder(files);
       setWs(res.path);
+      setWorkspaceSetupComplete(true);
       setEditorStatus(`Workspace imported: ${res.path}`);
     } catch (e) {
       setEditorStatus("Failed to import workspace folder");
@@ -1046,8 +1106,8 @@ export default function App() {
   const renderGoogleLoginGate = () => {
     const heroNodes = [
       { label: "Prompt", detail: "Describe the app", icon: Sparkles },
-      { label: "Plan", detail: "Clara scopes the build", icon: Bot },
-      { label: "Code", detail: "Raka edits files", icon: Code2 },
+      { label: "Autopilot", detail: "Clara takes over the build", icon: Bot },
+      { label: "Copilot", detail: "Raka helps while you code", icon: Code2 },
       { label: "Preview", detail: "Inspect in browser", icon: Globe2 },
       { label: "Memory", detail: "Project context stays", icon: Layers3 },
       { label: "Deploy", detail: "Vercel-ready output", icon: Rocket },
@@ -1059,52 +1119,13 @@ export default function App() {
       ["Portfolio app", "Content pages, templates, deployment"],
     ];
     const providers = ["OpenAI", "Gemini", "Anthropic", "OpenRouter", "Groq", "Together", "Cerebras", "xAI", "Supabase", "Vercel"];
-    const triggerLandingBurst = (target: HTMLDivElement) => {
-      target.classList.remove("apporaBursting");
-      target.style.setProperty("--appora-burst", "0");
-      void target.offsetWidth;
-      target.classList.add("apporaBursting");
-      target.style.setProperty("--appora-burst", "1");
-      window.setTimeout(() => {
-        target.classList.remove("apporaBursting");
-        target.style.setProperty("--appora-burst", "0");
-      }, 680);
-    };
-    const handleLandingPointerMove = (event: PointerEvent<HTMLDivElement>) => {
-      const target = event.currentTarget;
-      target.style.setProperty("--appora-cursor-x", `${event.clientX}px`);
-      target.style.setProperty("--appora-cursor-y", `${event.clientY}px`);
-      target.style.setProperty("--appora-cursor-hot", "1");
-    };
-    const handleLandingPointerLeave = (event: PointerEvent<HTMLDivElement>) => {
-      event.currentTarget.style.setProperty("--appora-cursor-hot", "0");
-    };
 
     return (
     <div
       className="authLanding apporaLanding"
       id="top"
-      onPointerMove={handleLandingPointerMove}
-      onPointerLeave={handleLandingPointerLeave}
-      onPointerDownCapture={(event) => triggerLandingBurst(event.currentTarget)}
     >
       <Toaster position="top-right" richColors />
-      <div className="apporaCursorLiquid" aria-hidden="true">
-        <span className="apporaCursorCore" />
-        <span className="apporaCursorBlob one" />
-        <span className="apporaCursorBlob two" />
-        <span className="apporaCursorBlob three" />
-        <span className="apporaCursorDrop d1" />
-        <span className="apporaCursorDrop d2" />
-        <span className="apporaCursorDrop d3" />
-        <span className="apporaCursorDrop d4" />
-        <span className="apporaCursorDrop d5" />
-        <span className="apporaCursorDrop d6" />
-        <span className="apporaCursorDrop d7" />
-        <span className="apporaCursorDrop d8" />
-        <span className="apporaCursorDrop d9" />
-        <span className="apporaCursorGlint" />
-      </div>
       <header className="apporaNav">
         <a className="splineBrandButton apporaBrand" href="#top" aria-label="Appora home">
           <span className="authBrandMark">A</span>
@@ -1132,8 +1153,8 @@ export default function App() {
           <div className="apporaHeroCopy">
             <h1>THE FUTURE JUST IN YOUR HEAD</h1>
             <p>
-              Appora turns a rough idea into a hosted workspace with Clara for planning, Raka for implementation,
-              live preview, project memory, Supabase data, and Vercel-ready output.
+              Appora turns a rough idea into a hosted workspace with Clara as the autopilot builder,
+              Raka as the coding copilot, live preview, project memory, Supabase data, and Vercel-ready output.
             </p>
             <div className="apporaHeroActions">
               <button className="apporaPrimaryButton" onClick={openAppora}>
@@ -1154,34 +1175,6 @@ export default function App() {
 
           <div className="apporaHeroVisual" aria-label="Agent workflow preview">
             <div className="apporaOrbitGlow" />
-            <div className="apporaMascotStage" aria-label="Clara and Raka companions">
-              {[
-                { name: "Clara", role: "Planner", tone: "clara" },
-                { name: "Raka", role: "Builder", tone: "raka" },
-              ].map((agent) => (
-                <div className={`apporaMascot ${agent.tone}`} key={agent.name}>
-                  <div className="apporaMascotHalo" />
-                  <div className="apporaMascotBody">
-                    <div className="apporaMascotHelmet">
-                      <span className="apporaMascotAntenna" />
-                      <div className="apporaMascotFace">
-                        <span className="apporaMascotEye left" />
-                        <span className="apporaMascotEye right" />
-                        <span className="apporaMascotMouth" />
-                      </div>
-                    </div>
-                    <div className="apporaMascotSuit">
-                      <span />
-                      <strong>{agent.name.slice(0, 1)}</strong>
-                    </div>
-                  </div>
-                  <div className="apporaMascotTag">
-                    <strong>{agent.name}</strong>
-                    <span>{agent.role}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
             <div className="apporaCommandPanel">
               <div className="apporaPanelChrome">
                 <span />
@@ -1191,8 +1184,8 @@ export default function App() {
               </div>
               <div className="apporaPromptLine">Build a booking app with auth, admin dashboard, and deploy notes.</div>
               <div className="apporaAgentRows">
-                <div><Bot size={17} /><strong>Clara</strong><span>breaks the request into product, data, UI, and test steps</span></div>
-                <div><Terminal size={17} /><strong>Raka</strong><span>edits files, runs checks, and records actions only</span></div>
+                <div><Bot size={17} /><strong>Clara</strong><span>autopilot mode for users who want the app built end to end</span></div>
+                <div><Terminal size={17} /><strong>Raka</strong><span>copilot mode for devs who want focused help while staying in control</span></div>
               </div>
             </div>
             <div className="apporaNodeGrid">
@@ -1237,28 +1230,9 @@ export default function App() {
           </div>
         </section>
 
-        <section className="apporaSection apporaAgents" aria-label="Agents">
-          <div className="apporaSectionHeader">
-            <span className="apporaSectionIndex">02</span>
-            <h2>Two Agents, One Build Loop.</h2>
-          </div>
-          <div className="apporaAgentCards">
-            <article>
-              <div className="apporaAgentAvatar clara">C</div>
-              <h3>Clara</h3>
-              <p>Conversational planner. She keeps the response stream human, asks for missing context, and turns vague requests into clear implementation intent.</p>
-            </article>
-            <article>
-              <div className="apporaAgentAvatar raka">R</div>
-              <h3>Raka</h3>
-              <p>Execution agent. He focuses on edits, terminal commands, tool calls, verification, and the action-only interaction log.</p>
-            </article>
-          </div>
-        </section>
-
         <section className="apporaSection" id="templates">
           <div className="apporaSectionHeader wide">
-            <span className="apporaSectionIndex">03</span>
+            <span className="apporaSectionIndex">02</span>
             <h2>Production-Shaped Starters For People Who Do Not Want A Blank Repo.</h2>
           </div>
           <div className="apporaTemplateGrid">
@@ -1274,7 +1248,7 @@ export default function App() {
 
         <section className="apporaSection apporaSplit" id="docs">
           <div className="apporaSectionCopy">
-            <span className="apporaSectionIndex">04</span>
+            <span className="apporaSectionIndex">03</span>
             <h2>Bring Your Own Keys, Use The Models People Actually Have.</h2>
             <p>Provider routing is built for free-tier friendly experimentation: OpenAI, Gemini, OpenRouter, Groq, Together, Cerebras, xAI, and more through hosted settings.</p>
           </div>
@@ -1287,7 +1261,7 @@ export default function App() {
 
         <section className="apporaSection apporaFaqSection" id="faq">
           <div className="apporaSectionHeader">
-            <span className="apporaSectionIndex">05</span>
+            <span className="apporaSectionIndex">04</span>
             <h2>Built For Hosted Web, Not A Local-Only Toy.</h2>
           </div>
           <div className="apporaFaqGrid">
@@ -1431,6 +1405,10 @@ export default function App() {
             <Download size={14} className={projectExporting ? "spinIcon" : ""} />
             <span>{projectExporting ? "Saving" : "Save ZIP"}</span>
           </button>
+          <button className="btn subtleBtn" type="button" disabled={!selectedProject || selectedProject === "." || Boolean(projectMutatingId)} onClick={() => void saveCurrentHostedProject()}>
+            <Save size={14} className={projectMutatingId ? "spinIcon" : ""} />
+            <span>Save</span>
+          </button>
           <button className="btn primary" type="button" onClick={() => setNewProjectOpen(true)}>
             New project
           </button>
@@ -1482,6 +1460,12 @@ export default function App() {
                       </button>
                       <button className="iconOnlyBtn" type="button" disabled={projectExporting} onClick={() => void downloadProjectToDevice(project.root)} title="Download ZIP">
                         <Download size={14} />
+                      </button>
+                      <button className="iconOnlyBtn" type="button" disabled={busy} onClick={() => void saveCurrentHostedProject(project.root)} title="Save hosted snapshot">
+                        <Save size={14} />
+                      </button>
+                      <button className="iconOnlyBtn" type="button" disabled={busy} onClick={() => void duplicateProjectFromList(project)} title="Duplicate project">
+                        <Copy size={14} />
                       </button>
                       <button className="iconOnlyBtn" type="button" disabled={busy} onClick={() => beginRenameProject(project)} title="Rename project">
                         <Pencil size={14} />
@@ -1563,7 +1547,7 @@ export default function App() {
             </div>
             <div className="gateFeatureCard">
               <div className="gateFeatureTitle">Create new project</div>
-              <div className="gateFeatureText">Best when you want Clara or Raka to scaffold a fresh app from a simple brief.</div>
+              <div className="gateFeatureText">Best when you want Clara to take over a fresh build, or Raka to help you code it step by step.</div>
             </div>
           </div>
           {hasVerifiedHostedAuth ? renderSavedProjectsPanel("setup") : null}
@@ -1583,7 +1567,7 @@ export default function App() {
 
   if (routePath !== "/app") return renderGoogleLoginGate();
   if (!googleAuth?.authenticated) return renderGoogleLoginGate();
-  if (!ws || (hasVerifiedHostedAuth && hostedProjects.length === 0 && projects.length === 0 && selectedProject === ".")) return renderWorkspaceOnboarding();
+  if (!ws || (hasVerifiedHostedAuth && hostedProjects.length === 0 && projects.length === 0 && selectedProject === "." && !workspaceSetupComplete)) return renderWorkspaceOnboarding();
 
   const renderHybridMode = () => (
     <HybridWorkspace

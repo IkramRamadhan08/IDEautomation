@@ -14,7 +14,7 @@ from api.agent_intent import classify_agent_intent
 from api import agent as agent_mod
 from api.agent_mcp import MCPServerInfo, MCPToolCallResult, MCPToolInfo, discover_mcp_servers, execute_mcp_tool, suggest_mcp_actions
 from api.agent_memory import get_agent_memory_overview, remember_agent_run, retrieve_agent_memory
-from api.agent_runtime import _max_tool_loops_for_run, _should_run_deep_preflight, _verify_node, prepare_agent_context
+from api.agent_runtime import _max_tool_loops_for_run, _should_run_deep_preflight, _should_run_refinement, _verify_node, prepare_agent_context
 from api.agent_skills import detect_project_stack, resolve_agent_skills
 from api.agent_tools import execute_local_tool
 from api.auth_identity import AuthenticatedUser
@@ -22,7 +22,7 @@ from api.auth_policy import require_hosted_user
 from api.fs import safe_join
 from api.hybrid import build_hybrid_seed
 from api.project_templates import list_project_templates, render_project_template
-from api.projects import ProjectCreateReq, create_project
+from api.projects import ProjectCreateReq, ProjectDuplicateReq, create_project, duplicate_project, list_projects, save_project_snapshot
 from api.main import ApplyManyReq, WriteOp, _browser_preview_audit_ready, _build_quality_checks, _extract_preview_snapshot_from_html, _sha256_text, agent_capabilities, app as main_app, fs_apply_many, supabase_rag_status
 from api.preferences import UserPreferencesRecord
 from api.preferences_router import build_preferences_router
@@ -134,7 +134,7 @@ class AgentRuntimeContextRegressionTests(unittest.TestCase):
 
             self.assertTrue(_should_run_deep_preflight(ctx, req.input))
 
-    def test_free_tier_build_still_allows_one_local_tool_loop(self) -> None:
+    def test_free_tier_clara_build_allows_reliable_local_tool_loops(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ws_root = Path(tmp)
             project_dir = ws_root / "demo"
@@ -155,7 +155,18 @@ class AgentRuntimeContextRegressionTests(unittest.TestCase):
             ctx = prepare_agent_context(req, ws_root)
 
             with patch("api.agent_runtime.settings_mod.settings.friendly_free_tier_mode", True):
-                self.assertEqual(_max_tool_loops_for_run(ctx), 1)
+                self.assertEqual(_max_tool_loops_for_run(ctx), 2)
+
+    def test_free_tier_clara_build_still_runs_refinement(self) -> None:
+        with patch("api.agent_runtime.settings_mod.settings.friendly_free_tier_mode", True), \
+            patch("api.agent_runtime.settings_mod.settings.agent_refinement_mode", "auto"):
+            self.assertTrue(_should_run_refinement(
+                build_mode="full-agent",
+                instruction="build a portfolio app",
+                active_rel="",
+                preview_url=None,
+                attached_assets=[],
+            ))
 
 
 class AgentPatchEditingRegressionTests(unittest.TestCase):
@@ -1497,6 +1508,32 @@ class ProjectTemplateRegressionTests(unittest.TestCase):
             self.assertTrue((root / "src" / "App.tsx").exists())
             self.assertIn("Admin CRUD", (root / "README.md").read_text(encoding="utf-8"))
             self.assertIn("Template: Admin CRUD", (root / ".voiceide" / "memory" / "project.md").read_text(encoding="utf-8"))
+
+    def test_local_saved_project_crud_uses_workspace_relative_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            state_path = workspace / ".projects.json"
+
+            with patch("api.projects.PROJECTS_STATE_PATH", state_path), \
+                patch("api.projects.has_supabase", return_value=False):
+                project = create_project(
+                    workspace_root=workspace,
+                    owner_id="user-1",
+                    req=ProjectCreateReq(name="Demo", template_id="blank"),
+                )
+                (workspace / project.root / "src").mkdir()
+                (workspace / project.root / "src" / "App.tsx").write_text("export default function App() { return null }\n", encoding="utf-8")
+                saved = save_project_snapshot(workspace_root=workspace, owner_id="user-1", project_id=project.id)
+                copy = duplicate_project(
+                    workspace_root=workspace,
+                    owner_id="user-1",
+                    project_id=saved.id,
+                    req=ProjectDuplicateReq(name="Demo Copy"),
+                )
+                listed = list_projects(workspace_root=workspace, owner_id="user-1")
+
+            self.assertTrue((workspace / copy.root / "src" / "App.tsx").exists())
+            self.assertEqual({item.name for item in listed}, {"Demo Copy", "Demo"})
 
 
 class PatchApplyRegressionTests(unittest.TestCase):

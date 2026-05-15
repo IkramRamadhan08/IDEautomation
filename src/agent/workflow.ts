@@ -596,8 +596,10 @@ export async function runAgentWorkflow({
     pushAgentLiveItem({
       role: "tool",
       tone: "default",
-      text: "Free-tier guard aktif: agent hemat panggilan model dan context supaya limit provider nggak cepat mentok.",
-      meta: "1 call untuk build normal, repair hanya kalau validasi gagal",
+      text: buildMode === "full-agent"
+        ? "Free-tier guard aktif, tapi Clara tetap boleh repair hasil build yang gagal supaya flow preview lebih reliable."
+        : "Free-tier guard aktif: agent hemat panggilan model dan context supaya limit provider nggak cepat mentok.",
+      meta: buildMode === "full-agent" ? "Clara: maksimal 2 repair" : "Raka: maksimal 1 repair untuk validasi/shell",
     });
   }
 
@@ -754,12 +756,12 @@ export async function runAgentWorkflow({
     let latestPreviewAudit = previewAudit;
     let latestShellResults = shellResults;
     let latestVerifierFailures = mainVerifierFailures;
-    const maxRepairPasses = friendlyFreeTierMode ? 1 : 2;
+    const maxRepairPasses = buildMode === "full-agent" ? 2 : (friendlyFreeTierMode ? 1 : 2);
     const needsRepair = () => {
       const validationFailing = Boolean(latestValidation && !latestValidation.ok);
       const shellFailing = latestShellResults.some((result) => !result.ok);
       const previewFailing = Boolean(latestPreviewAudit && latestPreviewAudit.issues.length > 0);
-      return shellFailing || validationFailing || (!friendlyFreeTierMode && previewFailing);
+      return shellFailing || validationFailing || (buildMode === "full-agent" || !friendlyFreeTierMode ? previewFailing : false);
     };
     const hasValidationIssues = Boolean(latestValidation && !latestValidation.ok);
     const hasPreviewIssues = Boolean(latestPreviewAudit && latestPreviewAudit.issues.length > 0);
@@ -776,7 +778,7 @@ export async function runAgentWorkflow({
           role: "tool",
           tone: "working",
           text: `Repair loop ${pass}/${maxRepairPasses}: agent baca output terbaru lalu coba benerin lagi.`,
-          meta: friendlyFreeTierMode ? "free-tier guard: maksimal 1 repair" : "bounded loop: maksimal 2 repair",
+          meta: buildMode === "full-agent" ? "Clara reliability loop: maksimal 2 repair" : (friendlyFreeTierMode ? "free-tier guard: maksimal 1 repair" : "bounded loop: maksimal 2 repair"),
         });
 
         const validationReport = latestValidation && !latestValidation.ok ? formatValidationReport(latestValidation, 6000) : null;

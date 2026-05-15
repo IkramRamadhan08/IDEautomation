@@ -136,6 +136,21 @@ def archive_project(*, project_id: str, owner_id: str) -> dict[str, Any] | None:
     return data[0] if data else None
 
 
+def touch_project(*, project_id: str, owner_id: str) -> dict[str, Any] | None:
+    client = get_supabase_admin()
+    if not client:
+        return None
+    res = (
+        client.table("projects")
+        .update({"updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+        .eq("id", project_id)
+        .eq("owner_id", owner_id)
+        .execute()
+    )
+    data = getattr(res, "data", None) or []
+    return data[0] if data else None
+
+
 def list_project_files(*, owner_id: str, project_root: str, limit: int = 2000) -> list[dict[str, Any]] | None:
     client = get_supabase_admin()
     if not client:
