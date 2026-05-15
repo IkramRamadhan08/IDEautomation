@@ -7,8 +7,6 @@ import { AgentLiveStage } from "./AgentLiveStage";
 import { type AgentLiveItem, type BuildMode, type UploadedImageAsset } from "../../types";
 
 type OrbMode = "idle" | "playful" | "curious" | "sleepy" | "sleeping" | "working" | "celebrate" | "surprised" | "error";
-const rakaAstronautUrl = new URL("../../assets/raka-astronaut.png", import.meta.url).href;
-const claraAstronautUrl = new URL("../../assets/clara-astronaut.png", import.meta.url).href;
 
 interface AgentOrbProps {
   ws: string | null;
@@ -73,6 +71,7 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
   const prevAgentReplyRef = React.useRef<string>(agentReply);
   const modeProfile = getBuildModeProfile(buildMode);
   const [orbMode, setOrbMode] = React.useState<OrbMode>("idle");
+  const [bubbleText, setBubbleText] = React.useState<string>(modeProfile.idleLines[0]);
   const [lastInteractionAt, setLastInteractionAt] = React.useState<number>(() => Date.now());
   const [isCompactPointer, setIsCompactPointer] = React.useState(false);
 
@@ -87,7 +86,6 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
   const promptHasIntent = agentInput.trim().length > 8;
   const showRunExperience = agentRunViewPinned || agentStatus === "thinking";
   const personaClass = buildMode === "full-agent" ? "clara" : "raka";
-  const astronautSrc = buildMode === "full-agent" ? claraAstronautUrl : rakaAstronautUrl;
   const visibleConversationItems = agentLiveItems.filter((item) => item.role === "user" || item.role === "assistant");
   const contextChips = [
     `${modeProfile.personaName} • ${modeProfile.personaRole}`,
@@ -106,7 +104,7 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
     reactionUntilRef.current = Date.now() + durationMs;
     setLastInteractionAt(Date.now());
     setOrbMode(mode);
-    void text;
+    setBubbleText(text);
   }, []);
 
   const wakeUp = React.useCallback((playful = false) => {
@@ -116,14 +114,17 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
     if (playful) {
       playfulUntilRef.current = now + 5000;
       setOrbMode("playful");
+      setBubbleText(pickRandom(modeProfile.playfulLines));
       return;
     }
     if (agentStatus === "idle") {
       if (wasSleeping) {
         reactionUntilRef.current = now + 3000;
         setOrbMode("surprised");
+        setBubbleText(pickRandom(modeProfile.surprisedLines));
       } else {
         setOrbMode("idle");
+        setBubbleText(pickRandom(modeProfile.idleLines));
       }
     }
   }, [agentStatus, modeProfile, orbMode]);
@@ -132,16 +133,19 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
     onAgentInputChange(prompt);
     setLastInteractionAt(Date.now());
     setOrbMode("curious");
+    setBubbleText("Sip, ini udah lebih spesifik. Aku siap gas.");
     if (!agentWidgetOpen) onToggleOpen();
   }, [agentWidgetOpen, onAgentInputChange, onToggleOpen]);
 
   React.useEffect(() => {
     if (agentStatus === "thinking") {
       setOrbMode("working");
+      setBubbleText(workingMsg || "Lagi kerja. Jangan kaget kalau aku melotot ke terminal.");
       return;
     }
     if (agentStatus === "error") {
       setOrbMode("error");
+      setBubbleText(pickRandom(modeProfile.errorLines));
       return;
     }
     if (agentWidgetOpen) {
@@ -166,6 +170,41 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
 
     return () => window.clearInterval(interval);
   }, [agentStatus, agentWidgetOpen, lastInteractionAt, modeProfile, workingMsg]);
+
+  React.useEffect(() => {
+    if (agentWidgetOpen || agentStatus !== "idle") return;
+
+    if (orbMode === "sleepy") setBubbleText(pickRandom(modeProfile.sleepyLines));
+    else if (orbMode === "sleeping") setBubbleText(pickRandom(modeProfile.sleepingLines));
+    else if (orbMode === "playful") setBubbleText(pickRandom(modeProfile.playfulLines));
+    else if (orbMode === "curious") setBubbleText(pickRandom(modeProfile.curiousLines));
+    else if (orbMode === "celebrate") setBubbleText(pickRandom(modeProfile.celebrateLines));
+    else if (orbMode === "surprised") setBubbleText(pickRandom(modeProfile.surprisedLines));
+    else setBubbleText(pickRandom(modeProfile.idleLines));
+  }, [orbMode, agentStatus, agentWidgetOpen, modeProfile]);
+
+  React.useEffect(() => {
+    if (agentWidgetOpen || agentStatus !== "idle") return;
+    if (orbMode === "sleeping") return;
+
+    const interval = window.setInterval(() => {
+      if (reactionUntilRef.current > Date.now()) return;
+      setBubbleText((current) => {
+        const pool = orbMode === "sleepy"
+          ? modeProfile.sleepyLines
+          : orbMode === "playful"
+            ? modeProfile.playfulLines
+            : orbMode === "curious"
+              ? modeProfile.curiousLines
+              : modeProfile.idleLines;
+        let next = pickRandom(pool);
+        if (next === current && pool.length > 1) next = pool[(pool.indexOf(next) + 1) % pool.length];
+        return next;
+      });
+    }, 11000);
+
+    return () => window.clearInterval(interval);
+  }, [orbMode, agentStatus, agentWidgetOpen, modeProfile]);
 
   React.useEffect(() => {
     if (agentWidgetOpen) return;
@@ -223,6 +262,9 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
     if (agentStatus !== "idle") return;
     if (!promptHasIntent) return;
     setOrbMode("curious");
+    setBubbleText(activeFileName
+      ? `Oke, aku nangkep. Fokusku sekarang ${activeFileName}.`
+      : `Oke, aku nangkep arahnya. ${modeProfile.personaName} standby di sini.`);
   }, [activeFileName, agentStatus, agentWidgetOpen, modeProfile, promptHasIntent]);
 
   const statusLabel = agentStatus === "thinking"
@@ -259,6 +301,20 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
       cancel=".agentOrbPanel"
     >
       <div ref={nodeRef} className={`agentOrb ${personaClass} ${agentWidgetOpen ? "open" : "collapsed"}`}>
+        <AnimatePresence>
+          {!agentWidgetOpen && bubbleText ? (
+            <motion.div
+              key={`${orbMode}:${bubbleText}`}
+              initial={{ opacity: 0, y: 10, scale: 0.96 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 8, scale: 0.96 }}
+              className={`agentOrbBubble ${orbMode}`}
+            >
+              {bubbleText}
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
+
         {!agentWidgetOpen && agentStatus === "idle" && quickPrompts.length > 0 ? (
           <div className="agentOrbDock">
             {quickPrompts.slice(0, 2).map((item) => (
@@ -396,14 +452,17 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
                     ? { scale: [1, 1.14, 1] }
                     : orbMode === "working"
                       ? { scale: [1, 1.06, 1] }
-              : { y: [0, -4, 0] }
+                      : { y: [0, -4, 0] }
           }
           transition={isCompactPointer ? { duration: 0.12 } : { duration: orbMode === "playful" ? 0.5 : orbMode === "surprised" ? 0.35 : orbMode === "celebrate" ? 0.7 : orbMode === "working" ? 0.9 : 2.6, repeat: orbMode === "surprised" ? 1 : Infinity, ease: "easeInOut" }}
         >
-          <span className={`agentAstronaut ${orbMode}`}>
-            <img src={astronautSrc} alt="" aria-hidden="true" draggable={false} />
-            <span className="agentAstronautJetpack" aria-hidden="true" />
-            <span className="agentOrbPersonaMark">{buildMode === "full-agent" ? "Clara" : "Raka"}</span>
+          <span className={`agentOrbFace ${orbMode}`}>
+            <span className="agentOrbPersonaMark">{buildMode === "full-agent" ? "C" : "R"}</span>
+            <span className="orbEye left" />
+            <span className="orbEye right" />
+            <span className="orbMouth" />
+            <span className="orbCheek left" />
+            <span className="orbCheek right" />
           </span>
           {(promptHasIntent || attachedImage || previewUrl) ? <span className="agentOrbBadgePulse" /> : null}
         </motion.button>
