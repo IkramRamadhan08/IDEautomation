@@ -23,6 +23,15 @@ export function normalizeErrorMessage(message: string): string {
   const lower = detail.toLowerCase();
 
   if (
+    lower.includes("failed to fetch") ||
+    lower.includes("networkerror") ||
+    lower.includes("load failed") ||
+    lower.includes("gagal menghubungi supabase auth")
+  ) {
+    return "Koneksi ke API/Appora gagal. Cek koneksi sebentar, refresh halaman kalau perlu, lalu ulangi aksi project.";
+  }
+
+  if (
     lower.includes("hosted project routes now require verified login") ||
     lower.includes("hosted agent/workspace routes require verified login") ||
     lower.includes("sesi login appora belum valid") ||

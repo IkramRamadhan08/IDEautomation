@@ -557,16 +557,24 @@ export default function App() {
       let { data, error } = await supabase.auth.getSession();
       let session = data.session;
 
+      if (session?.access_token) return session;
+
       if (error || !session?.access_token) {
-        const refreshed = await supabase.auth.refreshSession();
-        session = refreshed.data.session;
+        try {
+          const refreshed = await supabase.auth.refreshSession();
+          session = refreshed.data.session;
+        } catch {
+          const message = "Gagal menghubungi Supabase Auth. Cek koneksi sebentar, lalu klik Create/Open lagi.";
+          setProjectSetupError(message);
+          setEditorStatus("Auth connection failed");
+          throw new Error(message);
+        }
       }
 
       if (!session?.access_token) {
         const message = hostedSessionMessage(actionLabel);
         setProjectSetupError(message);
         setEditorStatus("Login required");
-        setGoogleAuth({ ok: true, authenticated: false, phase: "idle", user: null });
         throw new Error(message);
       }
 
