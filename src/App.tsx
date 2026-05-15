@@ -174,6 +174,8 @@ export default function App() {
   const [projectTemplates, setProjectTemplates] = useState<ProjectTemplate[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState("saas-dashboard");
   const [newProjectSaving, setNewProjectSaving] = useState(false);
+  const [projectAuthChecking, setProjectAuthChecking] = useState(false);
+  const [projectSetupError, setProjectSetupError] = useState("");
   const [projectsRefreshing, setProjectsRefreshing] = useState(false);
   const [projectMutatingId, setProjectMutatingId] = useState<string>("");
   const [projectExporting, setProjectExporting] = useState(false);
@@ -333,6 +335,7 @@ export default function App() {
     setBuffers({});
     setEditorStatus("Ready");
     setEditorBusy(false);
+    setProjectSetupError("");
     resetAgentRunView();
   }, [resetAgentRunView]);
 
@@ -363,6 +366,7 @@ export default function App() {
 
     const applySessionAuth = (session: Session | null) => {
       if (session) {
+        setProjectSetupError("");
         setGoogleAuth({
           ok: true,
           authenticated: true,
@@ -543,19 +547,69 @@ export default function App() {
   };
 
   // --- Workspace & Files ---
+  const hostedSessionMessage = (actionLabel: string) =>
+    `Sesi login Appora belum valid untuk ${actionLabel}. Klik Continue with Google lagi, lalu ulangi.`;
+
+  const ensureHostedSession = async (actionLabel: string): Promise<Session | null> => {
+    if (!settings?.supabase_enabled) return null;
+    setProjectAuthChecking(true);
+    try {
+      let { data, error } = await supabase.auth.getSession();
+      let session = data.session;
+
+      if (error || !session?.access_token) {
+        const refreshed = await supabase.auth.refreshSession();
+        session = refreshed.data.session;
+      }
+
+      if (!session?.access_token) {
+        const message = hostedSessionMessage(actionLabel);
+        setProjectSetupError(message);
+        setEditorStatus("Login required");
+        setGoogleAuth({ ok: true, authenticated: false, phase: "idle", user: null });
+        throw new Error(message);
+      }
+
+      return session;
+    } catch (error) {
+      const message = error instanceof Error && error.message.includes("Sesi login Appora")
+        ? error.message
+        : hostedSessionMessage(actionLabel);
+      setProjectSetupError(message);
+      setEditorStatus("Login required");
+      throw new Error(message);
+    } finally {
+      setProjectAuthChecking(false);
+    }
+  };
+
+  const handleProjectActionError = (prefix: string, error: unknown) => {
+    const message = errorMessage(error);
+    setProjectSetupError(message);
+    toast.error(`${prefix}: ${message}`);
+  };
+
   const refreshProjects = async () => {
     const requestAuthUserKey = latestAuthUserKeyRef.current;
     setProjectsRefreshing(true);
     try {
       const [detected, hosted, templates] = await Promise.all([
         detectProjects().catch(() => ({ ok: true, projects: [] as ProjectInfo[] })),
-        hasVerifiedHostedAuth ? listHostedProjects().catch(() => null) : Promise.resolve({ ok: true, projects: [] as HostedProject[] }),
-        hasVerifiedHostedAuth ? listProjectTemplates().catch(() => null) : Promise.resolve({ ok: true, templates: [] as ProjectTemplate[] }),
+        hasVerifiedHostedAuth ? listHostedProjects().catch((error) => ({ error })) : Promise.resolve({ ok: true, projects: [] as HostedProject[] }),
+        hasVerifiedHostedAuth ? listProjectTemplates().catch((error) => ({ error })) : Promise.resolve({ ok: true, templates: [] as ProjectTemplate[] }),
       ]);
       if (requestAuthUserKey !== latestAuthUserKeyRef.current) return;
       setProjects(detected.projects || []);
-      if (hosted) setHostedProjects(hosted.projects || []);
-      if (templates) setProjectTemplates(templates.templates || []);
+      if ("error" in hosted) {
+        setProjectSetupError(errorMessage(hosted.error));
+      } else {
+        setHostedProjects(hosted.projects || []);
+      }
+      if ("error" in templates) {
+        setProjectSetupError(errorMessage(templates.error));
+      } else {
+        setProjectTemplates(templates.templates || []);
+      }
     } catch {
       if (requestAuthUserKey !== latestAuthUserKeyRef.current) return;
       setProjects([]);
@@ -709,15 +763,17 @@ export default function App() {
   };
 
   const openSavedProject = async (projectRoot: string) => {
+    setProjectSetupError("");
     try {
       setEditorStatus(`Opening project ${projectRoot}...`);
+      await ensureHostedSession("membuka project");
       await ensureWorkspaceReady();
       await loadProjectIntoWorkspace(projectRoot);
       setProjectManagerOpen(false);
       setEditorStatus(`Project ready: ${projectRoot}`);
       toast.success("Project dibuka");
     } catch (e) {
-      toast.error("Gagal membuka project: " + errorMessage(e));
+      handleProjectActionError("Gagal membuka project", e);
     }
   };
 
@@ -730,14 +786,16 @@ export default function App() {
     const name = projectRenameDraft.trim();
     if (!name || projectMutatingId) return;
     setProjectMutatingId(project.id);
+    setProjectSetupError("");
     try {
+      await ensureHostedSession("rename project");
       const res = await renameHostedProject(project.id, { name });
       setHostedProjects((prev) => prev.map((item) => item.id === project.id ? res.project : item));
       setProjectEditingId("");
       setProjectRenameDraft("");
       toast.success("Project renamed");
     } catch (e) {
-      toast.error("Gagal rename project: " + errorMessage(e));
+      handleProjectActionError("Gagal rename project", e);
     } finally {
       setProjectMutatingId("");
     }
@@ -745,7 +803,9 @@ export default function App() {
 
   const archiveProjectFromList = async (project: HostedProjectType) => {
     setProjectMutatingId(project.id);
+    setProjectSetupError("");
     try {
+      await ensureHostedSession("menghapus project");
       await archiveHostedProject(project.id);
       const remaining = hostedProjects.filter((item) => item.id !== project.id);
       setHostedProjects(remaining);
@@ -762,7 +822,7 @@ export default function App() {
       void refreshProjects();
       toast.success("Project archived");
     } catch (e) {
-      toast.error("Gagal archive project: " + errorMessage(e));
+      handleProjectActionError("Gagal archive project", e);
     } finally {
       setProjectMutatingId("");
     }
@@ -770,14 +830,16 @@ export default function App() {
 
   const duplicateProjectFromList = async (project: HostedProjectType) => {
     setProjectMutatingId(project.id);
+    setProjectSetupError("");
     try {
+      await ensureHostedSession("duplicate project");
       const res = await duplicateHostedProject(project.id, { name: `${project.name} Copy` });
       setHostedProjects((prev) => [res.project, ...prev.filter((item) => item.id !== res.project.id)]);
       await loadProjectIntoWorkspace(res.project.root);
       void refreshProjects();
       toast.success(`Project duplicated: ${res.project.name}`);
     } catch (e) {
-      toast.error("Gagal duplicate project: " + errorMessage(e));
+      handleProjectActionError("Gagal duplicate project", e);
     } finally {
       setProjectMutatingId("");
     }
@@ -790,7 +852,9 @@ export default function App() {
       return;
     }
     setProjectMutatingId(hosted.id);
+    setProjectSetupError("");
     try {
+      await ensureHostedSession("save project");
       if (activeFile && buffers[activeFile]?.dirty) {
         await writeFile(activeFile, buffers[activeFile].content);
         setBuffers((prev) => ({ ...prev, [activeFile]: { ...prev[activeFile], dirty: false } }));
@@ -800,7 +864,7 @@ export default function App() {
       setEditorStatus(`Project saved: ${res.project.name}`);
       toast.success("Project saved to Appora");
     } catch (e) {
-      toast.error("Gagal save project: " + errorMessage(e));
+      handleProjectActionError("Gagal save project", e);
     } finally {
       setProjectMutatingId("");
     }
@@ -813,8 +877,10 @@ export default function App() {
       return;
     }
     setProjectExporting(true);
+    setProjectSetupError("");
     setEditorStatus(`Preparing ZIP for ${target}...`);
     try {
+      await ensureHostedSession("download ZIP");
       await ensureWorkspaceReady();
       const exported = await exportProjectZip(target);
       const url = URL.createObjectURL(exported.blob);
@@ -829,7 +895,7 @@ export default function App() {
       toast.success(`Project disimpan: ${exported.filename}`);
     } catch (e) {
       setEditorStatus("Failed to save project ZIP");
-      toast.error("Gagal download project: " + errorMessage(e));
+      handleProjectActionError("Gagal download project", e);
     } finally {
       setProjectExporting(false);
     }
@@ -921,8 +987,10 @@ export default function App() {
     const name = newProjectName.trim();
     if (!name || newProjectSaving) return;
     setNewProjectSaving(true);
+    setProjectSetupError("");
     setEditorStatus(`Creating project ${name}...`);
     try {
+      await ensureHostedSession("membuat project");
       await ensureWorkspaceReady();
 
       const res = await createHostedProject({ name, template_id: selectedTemplateId || "blank" });
@@ -940,7 +1008,7 @@ export default function App() {
       setNewProjectOpen(false);
       toast.success(`Project created: ${res.project.name}`);
     } catch (e) {
-      toast.error("Gagal membuat project: " + errorMessage(e));
+      handleProjectActionError("Gagal membuat project", e);
     } finally {
       setNewProjectSaving(false);
     }
@@ -1223,6 +1291,11 @@ export default function App() {
                 <PlayCircle size={17} />
               </a>
             </div>
+            {projectSetupError ? (
+              <div className="projectSetupInlineError landingAuthError" role="alert">
+                <span>{projectSetupError}</span>
+              </div>
+            ) : null}
             <div className="apporaSignalRow" aria-label="Platform signals">
               <span>BYOK Models</span>
               <span>Serverless Ready</span>
@@ -1403,12 +1476,23 @@ export default function App() {
             <input
               className="input"
               value={newProjectName}
-              onChange={(event) => setNewProjectName(event.target.value)}
+              onChange={(event) => {
+                setNewProjectName(event.target.value);
+                if (projectSetupError) setProjectSetupError("");
+              }}
               placeholder="Contoh: Portfolio Raka"
-              disabled={newProjectSaving}
+              disabled={newProjectSaving || projectAuthChecking}
               autoFocus
             />
           </label>
+          {projectSetupError ? (
+            <div className="projectSetupInlineError" role="alert">
+              <span>{projectSetupError}</span>
+              <button className="btn subtleBtn" type="button" onClick={() => void startGoogleLogin("/app")}>
+                Continue with Google
+              </button>
+            </div>
+          ) : null}
           <div className="newProjectTemplateSection">
             <div className="newProjectTemplateHeader">
               <span>Starter template</span>
@@ -1422,7 +1506,7 @@ export default function App() {
                   key={template.id}
                   className={`templateChoice ${selectedTemplateId === template.id ? "selected" : ""}`}
                   type="button"
-                  disabled={newProjectSaving}
+                  disabled={newProjectSaving || projectAuthChecking}
                   onClick={() => setSelectedTemplateId(template.id)}
                 >
                   <span className="templateChoiceTop">
@@ -1437,8 +1521,8 @@ export default function App() {
           </div>
           <div className="newProjectModalActions">
             <button className="btn" type="button" disabled={newProjectSaving} onClick={() => setNewProjectOpen(false)}>Cancel</button>
-            <button className="btn primary" type="submit" disabled={!newProjectName.trim() || newProjectSaving}>
-              {newProjectSaving ? "Creating..." : "Create project"}
+            <button className="btn primary" type="submit" disabled={!newProjectName.trim() || newProjectSaving || projectAuthChecking}>
+              {projectAuthChecking ? "Checking session..." : newProjectSaving ? "Creating..." : "Create project"}
             </button>
           </div>
         </form>
@@ -1466,11 +1550,19 @@ export default function App() {
             <Save size={14} className={projectMutatingId ? "spinIcon" : ""} />
             <span>Save</span>
           </button>
-          <button className="btn primary" type="button" onClick={() => setNewProjectOpen(true)}>
+          <button className="btn primary" type="button" onClick={() => { setProjectSetupError(""); setNewProjectOpen(true); }}>
             New project
           </button>
         </div>
       </div>
+      {projectSetupError ? (
+        <div className="projectSetupInlineError savedProjectsError" role="alert">
+          <span>{projectSetupError}</span>
+          <button className="btn subtleBtn" type="button" onClick={() => void startGoogleLogin("/app")}>
+            Continue with Google
+          </button>
+        </div>
+      ) : null}
       {hostedProjects.length > 0 ? (
         <div className="savedProjectsList">
           {hostedProjects.map((project) => {
@@ -1595,7 +1687,7 @@ export default function App() {
           </div>
           <div className="workspaceGateActions">
             <button className="btn primary" onClick={pickWorkspace}>{isHostedBrowser() ? "Upload project…" : "Open project…"}</button>
-            <button className="btn" onClick={() => setNewProjectOpen(true)}>New project</button>
+            <button className="btn" onClick={() => { setProjectSetupError(""); setNewProjectOpen(true); }}>New project</button>
           </div>
           <div className="workspaceGateFeatureGrid">
             <div className="gateFeatureCard">

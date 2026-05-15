@@ -5685,6 +5685,11 @@ a {
   color: rgba(17, 23, 23, 0.74);
 }
 
+:root[data-app-theme="light"] .projectSetupInlineError {
+  background: rgba(180, 35, 59, 0.1);
+  color: #821426;
+}
+
 .savedProjectsHeader {
   display: flex;
   align-items: center;
@@ -5942,6 +5947,40 @@ a {
 .newProjectModalActions {
   justify-content: center;
   margin-top: 22px;
+}
+
+.projectSetupInlineError {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(255, 154, 168, 0.12);
+  color: rgba(255, 224, 229, 0.96);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.projectSetupInlineError span {
+  min-width: 0;
+}
+
+.projectSetupInlineError .btn {
+  min-width: auto;
+  min-height: 34px;
+  padding: 0 12px;
+  flex-shrink: 0;
+}
+
+.savedProjectsError {
+  margin-top: 12px;
+}
+
+.landingAuthError {
+  justify-content: flex-start;
+  max-width: 560px;
 }
 
 .newProjectModal .btn {

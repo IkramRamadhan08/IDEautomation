@@ -23,6 +23,17 @@ export function normalizeErrorMessage(message: string): string {
   const lower = detail.toLowerCase();
 
   if (
+    lower.includes("hosted project routes now require verified login") ||
+    lower.includes("hosted agent/workspace routes require verified login") ||
+    lower.includes("sesi login appora belum valid") ||
+    lower.includes("not authenticated") ||
+    lower.includes("invalid jwt") ||
+    lower.includes("jwt expired")
+  ) {
+    return "Sesi login Appora belum valid atau sudah expired. Klik Continue with Google lagi, lalu ulangi aksi project.";
+  }
+
+  if (
     lower.includes("exceeded your current quota") ||
     lower.includes("insufficient_quota") ||
     lower.includes("billing details")
