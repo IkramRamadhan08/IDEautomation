@@ -44,7 +44,7 @@ from api.supabase_store import (
 from api import settings as settings_mod
 from api.app_state import CURRENT_SESSION_ID, CURRENT_USER_ID, STATE
 from api.auth_router import build_auth_router
-from api.auth_identity import resolve_request_user, sanitize_user_id
+from api.auth_identity import CURRENT_REQUEST_USER, resolve_request_user, sanitize_user_id
 from api.oauth_runtime import CURRENT_PROFILE_ID
 from api.projects_router import build_projects_router
 from api.preferences_router import build_preferences_router
@@ -119,7 +119,7 @@ SENSITIVE_HOSTED_API_PREFIXES = (
 def _requires_verified_hosted_user(path: str) -> bool:
     if not has_supabase():
         return False
-    if path in {"/api/healthz", "/api/settings", "/api/models", "/api/agent/worker/run"}:
+    if path in {"/api/healthz", "/api/auth/debug", "/api/settings", "/api/models", "/api/agent/worker/run"}:
         return False
     if path == "/api/run/proxy" or path.startswith("/api/run/proxy/"):
         return False
@@ -660,6 +660,7 @@ async def bind_voiceide_session(request: Request, call_next):
     )
     user_token = CURRENT_USER_ID.set(resolved_user.user_id)
     profile_token = CURRENT_PROFILE_ID.set(resolved_user.user_id)
+    request_user_token = CURRENT_REQUEST_USER.set(resolved_user)
     try:
         if _requires_verified_hosted_user(request.url.path) and resolved_user.auth_source != "supabase":
             return JSONResponse(
@@ -684,6 +685,7 @@ async def bind_voiceide_session(request: Request, call_next):
         response.headers["X-Appora-Auth-Source"] = resolved_user.auth_source
         return response
     finally:
+        CURRENT_REQUEST_USER.reset(request_user_token)
         CURRENT_PROFILE_ID.reset(profile_token)
         CURRENT_USER_ID.reset(user_token)
         CURRENT_SESSION_ID.reset(session_token)
@@ -696,6 +698,22 @@ def healthz():
         "service": "appora-api",
         "session": CURRENT_SESSION_ID.get(),
         "user": CURRENT_USER_ID.get(),
+    }
+
+
+@app.get("/api/auth/debug")
+def auth_debug(request: Request):
+    user = CURRENT_REQUEST_USER.get()
+    authorization = request.headers.get("Authorization") or ""
+    has_bearer = authorization.lower().startswith("bearer ") and len(authorization.split(" ", 1)[-1].strip()) > 0
+    return {
+        "ok": True,
+        "auth_source": user.auth_source if user else "none",
+        "user_id": user.user_id if user else CURRENT_USER_ID.get(),
+        "supabase_user_id": user.supabase_user_id if user else None,
+        "email_set": bool(user.email) if user else False,
+        "has_bearer": has_bearer,
+        "has_supabase_backend": has_supabase(),
     }
 
 

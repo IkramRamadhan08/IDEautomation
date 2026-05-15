@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextvars import ContextVar
 from typing import Any
 
 from fastapi import Header
@@ -17,6 +18,9 @@ class AuthenticatedUser:
     email: str | None = None
     display_name: str | None = None
     supabase_user_id: str | None = None
+
+
+CURRENT_REQUEST_USER: ContextVar[AuthenticatedUser | None] = ContextVar("appora_request_user", default=None)
 
 
 def sanitize_user_id(raw: str | None) -> str:
