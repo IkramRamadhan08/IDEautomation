@@ -653,6 +653,9 @@ def _session_state() -> dict:
 
 @app.middleware("http")
 async def bind_voiceide_session(request: Request, call_next):
+    if request.method.upper() == "OPTIONS":
+        return await call_next(request)
+
     session_token = CURRENT_SESSION_ID.set(_sanitize_session_id(request.headers.get("X-Appora-Session") or request.headers.get("X-VoiceIDE-Session")))
     resolved_user = resolve_request_user(
         authorization=request.headers.get("Authorization"),

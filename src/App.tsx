@@ -1260,6 +1260,12 @@ export default function App() {
     }
   };
 
+  const openNewProjectModal = () => {
+    setProjectSetupError("");
+    setProjectManagerOpen(false);
+    setNewProjectOpen(true);
+  };
+
   // --- Renders ---
   const renderGoogleLoginGate = () => {
     const heroNodes = [
@@ -1583,7 +1589,7 @@ export default function App() {
             <Save size={14} className={projectMutatingId ? "spinIcon" : ""} />
             <span>Save</span>
           </button>
-          <button className="btn primary" type="button" onClick={() => { setProjectSetupError(""); setNewProjectOpen(true); }}>
+          <button className="btn primary" type="button" onClick={openNewProjectModal}>
             New project
           </button>
         </div>
@@ -1720,7 +1726,7 @@ export default function App() {
           </div>
           <div className="workspaceGateActions">
             <button className="btn primary" onClick={pickWorkspace}>{isHostedBrowser() ? "Upload project…" : "Open project…"}</button>
-            <button className="btn" onClick={() => { setProjectSetupError(""); setNewProjectOpen(true); }}>New project</button>
+            <button className="btn" onClick={openNewProjectModal}>New project</button>
           </div>
           <div className="workspaceGateFeatureGrid">
             <div className="gateFeatureCard">
