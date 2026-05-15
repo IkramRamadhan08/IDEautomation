@@ -4,6 +4,7 @@ import {
   type SettingsInfo,
   type ProviderChoice,
   type BuildMode,
+  type ModelRouteDiagnostics,
 } from "../../types";
 
 interface SettingsModalProps {
@@ -26,6 +27,8 @@ interface SettingsModalProps {
   models: string[];
   modelsLoading: boolean;
   modelsError: string;
+  modelRouteDiagnostics: ModelRouteDiagnostics | null;
+  modelRouteLoading: boolean;
   onClose: () => void;
   onLlmProviderChange: (provider: ProviderChoice) => void;
   onBuildModeDraftChange: (mode: BuildMode) => void;
@@ -56,6 +59,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   models,
   modelsLoading,
   modelsError,
+  modelRouteDiagnostics,
+  modelRouteLoading,
   onClose,
   onLlmProviderChange,
   onBuildModeDraftChange,
@@ -172,6 +177,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       ? `Recommended: ${providerStatus.recommended_model}. Bisa pilih dari list atau ketik manual.`
                       : models.length > 0 ? `${models.length} model siap dipilih, atau ketik manual.` : "Belum ada model yang dimuat.")}
             </div>
+            <div className="settingsSubtle compactHint">
+              {modelRouteLoading
+                ? "Checking route availability..."
+                : modelRouteDiagnostics
+                  ? modelRouteDiagnostics.summary
+                  : "Route availability akan dicek setelah model dipilih."}
+            </div>
+            {modelRouteDiagnostics?.attempts?.length ? (
+              <div className="providerStatusLine compactStatusLine">
+                {modelRouteDiagnostics.attempts.slice(0, 4).map((attempt) => (
+                  <span key={`${attempt.provider}/${attempt.model}`} className={`providerStatusChip ${attempt.connected ? "connected" : "disconnected"}`}>
+                    {attempt.provider}/{attempt.model}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            {modelRouteDiagnostics && !modelRouteDiagnostics.ok && modelRouteDiagnostics.skipped.length > 0 ? (
+              <div className="settingsSubtle compactHint">{modelRouteDiagnostics.skipped.slice(0, 2).join(" · ")}</div>
+            ) : null}
           </div>
 
           <div className="settingsActions settingsSectionWide">

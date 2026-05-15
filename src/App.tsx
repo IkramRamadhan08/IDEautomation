@@ -8,6 +8,7 @@ import {
   detectProjects,
   getIdentity,
   getModels,
+  getModelRouteDiagnostics,
   getSettings,
   getUserPreferences,
   getProjectPreferences,
@@ -56,6 +57,7 @@ import {
   type AgentAuditSnapshot,
   type AgentLiveItem,
   type UploadedImageAsset,
+  type ModelRouteDiagnostics,
 } from "./types";
 
 import { Topbar } from "./components/navigation/Topbar";
@@ -195,6 +197,8 @@ export default function App() {
   const [models, setModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState<string>("");
+  const [modelRouteDiagnostics, setModelRouteDiagnostics] = useState<ModelRouteDiagnostics | null>(null);
+  const [modelRouteLoading, setModelRouteLoading] = useState(false);
 
   const [explorerItems, setExplorerItems] = useState<ExplorerItem[]>([]);
   const [treeExpanded, setTreeExpanded] = useState<Record<string, boolean>>({});
@@ -676,15 +680,39 @@ export default function App() {
     setPreviewFrameKey((value) => value + 1);
   };
 
+  const ensureWorkspaceReady = async () => {
+    if (ws) return ws;
+    const provisioned = await provisionWorkspace();
+    setWs(provisioned.path);
+    return provisioned.path;
+  };
+
+  const loadProjectIntoWorkspace = async (projectRoot: string) => {
+    selectProject(projectRoot);
+    setWorkspaceSetupComplete(true);
+    try {
+      const res = await listDir(projectRoot);
+      const items = (res.items || [])
+        .filter((item) => !item.name.startsWith("."))
+        .sort((a, b) => {
+          if (a.type !== b.type) return a.type === "dir" ? -1 : 1;
+          return a.name.localeCompare(b.name);
+        });
+      setExplorerItems(items);
+      setTreeChildren((prev) => ({ ...prev, [projectRoot]: items }));
+      setTreeExpanded((prev) => ({ ...prev, [projectRoot]: true }));
+    } catch (e) {
+      setExplorerItems([]);
+      setTreeChildren((prev) => ({ ...prev, [projectRoot]: [] }));
+      setEditorStatus(`Project selected, but file tree failed to load: ${errorMessage(e)}`);
+    }
+  };
+
   const openSavedProject = async (projectRoot: string) => {
     try {
-      if (!ws) {
-        const provisioned = await provisionWorkspace();
-        setWs(provisioned.path);
-      }
-      setWorkspaceSetupComplete(true);
-      selectProject(projectRoot);
-      await refreshExplorer(projectRoot);
+      setEditorStatus(`Opening project ${projectRoot}...`);
+      await ensureWorkspaceReady();
+      await loadProjectIntoWorkspace(projectRoot);
       setProjectManagerOpen(false);
       setEditorStatus(`Project ready: ${projectRoot}`);
       toast.success("Project dibuka");
@@ -719,11 +747,19 @@ export default function App() {
     setProjectMutatingId(project.id);
     try {
       await archiveHostedProject(project.id);
-      await refreshProjects();
+      const remaining = hostedProjects.filter((item) => item.id !== project.id);
+      setHostedProjects(remaining);
       if (selectedProject === project.root) {
-        const next = hostedProjects.find((item) => item.id !== project.id)?.root || ".";
-        selectProject(next);
+        const next = remaining[0]?.root || ".";
+        if (next !== ".") {
+          await loadProjectIntoWorkspace(next);
+        } else {
+          selectProject(".");
+          setExplorerItems([]);
+          setWorkspaceSetupComplete(false);
+        }
       }
+      void refreshProjects();
       toast.success("Project archived");
     } catch (e) {
       toast.error("Gagal archive project: " + errorMessage(e));
@@ -737,9 +773,7 @@ export default function App() {
     try {
       const res = await duplicateHostedProject(project.id, { name: `${project.name} Copy` });
       setHostedProjects((prev) => [res.project, ...prev.filter((item) => item.id !== res.project.id)]);
-      setWorkspaceSetupComplete(true);
-      selectProject(res.project.root);
-      await refreshExplorer(res.project.root);
+      await loadProjectIntoWorkspace(res.project.root);
       void refreshProjects();
       toast.success(`Project duplicated: ${res.project.name}`);
     } catch (e) {
@@ -779,7 +813,9 @@ export default function App() {
       return;
     }
     setProjectExporting(true);
+    setEditorStatus(`Preparing ZIP for ${target}...`);
     try {
+      await ensureWorkspaceReady();
       const exported = await exportProjectZip(target);
       const url = URL.createObjectURL(exported.blob);
       const link = document.createElement("a");
@@ -789,8 +825,10 @@ export default function App() {
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
+      setEditorStatus(`Saved ZIP: ${exported.filename}`);
       toast.success(`Project disimpan: ${exported.filename}`);
     } catch (e) {
+      setEditorStatus("Failed to save project ZIP");
       toast.error("Gagal download project: " + errorMessage(e));
     } finally {
       setProjectExporting(false);
@@ -883,11 +921,9 @@ export default function App() {
     const name = newProjectName.trim();
     if (!name || newProjectSaving) return;
     setNewProjectSaving(true);
+    setEditorStatus(`Creating project ${name}...`);
     try {
-      if (!ws) {
-        const provisioned = await provisionWorkspace();
-        setWs(provisioned.path);
-      }
+      await ensureWorkspaceReady();
 
       const res = await createHostedProject({ name, template_id: selectedTemplateId || "blank" });
       if (hasVerifiedHostedAuth) {
@@ -896,9 +932,8 @@ export default function App() {
         });
       }
       setHostedProjects((prev) => [res.project, ...prev.filter((project) => project.id !== res.project.id)]);
+      await loadProjectIntoWorkspace(res.project.root);
       void refreshProjects();
-      setWorkspaceSetupComplete(true);
-      setSelectedProject(res.project.root);
       setEditorStatus(`Project ready: ${res.project.name}`);
       setNewProjectName("");
       setSelectedTemplateId("saas-dashboard");
@@ -992,6 +1027,28 @@ export default function App() {
       setModelsLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (!settingsOpen || !modelDraft.trim()) {
+      setModelRouteDiagnostics(null);
+      return;
+    }
+    let cancelled = false;
+    setModelRouteLoading(true);
+    getModelRouteDiagnostics("nine_router", modelDraft.trim())
+      .then((diagnostics) => {
+        if (!cancelled) setModelRouteDiagnostics(diagnostics);
+      })
+      .catch(() => {
+        if (!cancelled) setModelRouteDiagnostics(null);
+      })
+      .finally(() => {
+        if (!cancelled) setModelRouteLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [settingsOpen, modelDraft]);
 
   const saveSettings = async () => {
     try {
@@ -1401,7 +1458,7 @@ export default function App() {
             <RefreshCw size={14} className={projectsRefreshing ? "spinIcon" : ""} />
             <span>{projectsRefreshing ? "Refreshing" : "Refresh"}</span>
           </button>
-          <button className="btn subtleBtn" type="button" disabled={projectExporting || !selectedProject || selectedProject === "."} onClick={() => void downloadProjectToDevice()}>
+          <button className="btn subtleBtn" type="button" disabled={projectExporting || ((!selectedProject || selectedProject === ".") && hostedProjects.length === 0)} onClick={() => void downloadProjectToDevice(selectedProject && selectedProject !== "." ? selectedProject : hostedProjects[0]?.root || ".")}>
             <Download size={14} className={projectExporting ? "spinIcon" : ""} />
             <span>{projectExporting ? "Saving" : "Save ZIP"}</span>
           </button>
@@ -1655,6 +1712,8 @@ export default function App() {
           models={models}
           modelsLoading={modelsLoading}
           modelsError={modelsError}
+          modelRouteDiagnostics={modelRouteDiagnostics}
+          modelRouteLoading={modelRouteLoading}
           onClose={() => setSettingsOpen(false)}
           onLlmProviderChange={p => {
             const provider = p || "nine_router";

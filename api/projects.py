@@ -380,9 +380,22 @@ def save_project_snapshot(*, workspace_root: Path, owner_id: str, project_id: st
 def archive_project(*, owner_id: str, project_id: str) -> ProjectRecord:
     if has_supabase():
         try:
+            existing_remote = None
+            try:
+                for raw in supabase_list_projects(owner_id=owner_id) or []:
+                    if isinstance(raw, dict) and str(raw.get("id")) == project_id:
+                        existing_remote = raw
+                        break
+            except Exception:
+                existing_remote = None
             remote = supabase_archive_project(project_id=project_id, owner_id=owner_id)
             if remote:
                 return ProjectRecord(**remote)
+            if existing_remote:
+                existing_remote = dict(existing_remote)
+                existing_remote["archived"] = True
+                existing_remote["updated_at"] = int(time.time())
+                return ProjectRecord(**existing_remote)
         except Exception:
             pass
 

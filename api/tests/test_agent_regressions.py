@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api.agent_intent import classify_agent_intent
+from api.agent_evals import run_clara_contract_eval, validate_template_registry
 from api import agent as agent_mod
 from api.agent_mcp import MCPServerInfo, MCPToolCallResult, MCPToolInfo, discover_mcp_servers, execute_mcp_tool, suggest_mcp_actions
 from api.agent_memory import get_agent_memory_overview, remember_agent_run, retrieve_agent_memory
@@ -1366,6 +1367,27 @@ class ProviderCatalogRegressionTests(unittest.TestCase):
         self.assertIn(("openrouter", "openrouter/free"), attempted)
         self.assertNotIn(("openrouter", "free-forever"), attempted)
 
+    def test_route_plan_reports_connected_attempts_and_skips(self) -> None:
+        from api.agent_router import build_route_plan
+
+        plan = build_route_plan(
+            route_name="free-forever",
+            selected_provider="nine_router",
+            connected_providers={"openrouter"},
+            cooldown_remaining=lambda _provider: 0,
+        )
+
+        self.assertTrue(any(attempt.provider == "openrouter" for attempt in plan.attempts))
+        self.assertTrue(any("Kiro" in item or "OpenCode" in item for item in plan.skipped))
+
+    def test_direct_model_attempt_explains_unsupported_subscription_alias(self) -> None:
+        from api.agent_router import build_direct_model_attempt
+
+        attempt, reason = build_direct_model_attempt("kr/claude-sonnet-4.5", selected_provider="nine_router")
+
+        self.assertIsNone(attempt)
+        self.assertIn("Kiro", reason or "")
+
     def test_generate_json_can_use_connected_provider_when_none_selected(self) -> None:
         snapshot = {
             "openrouter": {"connected": True},
@@ -1534,6 +1556,21 @@ class ProjectTemplateRegressionTests(unittest.TestCase):
 
             self.assertTrue((workspace / copy.root / "src" / "App.tsx").exists())
             self.assertEqual({item.name for item in listed}, {"Demo Copy", "Demo"})
+
+
+class AgentEvalRegressionTests(unittest.TestCase):
+    def test_offline_clara_contract_eval_passes_core_scenarios(self) -> None:
+        result = run_clara_contract_eval()
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(len(result["scenarios"]), 5)
+        self.assertTrue(all(item["changes"] >= 2 for item in result["scenarios"]))
+
+    def test_template_registry_eval_guarantees_runnable_starters(self) -> None:
+        result = validate_template_registry()
+
+        self.assertTrue(result["ok"], result)
+        self.assertGreaterEqual(len(result["templates"]), 5)
 
 
 class PatchApplyRegressionTests(unittest.TestCase):

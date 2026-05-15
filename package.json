@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "test": "playwright test",
     "test:agent-regression": "./api/.venv/bin/python -m unittest discover -s api/tests -t . -v",
+    "eval:agent": "./api/.venv/bin/python -m api.agent_evals",
     "audit:preview": "node scripts/preview-audit.mjs"
   },
   "dependencies": {

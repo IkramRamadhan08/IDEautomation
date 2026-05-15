@@ -175,6 +175,22 @@ export type SettingsUpdate = Partial<{
   cerebras_api_key: string | null;
   xai_api_key: string | null;
 }>;
+export type ModelRouteDiagnostics = {
+  ok: boolean;
+  provider: string;
+  model: string;
+  route: string | null;
+  summary: string;
+  attempts: Array<{
+    provider: string;
+    model: string;
+    source: string;
+    tier: string;
+    connected: boolean;
+  }>;
+  skipped: string[];
+  metadata: Record<string, string>;
+};
 export type UserPreferences = {
   profile_id: string;
   llm_provider: ProviderChoice | null;

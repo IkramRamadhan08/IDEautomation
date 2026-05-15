@@ -151,6 +151,23 @@ export type ProjectPreferences = {
   default_prompt_style: string | null;
 };
 
+export type ModelRouteDiagnostics = {
+  ok: boolean;
+  provider: string;
+  model: string;
+  route: string | null;
+  summary: string;
+  attempts: Array<{
+    provider: string;
+    model: string;
+    source: string;
+    tier: string;
+    connected: boolean;
+  }>;
+  skipped: string[];
+  metadata: Record<string, string>;
+};
+
 const envBase = (import.meta.env.VITE_API_BASE ?? "").trim().replace(/\/$/, "");
 const isViteDev = Boolean(import.meta.env.DEV);
 const localDevBase = typeof window !== "undefined"
@@ -473,6 +490,13 @@ export async function getSettings(): Promise<SettingsInfo> {
 
 export async function getModels(provider: string): Promise<{ provider: string; models: string[] }> {
   const r = await apiFetch(`/api/models?provider=${encodeURIComponent(provider)}`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function getModelRouteDiagnostics(provider: string, model: string): Promise<ModelRouteDiagnostics> {
+  const qs = new URLSearchParams({ provider, model });
+  const r = await apiFetch(`/api/model-routes/diagnose?${qs.toString()}`);
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }

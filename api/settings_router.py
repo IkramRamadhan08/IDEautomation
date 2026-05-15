@@ -205,6 +205,98 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
 
         return {"ok": True, "providers": provider_catalog()}
 
+    @router.get("/model-routes/diagnose")
+    def diagnose_model_route(provider: str = Query("nine_router"), model: str = Query("free-forever")):
+        from .agent_router import build_direct_model_attempt, build_route_plan, normalize_smart_route, parse_model_ref
+        from .oauth_runtime import auth_snapshot, get_provider_cooldown_remaining
+
+        selected_provider = (provider or "nine_router").strip().lower()
+        selected_model = (model or "free-forever").strip()
+        snapshot = auth_snapshot(session_state().get("workspace"))
+        connected = {
+            name
+            for name, status in snapshot.items()
+            if isinstance(status, dict) and status.get("connected")
+        }
+        statuses = {
+            name: {
+                "connected": bool(status.get("connected")) if isinstance(status, dict) else False,
+                "hint": status.get("hint") if isinstance(status, dict) else None,
+            }
+            for name, status in snapshot.items()
+        }
+        route = normalize_smart_route(selected_model)
+        skipped: list[str] = []
+        attempts: list[dict] = []
+        metadata: dict[str, str] = {}
+        unsupported_reason: str | None = None
+
+        if route:
+            plan = build_route_plan(
+                route_name=route,
+                selected_provider=selected_provider,
+                connected_providers=connected,
+                cooldown_remaining=get_provider_cooldown_remaining,
+            )
+            metadata = dict(plan.metadata)
+            skipped = list(plan.skipped)
+            attempts = [
+                {
+                    "provider": attempt.provider,
+                    "model": attempt.model,
+                    "source": attempt.source,
+                    "tier": attempt.tier,
+                    "connected": attempt.provider in connected,
+                }
+                for attempt in plan.attempts
+            ]
+        else:
+            direct, unsupported_reason = build_direct_model_attempt(selected_model, selected_provider=selected_provider)
+            parsed = parse_model_ref(selected_model, default_provider=selected_provider)
+            target_provider = direct.provider if direct else parsed.provider
+            if direct:
+                attempts = [{
+                    "provider": direct.provider,
+                    "model": direct.model,
+                    "source": direct.source,
+                    "tier": direct.tier,
+                    "connected": direct.provider in connected,
+                }]
+                if direct.provider not in connected:
+                    skipped.append(f"{direct.provider}/{direct.model}: provider {direct.provider} belum connected")
+            elif unsupported_reason:
+                skipped.append(f"{selected_model}: {unsupported_reason}")
+            elif target_provider and target_provider not in connected:
+                skipped.append(f"{selected_model}: provider {target_provider} belum connected")
+
+        usable_attempts = [item for item in attempts if item.get("connected")]
+        if route:
+            summary = (
+                f"Route {route} siap: {len(usable_attempts)} attempt connected, {len(skipped)} skipped."
+                if usable_attempts
+                else f"Route {route} belum siap. Connect OpenRouter, Gemini, Groq, atau Cerebras key dulu."
+            )
+        elif unsupported_reason:
+            summary = unsupported_reason
+        else:
+            summary = (
+                f"Model {selected_model} siap dipakai."
+                if usable_attempts
+                else f"Model {selected_model} belum punya provider connected."
+            )
+
+        return {
+            "ok": bool(usable_attempts),
+            "provider": selected_provider,
+            "model": selected_model,
+            "route": route or None,
+            "summary": summary,
+            "attempts": attempts,
+            "skipped": skipped[:20],
+            "metadata": metadata,
+            "provider_status": statuses,
+        }
+
     @router.put("/settings")
     def update_settings(req: SettingsUpdateReq, authorization: str | None = Header(default=None), x_voiceide_user: str | None = Header(default=None)):
         user = resolve_request_user(authorization=authorization, x_voiceide_user=x_voiceide_user)
