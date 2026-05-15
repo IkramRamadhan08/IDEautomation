@@ -509,9 +509,27 @@ export default function App() {
     try {
       const info = await getWorkspace();
       if (requestAuthUserKey !== latestAuthUserKeyRef.current) return;
-      setWs(info.path);
+      if (info.path) {
+        setWs(info.path);
+        setWorkspaceSetupComplete(true);
+        return;
+      }
+      if (isHostedBrowser()) {
+        const provisioned = await provisionWorkspace();
+        if (requestAuthUserKey !== latestAuthUserKeyRef.current) return;
+        setWs(provisioned.path);
+        setWorkspaceSetupComplete(true);
+      }
     } catch {
-      // keep the current workspace state if a background restore check fails
+      if (!isHostedBrowser()) return;
+      try {
+        const provisioned = await provisionWorkspace();
+        if (requestAuthUserKey !== latestAuthUserKeyRef.current) return;
+        setWs(provisioned.path);
+        setWorkspaceSetupComplete(true);
+      } catch {
+        // keep the current workspace state if a background restore/provision check fails
+      }
     }
   };
 
