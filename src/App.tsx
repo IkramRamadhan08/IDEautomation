@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { Toaster, toast } from "sonner";
-import { supabase } from "./lib/supabase";
+import { getCachedSupabaseAccessToken, supabase } from "./lib/supabase";
 
 import "./app.css";
 import {
@@ -554,20 +554,28 @@ export default function App() {
     if (!settings?.supabase_enabled) return null;
     setProjectAuthChecking(true);
     try {
-      let { data, error } = await supabase.auth.getSession();
-      let session = data.session;
+      let session: Session | null = null;
+      let error: unknown = null;
+
+      try {
+        const result = await supabase.auth.getSession();
+        session = result.data.session;
+        error = result.error;
+      } catch (err) {
+        error = err;
+      }
 
       if (session?.access_token) return session;
+      if (getCachedSupabaseAccessToken()) return null;
 
       if (error || !session?.access_token) {
         try {
           const refreshed = await supabase.auth.refreshSession();
           session = refreshed.data.session;
+          if (session?.access_token) return session;
+          if (getCachedSupabaseAccessToken()) return null;
         } catch {
-          const message = "Gagal menghubungi Supabase Auth. Cek koneksi sebentar, lalu klik Create/Open lagi.";
-          setProjectSetupError(message);
-          setEditorStatus("Auth connection failed");
-          throw new Error(message);
+          if (getCachedSupabaseAccessToken()) return null;
         }
       }
 

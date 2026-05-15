@@ -1,4 +1,4 @@
-import { supabase } from "./lib/supabase";
+import { getCachedSupabaseAccessToken, supabase } from "./lib/supabase";
 
 export type WorkspaceInfo = { path: string | null; default: string | null };
 export type WorkspaceProvisionInfo = { ok: boolean; path: string; created: boolean; managed: boolean };
@@ -230,10 +230,11 @@ async function apiFetch(path: string, init: RequestInit = {}): Promise<Response>
 
   try {
     const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token?.trim();
+    const token = data.session?.access_token?.trim() || getCachedSupabaseAccessToken();
     if (token) headers.set("Authorization", `Bearer ${token}`);
   } catch {
-    // keep header fallback for transitional hosted migration
+    const token = getCachedSupabaseAccessToken();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
   }
 
   return fetch(`${BASE}${path}`, {
