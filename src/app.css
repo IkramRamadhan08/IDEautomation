@@ -5226,7 +5226,8 @@ a {
   --appora-pink: #ff7bd8;
   --appora-violet: #9b8cff;
   position: relative;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -5259,6 +5260,7 @@ a {
   width: min(1180px, 100%);
   display: flex;
   justify-content: center;
+  padding-bottom: 44px;
 }
 
 .workspaceSetupNav {
@@ -5282,7 +5284,7 @@ a {
 
 .workspaceSetupCard {
   position: relative;
-  width: min(860px, 100%);
+  width: min(960px, 100%);
   padding-top: clamp(18px, 2.4vw, 30px);
   padding-bottom: clamp(18px, 2.4vw, 30px);
   border-radius: 0;
@@ -5291,7 +5293,7 @@ a {
   color: rgba(246, 250, 245, 0.94);
   box-shadow: none;
   text-align: center;
-  overflow: hidden;
+  overflow: visible;
   backdrop-filter: none;
 }
 
@@ -5503,6 +5505,10 @@ a {
   border: 0;
   background: rgba(255, 255, 255, 0.06);
   text-align: left;
+}
+
+.workspaceSetupCard .savedProjectsPanel {
+  max-height: none;
 }
 
 :root[data-app-theme="light"] .workspaceSetupWrap {
@@ -5724,7 +5730,7 @@ a {
   display: grid;
   gap: 8px;
   margin-top: 12px;
-  max-height: min(28vh, 220px);
+  max-height: min(38vh, 340px);
   overflow: auto;
   padding-right: 2px;
 }
@@ -5865,6 +5871,7 @@ a {
   align-items: center;
   justify-content: center;
   padding: 20px;
+  overflow: auto;
   background:
     radial-gradient(circle at 20% 8%, rgba(156, 255, 95, 0.18), transparent 28%),
     radial-gradient(circle at 82% 20%, rgba(97, 232, 255, 0.16), transparent 34%),
@@ -5885,7 +5892,7 @@ a {
   max-height: calc(100vh - 24px);
   padding: 22px;
   border-radius: 26px;
-  overflow: hidden;
+  overflow: auto;
   border: 0;
   background:
     radial-gradient(circle at 12% 0%, rgba(156, 255, 95, 0.14), transparent 28%),
@@ -6026,7 +6033,7 @@ a {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
-  max-height: min(42vh, 430px);
+  max-height: min(44vh, 430px);
   overflow: auto;
   padding-right: 2px;
 }
@@ -6928,6 +6935,25 @@ a {
 
   .newProjectTemplateGrid {
     grid-template-columns: 1fr;
+  }
+
+  .workspaceSetupMain {
+    padding-bottom: 80px;
+  }
+
+  .savedProjectsHeader,
+  .savedProjectItem {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .savedProjectsHeaderActions,
+  .savedProjectActions {
+    justify-content: flex-start;
+  }
+
+  .savedProjectOpen {
+    width: 100%;
   }
 
   .authLanding {

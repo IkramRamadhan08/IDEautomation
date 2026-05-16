@@ -511,14 +511,14 @@ export default function App() {
       if (requestAuthUserKey !== latestAuthUserKeyRef.current) return;
       if (info.path) {
         setWs(info.path);
-        setWorkspaceSetupComplete(true);
+        setWorkspaceSetupComplete(false);
         return;
       }
       if (isHostedBrowser()) {
         const provisioned = await provisionWorkspace();
         if (requestAuthUserKey !== latestAuthUserKeyRef.current) return;
         setWs(provisioned.path);
-        setWorkspaceSetupComplete(true);
+        setWorkspaceSetupComplete(false);
       }
     } catch {
       if (!isHostedBrowser()) return;
@@ -526,7 +526,7 @@ export default function App() {
         const provisioned = await provisionWorkspace();
         if (requestAuthUserKey !== latestAuthUserKeyRef.current) return;
         setWs(provisioned.path);
-        setWorkspaceSetupComplete(true);
+        setWorkspaceSetupComplete(false);
       } catch {
         // keep the current workspace state if a background restore/provision check fails
       }
@@ -693,6 +693,7 @@ export default function App() {
   }, [hasVerifiedHostedAuth]);
 
   useEffect(() => {
+    if (!workspaceSetupComplete) return;
     if (selectedProject !== ".") return;
     if (hostedProjects.length > 0) {
       setSelectedProject(hostedProjects[0].root);
@@ -701,7 +702,7 @@ export default function App() {
     if (projects.length > 0) {
       setSelectedProject(projects[0].root);
     }
-  }, [hostedProjects, projects, selectedProject]);
+  }, [hostedProjects, projects, selectedProject, workspaceSetupComplete]);
 
   useEffect(() => {
     setAttachedImage(null);
@@ -1581,14 +1582,18 @@ export default function App() {
             <RefreshCw size={14} className={projectsRefreshing ? "spinIcon" : ""} />
             <span>{projectsRefreshing ? "Refreshing" : "Refresh"}</span>
           </button>
-          <button className="btn subtleBtn" type="button" disabled={projectExporting || ((!selectedProject || selectedProject === ".") && hostedProjects.length === 0)} onClick={() => void downloadProjectToDevice(selectedProject && selectedProject !== "." ? selectedProject : hostedProjects[0]?.root || ".")}>
-            <Download size={14} className={projectExporting ? "spinIcon" : ""} />
-            <span>{projectExporting ? "Saving" : "Save ZIP"}</span>
-          </button>
-          <button className="btn subtleBtn" type="button" disabled={!selectedProject || selectedProject === "." || Boolean(projectMutatingId)} onClick={() => void saveCurrentHostedProject()}>
-            <Save size={14} className={projectMutatingId ? "spinIcon" : ""} />
-            <span>Save</span>
-          </button>
+          {variant === "modal" ? (
+            <>
+              <button className="btn subtleBtn" type="button" disabled={projectExporting || ((!selectedProject || selectedProject === ".") && hostedProjects.length === 0)} onClick={() => void downloadProjectToDevice(selectedProject && selectedProject !== "." ? selectedProject : hostedProjects[0]?.root || ".")}>
+                <Download size={14} className={projectExporting ? "spinIcon" : ""} />
+                <span>{projectExporting ? "Saving" : "Save ZIP"}</span>
+              </button>
+              <button className="btn subtleBtn" type="button" disabled={!selectedProject || selectedProject === "." || Boolean(projectMutatingId)} onClick={() => void saveCurrentHostedProject()}>
+                <Save size={14} className={projectMutatingId ? "spinIcon" : ""} />
+                <span>Save</span>
+              </button>
+            </>
+          ) : null}
           <button className="btn primary" type="button" onClick={openNewProjectModal}>
             New project
           </button>
@@ -1644,7 +1649,7 @@ export default function App() {
                   ) : (
                     <>
                       <button className="savedProjectOpen" type="button" disabled={busy} onClick={() => void openSavedProject(project.root)}>
-                        Open
+                        {variant === "setup" ? "Continue" : "Open"}
                       </button>
                       <button className="iconOnlyBtn" type="button" disabled={projectExporting} onClick={() => void downloadProjectToDevice(project.root)} title="Download ZIP">
                         <Download size={14} />
@@ -1719,9 +1724,9 @@ export default function App() {
       <main className="workspaceSetupMain">
         <div className="workspaceGateCard pane workspaceSetupCard">
           <div className="workspaceGateKicker">Project setup</div>
-          <div className="workspaceGateTitle">Start a project for this session</div>
+          <div className="workspaceGateTitle">Choose where to continue</div>
           <div className="workspaceGateSubtitle">
-            Open an existing project, upload one, or create a new Supabase-backed project for the agent.
+            Pick a saved project, upload one, or create a new Supabase-backed project before Appora opens the IDE.
             {isHostedBrowser() ? " Project text files are restored from Supabase between serverless runs." : ""}
           </div>
           <div className="workspaceGateActions">
@@ -1755,7 +1760,7 @@ export default function App() {
 
   if (routePath !== "/app") return renderGoogleLoginGate();
   if (!googleAuth?.authenticated) return renderGoogleLoginGate();
-  if (!ws || (hasVerifiedHostedAuth && hostedProjects.length === 0 && projects.length === 0 && selectedProject === "." && !workspaceSetupComplete)) return renderWorkspaceOnboarding();
+  if (!ws || !workspaceSetupComplete) return renderWorkspaceOnboarding();
 
   const renderHybridMode = () => (
     <HybridWorkspace
