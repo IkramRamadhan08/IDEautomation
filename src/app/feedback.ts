@@ -47,7 +47,7 @@ export function normalizeErrorMessage(message: string): string {
     lower.includes("insufficient_quota") ||
     lower.includes("billing details")
   ) {
-    return "Kuota API provider ini habis atau project API key-nya belum punya akses billing. Coba ganti model yang lebih ringan, pakai provider lain, atau cek quota/billing key yang sedang aktif.";
+    return "Kuota route 9Router ini habis atau provider di dashboard 9Router belum aktif. Coba combo/model lain seperti free-forever, atau cek provider/quota di 9Router.";
   }
 
   if (
@@ -56,7 +56,7 @@ export function normalizeErrorMessage(message: string): string {
     lower.includes("unknown model") ||
     lower.includes("unsupported model")
   ) {
-    return "Model yang dipilih belum bisa dipakai oleh API key ini. Coba pilih model lain yang lebih ringan atau yang memang aktif di akun/provider itu.";
+    return "Model atau combo 9Router yang dipilih belum diterima gateway. Cek penulisan alias, pilih model lain, atau pastikan provider terkait sudah connected di 9Router.";
   }
 
   if (

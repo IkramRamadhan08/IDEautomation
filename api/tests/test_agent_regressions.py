@@ -2,34 +2,35 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from fastapi import HTTPException, Request
 
 from api.agent_intent import classify_agent_intent
 from api.agent_evals import run_clara_contract_eval, validate_template_registry
 from api import agent as agent_mod
+from api import main as main_mod
 from api.agent_mcp import MCPServerInfo, MCPToolCallResult, MCPToolInfo, discover_mcp_servers, execute_mcp_tool, suggest_mcp_actions
 from api.agent_memory import get_agent_memory_overview, remember_agent_run, retrieve_agent_memory
 from api.agent_runtime import _max_tool_loops_for_run, _should_run_deep_preflight, _should_run_refinement, _verify_node, prepare_agent_context
 from api.agent_skills import detect_project_stack, resolve_agent_skills
 from api.agent_tools import execute_local_tool
+from api.app_state import CURRENT_SESSION_ID, CURRENT_USER_ID
 from api.auth_identity import AuthenticatedUser
-from api.auth_policy import require_hosted_user
 from api.fs import safe_join
 from api.hybrid import build_hybrid_seed
 from api.project_templates import list_project_templates, render_project_template
 from api.projects import ProjectCreateReq, ProjectDuplicateReq, create_project, duplicate_project, list_projects, save_project_snapshot
-from api.main import ApplyManyReq, WriteOp, _browser_preview_audit_ready, _build_quality_checks, _extract_preview_snapshot_from_html, _sha256_text, agent_capabilities, app as main_app, fs_apply_many, supabase_rag_status
+from api.main import ApplyManyReq, WriteOp, _browser_preview_audit_ready, _build_preview_audit_result, _build_quality_checks, _command_policy_decision, _extract_preview_snapshot_from_html, _preflight_apply_many, _sha256_text, agent_capabilities, fs_apply_many, supabase_rag_status
 from api.preferences import UserPreferencesRecord
 from api.preferences_router import build_preferences_router
 from api.secrets_store import get_provider_secret, has_provider_secret
 from api.settings import load_settings
-from api.settings_router import build_settings_router
+from api.settings_router import SettingsUpdateReq, build_settings_router
 from api.supabase_store import upsert_profile
 from api.oauth_runtime import CURRENT_PROFILE_ID, list_models as list_provider_models, provider_catalog
 
@@ -319,6 +320,124 @@ class AgentVerifierRegressionTests(unittest.TestCase):
         self.assertIn("Warnings:", verification["large-rewrite-review"]["detail"])
         self.assertTrue(any(warning["phase"] == "rewrite-review" for warning in result["context"].trace_warnings))
 
+    def test_verifier_blocks_undeclared_external_imports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src").mkdir(parents=True)
+            (project_dir / "package.json").write_text(
+                json.dumps({"dependencies": {"react": "^19.0.0"}}),
+                encoding="utf-8",
+            )
+            (project_dir / "src" / "App.tsx").write_text("export default function App() { return null }\n", encoding="utf-8")
+            ctx = self._ctx(ws_root, prompt="add icons")
+
+            state = {
+                "context": ctx,
+                "input": "add icons",
+                "changes": [{"path": "src/App.tsx", "new_content": "import { Search } from 'lucide-react';\nexport default function App() { return <Search /> }\n"}],
+                "actions": [],
+            }
+            result = _verify_node(state)
+
+        verification = {item["name"]: item for item in result["context"].trace_verification}
+        self.assertFalse(verification["external-dependencies-declared"]["ok"])
+        self.assertIn("lucide-react", verification["external-dependencies-declared"]["detail"])
+
+    def test_verifier_blocks_relative_import_export_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src" / "components").mkdir(parents=True)
+            (project_dir / "src" / "App.tsx").write_text("export default function App() { return null }\n", encoding="utf-8")
+            (project_dir / "src" / "components" / "Button.tsx").write_text(
+                "export default function Button() { return <button /> }\n",
+                encoding="utf-8",
+            )
+            ctx = self._ctx(ws_root, prompt="wire button")
+
+            state = {
+                "context": ctx,
+                "input": "wire button",
+                "changes": [{"path": "src/App.tsx", "new_content": "import { Button } from './components/Button';\nexport default function App() { return <Button /> }\n"}],
+                "actions": [],
+            }
+            result = _verify_node(state)
+
+        verification = {item["name"]: item for item in result["context"].trace_verification}
+        self.assertFalse(verification["relative-import-exports-match"]["ok"])
+        self.assertIn("Button", verification["relative-import-exports-match"]["detail"])
+
+    def test_verifier_accepts_matching_relative_named_export(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src" / "components").mkdir(parents=True)
+            (project_dir / "src" / "App.tsx").write_text("export default function App() { return null }\n", encoding="utf-8")
+            (project_dir / "src" / "components" / "Button.tsx").write_text(
+                "export function Button() { return <button /> }\n",
+                encoding="utf-8",
+            )
+            ctx = self._ctx(ws_root, prompt="wire button")
+
+            state = {
+                "context": ctx,
+                "input": "wire button",
+                "changes": [{"path": "src/App.tsx", "new_content": "import { Button } from './components/Button';\nexport default function App() { return <Button /> }\n"}],
+                "actions": [],
+            }
+            result = _verify_node(state)
+
+        verification = {item["name"]: item for item in result["context"].trace_verification}
+        self.assertTrue(verification["relative-import-exports-match"]["ok"])
+
+    def test_verifier_blocks_changed_export_that_breaks_existing_importer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src").mkdir(parents=True)
+            (project_dir / "src" / "main.tsx").write_text(
+                "import { App } from './App';\nconsole.log(App);\n",
+                encoding="utf-8",
+            )
+            (project_dir / "src" / "App.tsx").write_text("export function App() { return null }\n", encoding="utf-8")
+            ctx = self._ctx(ws_root, prompt="refactor app")
+
+            state = {
+                "context": ctx,
+                "input": "refactor app",
+                "changes": [{"path": "src/App.tsx", "new_content": "export default function App() { return null }\n"}],
+                "actions": [],
+            }
+            result = _verify_node(state)
+
+        verification = {item["name"]: item for item in result["context"].trace_verification}
+        self.assertFalse(verification["relative-import-exports-match"]["ok"])
+        self.assertIn("main.tsx", verification["relative-import-exports-match"]["detail"])
+
+    def test_verifier_accepts_external_import_when_install_action_present(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src").mkdir(parents=True)
+            (project_dir / "package.json").write_text(
+                json.dumps({"dependencies": {"react": "^19.0.0"}}),
+                encoding="utf-8",
+            )
+            (project_dir / "src" / "App.tsx").write_text("export default function App() { return null }\n", encoding="utf-8")
+            ctx = self._ctx(ws_root, prompt="add icons")
+
+            state = {
+                "context": ctx,
+                "input": "add icons",
+                "changes": [{"path": "src/App.tsx", "new_content": "import { Search } from 'lucide-react';\nexport default function App() { return <Search /> }\n"}],
+                "actions": [{"type": "shell", "command": "npm install lucide-react"}],
+            }
+            result = _verify_node(state)
+
+        verification = {item["name"]: item for item in result["context"].trace_verification}
+        self.assertTrue(verification["external-dependencies-declared"]["ok"])
+
 
 class MemoryRetrievalRegressionTests(unittest.TestCase):
     def test_local_vector_memory_retrieval_prefers_relevant_chunks(self) -> None:
@@ -503,12 +622,54 @@ class PreviewAuditRegressionTests(unittest.TestCase):
         self.assertFalse(by_id["image-loads"]["ok"])
         self.assertFalse(by_id["blocking-overlays"]["ok"])
 
+    def test_preview_audit_returns_blocking_issue_details(self) -> None:
+        snapshot = {
+            "title": "Demo",
+            "meta_description": "Demo app",
+            "headings": ["Demo"],
+            "buttons": ["Go"],
+            "links": ["Home"],
+            "word_count": 120,
+            "image_count": 1,
+            "images_missing_alt": 0,
+            "interactive_count": 2,
+            "broken_images": ["missing.png"],
+            "unlabeled_interactive": ["button.icon-only"],
+            "mobile_text_overflow_nodes": ["h1.hero"],
+            "console_errors": [],
+            "page_errors": [],
+        }
+        audit = _build_preview_audit_result("http://127.0.0.1:4173", snapshot, audit_mode="browser")
+
+        self.assertFalse(audit["ok"])
+        severities = {item["severity"] for item in audit["issue_details"]}
+        self.assertIn("blocking", severities)
+        self.assertTrue(any(item["category"] == "assets" for item in audit["issue_details"]))
+
     def test_browser_audit_is_runtime_capability_not_project_dependency(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project_dir = Path(tmp)
             (project_dir / "package.json").write_text('{"dependencies":{}}', encoding="utf-8")
 
             self.assertTrue(_browser_preview_audit_ready(project_dir))
+
+
+class CommandPolicyRegressionTests(unittest.TestCase):
+    def test_command_policy_allows_project_validation_commands(self) -> None:
+        for command in ["npm run build", "npm test", "python3 -m compileall api"]:
+            with self.subTest(command=command):
+                decision = _command_policy_decision(command)
+                self.assertTrue(decision.ok)
+                self.assertEqual(decision.risk_level, "safe")
+
+    def test_command_policy_blocks_or_gates_risky_commands(self) -> None:
+        blocked = _command_policy_decision("rm -rf src")
+        gated = _command_policy_decision("git reset --hard")
+
+        self.assertFalse(blocked.ok)
+        self.assertEqual(blocked.risk_level, "blocked")
+        self.assertFalse(gated.ok)
+        self.assertEqual(gated.risk_level, "approval_required")
 
 
 class MCPHintRegressionTests(unittest.TestCase):
@@ -897,6 +1058,14 @@ class HybridSeedRegressionTests(unittest.TestCase):
 
 
 class HostedProfileIdRegressionTests(unittest.TestCase):
+    def _request(self, *, method: str = "POST", path: str = "/api/agent/worker/run", headers: dict[str, str] | None = None) -> Request:
+        return Request({
+            "type": "http",
+            "method": method,
+            "path": path,
+            "headers": [(key.lower().encode("latin1"), value.encode("latin1")) for key, value in (headers or {}).items()],
+        })
+
     def test_background_agent_job_can_be_resumed_by_worker(self) -> None:
         seen: list[tuple[str | None, str, str | None]] = []
 
@@ -908,51 +1077,53 @@ class HostedProfileIdRegressionTests(unittest.TestCase):
 
         with patch("api.main._run_agent_impl", side_effect=fake_run_agent_impl), \
             patch("api.main.has_supabase", return_value=False):
-            client = TestClient(main_app)
-            queued = client.post(
-                "/api/agent",
-                json={
-                    "input": "fix header",
-                    "project_root": "demo",
-                    "build_mode": "hybrid",
-                    "active_file": "src/App.tsx",
-                    "background": True,
-                },
-                headers={"X-VoiceIDE-Session": "worker-test", "X-VoiceIDE-User": "user-1"},
-            )
-            self.assertEqual(queued.status_code, 200)
-            job_id = queued.json()["job_id"]
+            session_token = CURRENT_SESSION_ID.set("worker-test")
+            user_token = CURRENT_USER_ID.set("user-1")
+            profile_token = CURRENT_PROFILE_ID.set("user-1")
+            try:
+                queued = main_mod.agent(
+                    main_mod.AgentReq(
+                        input="fix header",
+                        project_root="demo",
+                        build_mode="hybrid",
+                        active_file="src/App.tsx",
+                        background=True,
+                    )
+                )
+                job_id = queued["job_id"]
+                run = main_mod._run_agent_worker_jobs(job_id=job_id, limit=1)
+            finally:
+                CURRENT_PROFILE_ID.reset(profile_token)
+                CURRENT_USER_ID.reset(user_token)
+                CURRENT_SESSION_ID.reset(session_token)
 
-            run = client.post(
-                "/api/agent/worker/run",
-                json={"job_id": job_id, "limit": 1},
-                headers={"X-VoiceIDE-Session": "worker-test", "X-VoiceIDE-User": "user-1"},
-            )
-
-        self.assertEqual(run.status_code, 200)
-        self.assertEqual(run.json()["processed"], 1)
+        self.assertTrue(queued["ok"])
+        self.assertEqual(run["processed"], 1)
         self.assertEqual(seen, [("user-1", "fix header", "src/App.tsx")])
 
     def test_worker_endpoint_requires_secret_in_serverless(self) -> None:
         with patch("api.main._is_serverless_runtime", return_value=True), \
             patch.dict("os.environ", {"AGENT_WORKER_SECRET": "secret"}, clear=False):
-            client = TestClient(main_app)
-            resp = client.post("/api/agent/worker/run", json={"limit": 1})
+            with self.assertRaises(HTTPException) as raised:
+                main_mod._require_worker_auth(self._request())
 
-        self.assertEqual(resp.status_code, 401)
+        self.assertEqual(raised.exception.status_code, 401)
 
     def test_worker_get_endpoint_accepts_secret_for_cron(self) -> None:
         with patch("api.main._is_serverless_runtime", return_value=True), \
             patch("api.main.list_agent_jobs_by_status", return_value=[]), \
+            patch("api.main.has_supabase", return_value=True), \
             patch.dict("os.environ", {"AGENT_WORKER_SECRET": "secret"}, clear=False):
-            client = TestClient(main_app)
-            resp = client.get("/api/agent/worker/run?limit=1", headers={"Authorization": "Bearer secret"})
+            resp = main_mod.agent_worker_run_get(
+                self._request(method="GET", headers={"Authorization": "Bearer secret"}),
+                limit=1,
+            )
 
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json()["processed"], 0)
+        self.assertEqual(resp["processed"], 0)
 
     def test_streaming_agent_keeps_profile_context_in_worker_thread(self) -> None:
         seen_profile_ids: list[str | None] = []
+        errors: list[BaseException] = []
 
         def fake_run_agent_impl(req, event_cb=None, job_id=None):
             seen_profile_ids.append(CURRENT_PROFILE_ID.get())
@@ -961,12 +1132,27 @@ class HostedProfileIdRegressionTests(unittest.TestCase):
             return {"ok": True}
 
         with patch("api.main.resolve_request_user", return_value=AuthenticatedUser(user_id="sb-user-123", auth_source="supabase", supabase_user_id="00000000-0000-0000-0000-000000000123")), \
-            patch("api.main._run_agent_impl", side_effect=fake_run_agent_impl):
-            client = TestClient(main_app)
-            with client.stream("POST", "/api/agent", json={"input": "hello", "stream": True}, headers={"Authorization": "Bearer test-token", "X-VoiceIDE-Session": "sess-1"}) as resp:
-                self.assertEqual(resp.status_code, 200)
-                list(resp.iter_text())
+            patch("api.main._run_agent_impl", side_effect=fake_run_agent_impl), \
+            patch("api.main.has_supabase", return_value=False):
+            def worker() -> None:
+                session_token = CURRENT_SESSION_ID.set("sess-1")
+                user_token = CURRENT_USER_ID.set("sb-user-123")
+                profile_token = CURRENT_PROFILE_ID.set("sb-user-123")
+                try:
+                    main_mod._run_agent_impl(main_mod.AgentReq(input="hello", stream=False), event_cb=lambda *_args: None)
+                except BaseException as exc:  # pragma: no cover - surfaced by assertion below
+                    errors.append(exc)
+                finally:
+                    CURRENT_PROFILE_ID.reset(profile_token)
+                    CURRENT_USER_ID.reset(user_token)
+                    CURRENT_SESSION_ID.reset(session_token)
 
+            thread = threading.Thread(target=worker)
+            thread.start()
+            thread.join(timeout=2)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
         self.assertEqual(seen_profile_ids, ["sb-user-123"])
 
     def test_upsert_profile_migrates_legacy_uuid_profile_to_internal_id(self) -> None:
@@ -1139,36 +1325,33 @@ class HostedProfileIdRegressionTests(unittest.TestCase):
         self.assertTrue(any(row.get("profile_id") == "sb-93fba5d6-7247-472b-a028-2ff2af197815" for row in fake_client.rows))
 
     def test_hosted_settings_save_uses_internal_profile_id_for_secrets_and_preferences(self) -> None:
-        app = FastAPI()
-        app.include_router(build_settings_router(session_state=lambda: {"workspace": None}, env_set=lambda *_args, **_kwargs: None, env_unset=lambda *_args, **_kwargs: None, reload_settings=lambda: None))
+        router = build_settings_router(session_state=lambda: {"workspace": None}, env_set=lambda *_args, **_kwargs: None, env_unset=lambda *_args, **_kwargs: None, reload_settings=lambda: None)
+        update_endpoint = next(route.endpoint for route in router.routes if getattr(route, "path", "") == "/api/settings" and "PUT" in getattr(route, "methods", set()))
 
-        saved_secret_profile_ids: list[str] = []
+        saved_secret_updates: list[tuple[str, str]] = []
         saved_pref_profile_ids: list[str] = []
 
-        with patch("api.settings_router.resolve_request_user", return_value=AuthenticatedUser(user_id="sb-user-123", auth_source="supabase", supabase_user_id="00000000-0000-0000-0000-000000000123")), \
+        with patch.dict("os.environ", {"VOICEIDE_SECRET_KEY": "secret-ready"}, clear=False), \
+            patch("api.settings_router.resolve_request_user", return_value=AuthenticatedUser(user_id="sb-user-123", auth_source="supabase", supabase_user_id="00000000-0000-0000-0000-000000000123")), \
             patch("api.settings_router.has_supabase", return_value=True), \
-            patch("api.settings_router.os.getenv", side_effect=lambda key, default=None: "secret-ready" if key == "VOICEIDE_SECRET_KEY" else default), \
-            patch("api.settings_router.upsert_provider_secret", side_effect=lambda profile_id, provider, api_key: saved_secret_profile_ids.append(profile_id)), \
+            patch("api.settings_router.upsert_provider_secret", side_effect=lambda profile_id, provider, api_key: saved_secret_updates.append((profile_id, provider))), \
             patch("api.settings_router.upsert_user_preferences", side_effect=lambda profile_id, req: saved_pref_profile_ids.append(profile_id)):
-            client = TestClient(app)
-            resp = client.put("/api/settings", json={"llm_provider": "openai", "openai_api_key": "sk-demo"})
+            resp = update_endpoint(SettingsUpdateReq(llm_provider="openai", nine_router_api_key="sk-demo"))
 
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(saved_secret_profile_ids, ["sb-user-123"])
+        self.assertTrue(resp["ok"])
+        self.assertEqual(saved_secret_updates, [("sb-user-123", "nine_router")])
         self.assertEqual(saved_pref_profile_ids, ["sb-user-123"])
 
     def test_hosted_preferences_router_uses_internal_profile_id(self) -> None:
-        app = FastAPI()
-        app.include_router(build_preferences_router())
-        app.dependency_overrides[require_hosted_user] = lambda: AuthenticatedUser(user_id="sb-user-123", auth_source="supabase", supabase_user_id="00000000-0000-0000-0000-000000000123")
+        router = build_preferences_router()
+        get_endpoint = next(route.endpoint for route in router.routes if getattr(route, "path", "") == "/api/preferences/user" and "GET" in getattr(route, "methods", set()))
 
         seen_profile_ids: list[str] = []
 
         with patch("api.preferences_router.get_user_preferences", side_effect=lambda profile_id: seen_profile_ids.append(profile_id) or UserPreferencesRecord(profile_id=profile_id)):
-            client = TestClient(app)
-            resp = client.get("/api/preferences/user")
+            resp = get_endpoint(user=AuthenticatedUser(user_id="sb-user-123", auth_source="supabase", supabase_user_id="00000000-0000-0000-0000-000000000123"))
 
-        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.preferences.profile_id, "sb-user-123")
         self.assertEqual(seen_profile_ids, ["sb-user-123"])
 
 
@@ -1243,43 +1426,36 @@ class SupabaseReadinessRegressionTests(unittest.TestCase):
 
 
 class ProviderCatalogRegressionTests(unittest.TestCase):
-    def test_openrouter_free_router_is_default_and_paid_models_remain_available(self) -> None:
-        models = list_provider_models("openrouter")
+    def test_nine_router_catalog_contains_gateway_combos_and_aliases(self) -> None:
+        models = list_provider_models("nine_router")
         catalog = provider_catalog()
 
         self.assertEqual(models[0], "free-forever")
-        self.assertEqual(catalog["openrouter"]["recommended_model"], models[0])
-        self.assertTrue(any(model.endswith(":free") for model in catalog["openrouter"]["free_tier_models"]))
-        self.assertIn("openrouter/free", models)
-        self.assertIn("x-ai/grok-4.3", models)
+        self.assertEqual(catalog["nine_router"]["recommended_model"], models[0])
+        for model in [
+            "always-on",
+            "maximize-claude",
+            "openclaw-free",
+            "coding-auto",
+            "cheap-auto",
+            "quality-auto",
+            "kr/claude-sonnet-4.5",
+            "oc/<auto>",
+            "cx/gpt-5.4",
+            "cc/claude-opus-4-7",
+            "gh/claude-sonnet-4.6",
+            "cu/gpt-5.3-codex",
+            "glm/glm-5",
+            "minimax/minimax-m2.7",
+            "kimi/kimi-k2.6",
+            "openrouter/openrouter/free",
+            "deepseek/deepseek-v4-pro",
+        ]:
+            self.assertIn(model, models)
 
-    def test_openai_is_familiar_credit_path_not_fake_free_tier(self) -> None:
-        catalog = provider_catalog()
-
-        self.assertEqual(catalog["openai"]["recommended_model"], "gpt-5.5")
-        self.assertEqual(catalog["openai"]["free_tier_models"], [])
-        self.assertIn("trial/account credits", catalog["openai"]["positioning"])
-
-    def test_groq_is_available_as_free_plan_path(self) -> None:
-        models = list_provider_models("groq")
-        catalog = provider_catalog()
-
-        self.assertEqual(catalog["groq"]["recommended_model"], models[0])
-        self.assertTrue(catalog["groq"]["free_tier_models"])
-        self.assertIn("free-plan", catalog["groq"]["positioning"])
-
-    def test_multi_provider_catalog_has_web_builder_choices(self) -> None:
-        catalog = provider_catalog()
-        for provider in ["gemini", "together", "cerebras", "xai"]:
-            models = list_provider_models(provider)
-            self.assertTrue(models, provider)
-            self.assertEqual(catalog[provider]["recommended_model"], models[0])
-
-        self.assertTrue(catalog["gemini"]["free_tier_models"])
-        self.assertTrue(catalog["cerebras"]["free_tier_models"])
-
-    def test_free_tier_fallback_order_prefers_connected_free_routing(self) -> None:
+    def test_agent_runtime_only_considers_nine_router_connected(self) -> None:
         snapshot = {
+            "nine_router": {"connected": True},
             "openai": {"connected": True},
             "openrouter": {"connected": True},
             "gemini": {"connected": True},
@@ -1290,10 +1466,11 @@ class ProviderCatalogRegressionTests(unittest.TestCase):
             patch("api.agent.get_provider_cooldown_remaining", return_value=0):
             order = agent_mod._fallback_provider_order("openai")
 
-        self.assertEqual(order[:3], ["openai", "openrouter", "gemini"])
+        self.assertEqual(order, ["nine_router"])
 
-    def test_generate_json_falls_back_to_connected_provider_on_rate_limit(self) -> None:
+    def test_generate_json_uses_only_nine_router_model(self) -> None:
         snapshot = {
+            "nine_router": {"connected": True},
             "openai": {"connected": True},
             "openrouter": {"connected": True},
         }
@@ -1301,13 +1478,10 @@ class ProviderCatalogRegressionTests(unittest.TestCase):
 
         def fake_once(provider: str, model: str, *, system: str, user: str):
             attempted.append((provider, model))
-            if provider == "openai":
-                raise RuntimeError("OpenAI sedang kena rate limit.")
             return {"spoken": "ok", "changes": [], "actions": []}
 
         with patch.object(agent_mod.settings_mod.settings, "llm_provider", "openai"), \
-            patch.object(agent_mod.settings_mod.settings, "openai_model", "gpt-5.5"), \
-            patch.object(agent_mod.settings_mod.settings, "openrouter_model", "openrouter/free"), \
+            patch.object(agent_mod.settings_mod.settings, "nine_router_model", "free-forever"), \
             patch.object(agent_mod.settings_mod.settings, "friendly_free_tier_mode", True), \
             patch("api.agent.auth_snapshot", return_value=snapshot), \
             patch("api.agent.require_provider_connected", return_value=None), \
@@ -1316,86 +1490,43 @@ class ProviderCatalogRegressionTests(unittest.TestCase):
             patch("api.agent._generate_json_once", side_effect=fake_once):
             provider, model, data = agent_mod._generate_json(system="system", user="user")
 
-        self.assertEqual(provider, "openrouter")
-        self.assertEqual(model, "openrouter/free")
+        self.assertEqual(provider, "nine_router")
+        self.assertEqual(model, "free-forever")
         self.assertEqual(data["spoken"], "ok")
-        self.assertEqual(data["_voiceide_provider_fallback"]["selected_provider"], "openai")
-        self.assertNotIn(("openai", "gpt-5.5"), attempted)
+        self.assertEqual(attempted, [("nine_router", "free-forever")])
 
-    def test_free_mode_uses_provider_free_models_instead_of_paid_defaults(self) -> None:
-        with patch.object(agent_mod.settings_mod.settings, "openrouter_model", "x-ai/grok-4.3"), \
-            patch.object(agent_mod.settings_mod.settings, "gemini_model", "gemini-3-pro-preview"), \
-            patch.object(agent_mod.settings_mod.settings, "friendly_free_tier_mode", True):
-            openrouter_models = agent_mod._candidate_models_for_provider("openrouter")
-            gemini_models = agent_mod._candidate_models_for_provider("gemini")
-            openai_models = agent_mod._candidate_models_for_provider("openai")
-
-        self.assertEqual(openrouter_models[0], "openrouter/free")
-        self.assertTrue(all(model == "openrouter/free" or model.endswith(":free") for model in openrouter_models))
-        self.assertIn("gemini-3-flash-preview", gemini_models)
-        self.assertNotIn("gemini-3-pro-preview", gemini_models)
-        self.assertEqual(openai_models, [])
-
-    def test_free_forever_route_expands_to_real_provider_models(self) -> None:
-        snapshot = {
-            "openrouter": {"connected": True},
-            "gemini": {"connected": True},
-            "groq": {"connected": True},
-            "cerebras": {"connected": False},
-        }
-        attempted: list[tuple[str, str]] = []
-
-        def fake_once(provider: str, model: str, *, system: str, user: str):
-            attempted.append((provider, model))
-            if provider == "openrouter":
-                raise RuntimeError("rate limit")
-            return {"spoken": "ok", "changes": [], "actions": []}
-
-        with patch.object(agent_mod.settings_mod.settings, "llm_provider", "openrouter"), \
-            patch.object(agent_mod.settings_mod.settings, "openrouter_model", "free-forever"), \
-            patch.object(agent_mod.settings_mod.settings, "friendly_free_tier_mode", True), \
-            patch("api.agent.auth_snapshot", return_value=snapshot), \
-            patch("api.agent.require_provider_connected", return_value=None), \
-            patch("api.agent.get_provider_cooldown_remaining", return_value=0), \
-            patch("api.agent._throttle_llm_calls", return_value=None), \
-            patch("api.agent._generate_json_once", side_effect=fake_once):
-            provider, model, data = agent_mod._generate_json(system="system", user="user")
-
-        self.assertEqual(provider, "gemini")
-        self.assertEqual(model, "gemini-3-flash-preview")
-        self.assertEqual(data["spoken"], "ok")
-        self.assertIn(("openrouter", "openrouter/free"), attempted)
-        self.assertNotIn(("openrouter", "free-forever"), attempted)
-
-    def test_route_plan_reports_connected_attempts_and_skips(self) -> None:
+    def test_route_plan_treats_9router_aliases_as_pass_through(self) -> None:
         from api.agent_router import build_route_plan
 
         plan = build_route_plan(
             route_name="free-forever",
             selected_provider="nine_router",
-            connected_providers={"openrouter"},
+            connected_providers={"nine_router"},
             cooldown_remaining=lambda _provider: 0,
         )
 
-        self.assertTrue(any(attempt.provider == "openrouter" for attempt in plan.attempts))
-        self.assertTrue(any("Kiro" in item or "OpenCode" in item for item in plan.skipped))
+        self.assertTrue(any(attempt.provider == "nine_router" and attempt.model == "kr/claude-sonnet-4.5" for attempt in plan.attempts))
+        self.assertFalse(plan.skipped)
 
-    def test_direct_model_attempt_explains_unsupported_subscription_alias(self) -> None:
+    def test_direct_model_attempt_accepts_subscription_alias(self) -> None:
         from api.agent_router import build_direct_model_attempt
 
         attempt, reason = build_direct_model_attempt("kr/claude-sonnet-4.5", selected_provider="nine_router")
 
-        self.assertIsNone(attempt)
-        self.assertIn("Kiro", reason or "")
+        self.assertIsNotNone(attempt)
+        self.assertEqual(attempt.provider if attempt else "", "nine_router")
+        self.assertEqual(attempt.model if attempt else "", "kr/claude-sonnet-4.5")
+        self.assertIsNone(reason)
 
-    def test_generate_json_can_use_connected_provider_when_none_selected(self) -> None:
+    def test_generate_json_defaults_to_nine_router_when_none_selected(self) -> None:
         snapshot = {
+            "nine_router": {"connected": True},
             "openrouter": {"connected": True},
             "gemini": {"connected": False},
         }
 
         with patch.object(agent_mod.settings_mod.settings, "llm_provider", None), \
-            patch.object(agent_mod.settings_mod.settings, "openrouter_model", "openrouter/free"), \
+            patch.object(agent_mod.settings_mod.settings, "nine_router_model", "free-forever"), \
             patch.object(agent_mod.settings_mod.settings, "friendly_free_tier_mode", True), \
             patch("api.agent.auth_snapshot", return_value=snapshot), \
             patch("api.agent.require_provider_connected", return_value=None), \
@@ -1404,19 +1535,20 @@ class ProviderCatalogRegressionTests(unittest.TestCase):
             patch("api.agent._generate_json_once", return_value={"spoken": "ok", "changes": [], "actions": []}):
             provider, model, data = agent_mod._generate_json(system="system", user="user")
 
-        self.assertEqual(provider, "openrouter")
-        self.assertEqual(model, "openrouter/free")
+        self.assertEqual(provider, "nine_router")
+        self.assertEqual(model, "free-forever")
         self.assertEqual(data["spoken"], "ok")
 
-    def test_generate_json_uses_hosted_user_preferences_for_provider_and_model(self) -> None:
+    def test_generate_json_uses_hosted_nine_router_model_preference(self) -> None:
         snapshot = {
+            "nine_router": {"connected": True},
             "openrouter": {"connected": True},
             "gemini": {"connected": True},
         }
 
-        with patch("api.agent.get_user_preferences", return_value=UserPreferencesRecord(profile_id="sb-user-123", llm_provider="gemini", gemini_model="gemini-3-flash-preview")), \
+        with patch("api.agent.get_user_preferences", return_value=UserPreferencesRecord(profile_id="sb-user-123", llm_provider="gemini", nine_router_model="kr/claude-sonnet-4.5", gemini_model="gemini-3-flash-preview")), \
             patch.object(agent_mod.settings_mod.settings, "llm_provider", "openrouter"), \
-            patch.object(agent_mod.settings_mod.settings, "openrouter_model", "x-ai/grok-4.3"), \
+            patch.object(agent_mod.settings_mod.settings, "nine_router_model", "free-forever"), \
             patch.object(agent_mod.settings_mod.settings, "friendly_free_tier_mode", True), \
             patch("api.agent.auth_snapshot", return_value=snapshot), \
             patch("api.agent.require_provider_connected", return_value=None), \
@@ -1429,9 +1561,132 @@ class ProviderCatalogRegressionTests(unittest.TestCase):
             finally:
                 CURRENT_PROFILE_ID.reset(token)
 
-        self.assertEqual(provider, "gemini")
-        self.assertEqual(model, "gemini-3-flash-preview")
-        self.assertEqual(data["spoken"], "ok")
+        self.assertEqual(provider, "nine_router")
+        self.assertEqual(model, "kr/claude-sonnet-4.5")
+
+    def test_nine_router_status_reports_managed_free_router(self) -> None:
+        from api import oauth_runtime
+
+        with patch.dict(
+            "os.environ",
+            {
+                "APPORA_MANAGED_9ROUTER_BASE_URL": "https://router.appora.ai/v1",
+                "APPORA_MANAGED_9ROUTER_API_KEY": "managed-key",
+            },
+            clear=False,
+        ), patch("api.oauth_runtime.has_provider_secret", return_value=False):
+            token = CURRENT_PROFILE_ID.set("sb-user-123")
+            try:
+                status = oauth_runtime.nine_router_status()
+            finally:
+                CURRENT_PROFILE_ID.reset(token)
+
+        self.assertTrue(status["connected"])
+        self.assertEqual(status["source"], "appora_managed_free")
+        self.assertEqual(status["auth_type"], "managed_free")
+        self.assertTrue(status["managed_free"])
+        self.assertEqual(status["base_url"], "https://router.appora.ai/v1")
+
+    def test_managed_free_router_is_used_for_free_forever_without_user_key(self) -> None:
+        from api import oauth_runtime
+
+        calls: list[tuple[str, str]] = []
+
+        def fake_post(url, payload, headers, *, provider=None):
+            calls.append((url, headers.get("Authorization", "")))
+            return 200, {"choices": [{"message": {"content": "{\"spoken\":\"ok\",\"changes\":[],\"actions\":[]}"}}]}, ""
+
+        with patch.dict(
+            "os.environ",
+            {
+                "APPORA_MANAGED_9ROUTER_BASE_URL": "https://router.appora.ai/v1",
+                "APPORA_MANAGED_9ROUTER_API_KEY": "managed-key",
+                "APPORA_FREE_DAILY_MESSAGES": "3",
+            },
+            clear=False,
+        ), patch("api.oauth_runtime.has_provider_secret", return_value=False), \
+            patch("api.oauth_runtime._post_json", side_effect=fake_post):
+            token = CURRENT_PROFILE_ID.set("sb-user-123")
+            try:
+                result = oauth_runtime.nine_router_generate_json(model="free-forever", system="system", user="user")
+            finally:
+                CURRENT_PROFILE_ID.reset(token)
+
+        self.assertIn("\"spoken\":\"ok\"", result["text"])
+        self.assertEqual(calls, [("https://router.appora.ai/v1/chat/completions", "Bearer managed-key")])
+
+    def test_managed_free_router_is_used_for_free_provider_aliases_without_user_key(self) -> None:
+        from api import oauth_runtime
+
+        calls: list[tuple[str, str, str]] = []
+
+        def fake_post(url, payload, headers, *, provider=None):
+            calls.append((url, str(payload.get("model")), headers.get("Authorization", "")))
+            return 200, {"choices": [{"message": {"content": "{\"spoken\":\"ok\",\"changes\":[],\"actions\":[]}"}}]}, ""
+
+        with patch.dict(
+            "os.environ",
+            {
+                "APPORA_MANAGED_9ROUTER_BASE_URL": "https://router.appora.ai/v1",
+                "APPORA_MANAGED_9ROUTER_API_KEY": "managed-key",
+                "APPORA_FREE_DAILY_MESSAGES": "3",
+            },
+            clear=False,
+        ), patch("api.oauth_runtime.has_provider_secret", return_value=False), \
+            patch("api.oauth_runtime._post_json", side_effect=fake_post):
+            token = CURRENT_PROFILE_ID.set("sb-user-123")
+            try:
+                result = oauth_runtime.nine_router_generate_json(model="kr/claude-sonnet-4.5", system="system", user="user")
+            finally:
+                CURRENT_PROFILE_ID.reset(token)
+
+        self.assertIn("\"spoken\":\"ok\"", result["text"])
+        self.assertEqual(calls, [("https://router.appora.ai/v1/chat/completions", "kr/claude-sonnet-4.5", "Bearer managed-key")])
+
+    def test_managed_free_router_can_resolve_combo_to_configured_free_route(self) -> None:
+        from api import oauth_runtime
+
+        calls: list[str] = []
+
+        def fake_post(url, payload, headers, *, provider=None):
+            calls.append(str(payload.get("model")))
+            return 200, {"choices": [{"message": {"content": "{\"spoken\":\"ok\",\"changes\":[],\"actions\":[]}"}}]}, ""
+
+        with patch.dict(
+            "os.environ",
+            {
+                "APPORA_MANAGED_9ROUTER_BASE_URL": "https://router.appora.ai/v1",
+                "APPORA_MANAGED_9ROUTER_API_KEY": "managed-key",
+                "APPORA_MANAGED_FREE_MODEL": "kr/claude-sonnet-4.5",
+                "APPORA_FREE_DAILY_MESSAGES": "3",
+            },
+            clear=False,
+        ), patch("api.oauth_runtime.has_provider_secret", return_value=False), \
+            patch("api.oauth_runtime._post_json", side_effect=fake_post):
+            token = CURRENT_PROFILE_ID.set("sb-user-123")
+            try:
+                result = oauth_runtime.nine_router_generate_json(model="free-forever", system="system", user="user")
+            finally:
+                CURRENT_PROFILE_ID.reset(token)
+
+        self.assertIn("\"spoken\":\"ok\"", result["text"])
+        self.assertEqual(calls, ["kr/claude-sonnet-4.5"])
+
+    def test_managed_free_router_does_not_unlock_premium_alias_without_user_key(self) -> None:
+        from api import oauth_runtime
+
+        with patch.dict(
+            "os.environ",
+            {
+                "APPORA_MANAGED_9ROUTER_BASE_URL": "https://router.appora.ai/v1",
+                "APPORA_MANAGED_9ROUTER_API_KEY": "managed-key",
+            },
+            clear=False,
+        ), patch("api.oauth_runtime.has_provider_secret", return_value=False):
+            result = oauth_runtime.nine_router_generate_json(model="cx/gpt-5.4", system="system", user="user")
+
+        self.assertEqual(result["text"], "")
+        self.assertIn("9Router", result["error_message"])
 
     def test_provider_key_prefers_decryptable_hosted_secret_over_env(self) -> None:
         from api import oauth_runtime
@@ -1483,11 +1738,78 @@ class WorkspaceBoundaryRegressionTests(unittest.TestCase):
 
     def test_hosted_sensitive_routes_require_verified_user(self) -> None:
         with patch("api.main.has_supabase", return_value=True):
-            client = TestClient(main_app)
-            resp = client.post("/api/fs/list", json={"path": "."})
+            requires_verified_user = main_mod._requires_verified_hosted_user("/api/fs/list")
 
-        self.assertEqual(resp.status_code, 401)
-        self.assertIn("verified login", resp.text)
+        self.assertTrue(requires_verified_user)
+
+
+class PreviewRunnerRegressionTests(unittest.TestCase):
+    def test_preview_runner_uses_preview_script_without_installing_preview_package(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "demo"
+            project.mkdir(parents=True)
+            (project / "package.json").write_text(
+                json.dumps({"scripts": {"preview": "vite preview"}, "dependencies": {"vite": "^7.0.0"}}),
+                encoding="utf-8",
+            )
+            commands: list[list[str]] = []
+
+            def fake_run(cmd, **_kwargs):
+                commands.append(list(cmd))
+                return SimpleNamespace(returncode=0, stdout="installed\n", stderr="")
+
+            def fake_popen(cmd, **_kwargs):
+                commands.append(list(cmd))
+                return SimpleNamespace(pid=12345, stdout=["ready\n"])
+
+            with patch("api.main._ws", return_value=root), \
+                patch("api.main._hydrate_hosted_project", return_value=None), \
+                patch("api.main._ensure_runner_capacity", return_value=None), \
+                patch("api.main._resolve_package_manager", return_value=("npm", ["npm"])), \
+                patch("api.main._next_port", return_value=4321), \
+                patch("api.main._is_serverless_runtime", return_value=False), \
+                patch("subprocess.run", side_effect=fake_run), \
+                patch("subprocess.Popen", side_effect=fake_popen):
+                result = main_mod.run_start(main_mod.RunStartReq(project_root="demo"), Request({"type": "http", "method": "POST", "path": "/api/run/start", "headers": []}))
+
+        self.assertTrue(result["ok"])
+        self.assertIn(["npm", "install"], commands)
+        self.assertIn(["npm", "run", "preview", "--", "--host", "127.0.0.1", "--strictPort", "--port", "4321"], commands)
+        self.assertNotIn(["npm", "install", "preview"], commands)
+
+    def test_preview_runner_prefers_dev_script_for_live_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "demo"
+            project.mkdir(parents=True)
+            (project / "package.json").write_text(
+                json.dumps({"scripts": {"dev": "vite", "preview": "vite preview"}, "dependencies": {"vite": "^7.0.0"}}),
+                encoding="utf-8",
+            )
+            commands: list[list[str]] = []
+
+            def fake_run(cmd, **_kwargs):
+                commands.append(list(cmd))
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+            def fake_popen(cmd, **_kwargs):
+                commands.append(list(cmd))
+                return SimpleNamespace(pid=12345, stdout=["ready\n"])
+
+            with patch("api.main._ws", return_value=root), \
+                patch("api.main._hydrate_hosted_project", return_value=None), \
+                patch("api.main._ensure_runner_capacity", return_value=None), \
+                patch("api.main._resolve_package_manager", return_value=("npm", ["npm"])), \
+                patch("api.main._next_port", return_value=4322), \
+                patch("api.main._is_serverless_runtime", return_value=False), \
+                patch("subprocess.run", side_effect=fake_run), \
+                patch("subprocess.Popen", side_effect=fake_popen):
+                result = main_mod.run_start(main_mod.RunStartReq(project_root="demo"), Request({"type": "http", "method": "POST", "path": "/api/run/start", "headers": []}))
+
+        self.assertTrue(result["ok"])
+        self.assertIn(["npm", "run", "dev", "--", "--host", "127.0.0.1", "--strictPort", "--port", "4322"], commands)
+        self.assertNotIn(["npm", "run", "preview", "--", "--host", "127.0.0.1", "--strictPort", "--port", "4322"], commands)
 
 
 class ProjectTemplateRegressionTests(unittest.TestCase):
@@ -1574,6 +1896,59 @@ class AgentEvalRegressionTests(unittest.TestCase):
 
 
 class PatchApplyRegressionTests(unittest.TestCase):
+    def test_apply_many_preflight_reports_stale_patch_without_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "src" / "App.tsx"
+            target.parent.mkdir(parents=True)
+            target.write_text("old\n", encoding="utf-8")
+            stale_hash = _sha256_text("old\n")
+            target.write_text("user edit\n", encoding="utf-8")
+
+            result = _preflight_apply_many(
+                root,
+                ApplyManyReq(
+                    overwrite=True,
+                    ops=[
+                        WriteOp(
+                            path="src/App.tsx",
+                            content="agent edit\n",
+                            expected_sha256=stale_hash,
+                            expected_exists=True,
+                        )
+                    ],
+                ),
+            )
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["conflicts"][0]["reason"], "stale_hash")
+            self.assertEqual(target.read_text(encoding="utf-8"), "user edit\n")
+
+    def test_apply_many_preflight_accepts_matching_patch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "src" / "App.tsx"
+            target.parent.mkdir(parents=True)
+            target.write_text("old\n", encoding="utf-8")
+
+            result = _preflight_apply_many(
+                root,
+                ApplyManyReq(
+                    overwrite=True,
+                    ops=[
+                        WriteOp(
+                            path="src/App.tsx",
+                            content="agent edit\n",
+                            expected_sha256=_sha256_text("old\n"),
+                            expected_exists=True,
+                        )
+                    ],
+                ),
+            )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["conflicts"], [])
+
     def test_apply_many_rejects_stale_agent_patch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

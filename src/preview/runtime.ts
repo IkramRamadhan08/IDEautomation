@@ -23,7 +23,6 @@ export async function ensurePreviewRunningFlow({
   setEditorStatus,
   setPreviewUrl,
   refreshPreviewFrame,
-  notifyInfo,
   notifyError,
   errorMessage,
 }: EnsurePreviewRunningArgs): Promise<string> {

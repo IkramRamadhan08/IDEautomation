@@ -5,36 +5,30 @@ import {
   type ProviderChoice,
   type BuildMode,
   type ModelRouteDiagnostics,
+  type ModelRouteTestResult,
 } from "../../types";
 
 interface SettingsModalProps {
   settingsOpen: boolean;
   identity: IdentityInfo | null;
   settings: SettingsInfo | null;
-  llmProviderDraft: ProviderChoice;
   buildModeDraft: BuildMode;
   modelDraft: string;
   nineRouterBaseUrlDraft: string;
   nineRouterApiKeyDraft: string;
-  openaiApiKeyDraft: string;
-  anthropicApiKeyDraft: string;
-  openrouterApiKeyDraft: string;
-  groqApiKeyDraft: string;
-  geminiApiKeyDraft: string;
-  togetherApiKeyDraft: string;
-  cerebrasApiKeyDraft: string;
-  xaiApiKeyDraft: string;
   models: string[];
   modelsLoading: boolean;
   modelsError: string;
   modelRouteDiagnostics: ModelRouteDiagnostics | null;
   modelRouteLoading: boolean;
+  modelRouteTest: ModelRouteTestResult | null;
+  modelRouteTesting: boolean;
   onClose: () => void;
-  onLlmProviderChange: (provider: ProviderChoice) => void;
   onBuildModeDraftChange: (mode: BuildMode) => void;
   onModelDraftChange: (model: string) => void;
   onNineRouterBaseUrlChange: (url: string) => void;
   onApiKeyChange: (provider: ProviderChoice, key: string) => void;
+  onTestRoute: () => void;
   onLogout: () => void;
   onSave: () => void;
 }
@@ -43,30 +37,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   settingsOpen,
   identity,
   settings,
-  llmProviderDraft,
   buildModeDraft,
   modelDraft,
   nineRouterBaseUrlDraft,
   nineRouterApiKeyDraft,
-  openaiApiKeyDraft,
-  anthropicApiKeyDraft,
-  openrouterApiKeyDraft,
-  groqApiKeyDraft,
-  geminiApiKeyDraft,
-  togetherApiKeyDraft,
-  cerebrasApiKeyDraft,
-  xaiApiKeyDraft,
   models,
   modelsLoading,
   modelsError,
   modelRouteDiagnostics,
   modelRouteLoading,
+  modelRouteTest,
+  modelRouteTesting,
   onClose,
-  onLlmProviderChange,
   onBuildModeDraftChange,
   onModelDraftChange,
   onNineRouterBaseUrlChange,
   onApiKeyChange,
+  onTestRoute,
   onLogout,
   onSave,
 }) => {
@@ -76,6 +63,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const providerStatus = providerKey ? settings?.providers?.[providerKey] ?? null : null;
   const modelOptionsId = `model-options-${providerKey || "none"}`;
   const freeModels = providerStatus?.free_tier_models || [];
+  const normalizedEndpoint = nineRouterBaseUrlDraft.trim().replace(/\/$/, "");
+  const isLocalNineRouter = /^https?:\/\/(localhost|127\.0\.0\.1)(:20128)?\/v1$/i.test(normalizedEndpoint);
+  const managedFreeEnabled = Boolean(settings?.managed_nine_router_enabled || providerStatus?.managed_free || providerStatus?.source === "appora_managed_free");
 
   return (
     <div className="modalBackdrop" onClick={onClose}>
@@ -126,7 +116,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             {providerStatus ? (
               <div className="providerStatusLine compactStatusLine">
                 <span className={`providerStatusChip ${providerStatus.connected ? "connected" : "disconnected"}`}>
-                  {providerStatus.connected ? "Ready" : "Need key"}
+                  {managedFreeEnabled ? "Appora Free" : providerStatus.connected ? "Ready" : "Need key"}
                 </span>
                 {freeModels.length > 0 ? <span className="providerStatusChip connected">Free models</span> : null}
               </div>
@@ -142,8 +132,30 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               className="settingsInput"
               placeholder="http://127.0.0.1:20128/v1 or https://your-9router.app/v1"
             />
+            <div className="providerStatusLine compactStatusLine">
+              <button className="btn subtleBtn miniBtn" type="button" onClick={() => onNineRouterBaseUrlChange("http://127.0.0.1:20128/v1")}>
+                Use local 9Router
+              </button>
+              <a className="btn subtleBtn miniBtn" href="http://127.0.0.1:20128/dashboard" target="_blank" rel="noreferrer">
+                Open dashboard
+              </a>
+            </div>
             <label className="settingsLabel settingsLabelStacked">9Router API key</label>
-            <input type="password" value={nineRouterApiKeyDraft} onChange={(e) => onApiKeyChange("nine_router", e.target.value)} className="settingsInput" placeholder="Paste key from 9Router dashboard" />
+            <input type="password" value={nineRouterApiKeyDraft} onChange={(e) => onApiKeyChange("nine_router", e.target.value)} className="settingsInput" placeholder={managedFreeEnabled ? "Optional for premium/custom 9Router routes" : "Paste key from 9Router dashboard"} />
+            {managedFreeEnabled ? (
+              <div className="settingsSubtle compactHint successText">
+                Appora Free Router aktif. Model <code>free-forever</code> bisa langsung dipakai tanpa API key user.
+              </div>
+            ) : (
+              <div className="settingsSubtle compactHint">
+                Install/run 9Router: <code>npm install -g 9router</code> lalu <code>9router</code>. Endpoint default: <code>http://127.0.0.1:20128/v1</code>.
+              </div>
+            )}
+            {isLocalNineRouter ? (
+              <div className="settingsSubtle compactHint">
+                Local endpoint hanya works kalau backend Appora jalan di mesin yang sama. Kalau Appora backend hosted/Railway, pakai 9Router tunnel atau URL 9Router yang reachable dari backend.
+              </div>
+            ) : null}
             {settings?.supabase_enabled ? <div className="settingsSubtle compactHint">Saved per account for this hosted deployment.</div> : null}
             {settings?.supabase_warning ? <div className="settingsSubtle compactHint">{settings.supabase_warning}</div> : null}
             {settings?.supabase_missing_env?.length ? (
@@ -169,7 +181,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 ? "Loading…"
                 : modelsError
                   || (modelDraft === "free-forever"
-                    ? "free-forever memakai combo 9Router. Biaya Appora $0; quota/provider tetap ikut 9Router."
+                    ? managedFreeEnabled ? "free-forever memakai Appora Free Router. User bisa langsung ngoding sampai kuota harian habis." : "free-forever memakai combo 9Router. Biaya Appora $0; quota/provider tetap ikut 9Router."
                     : "")
                   || (freeModels.length > 0
                     ? `Free-friendly: ${freeModels.slice(0, 2).join(", ")}. Bisa pilih dari list atau ketik manual.`
@@ -196,11 +208,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             {modelRouteDiagnostics && !modelRouteDiagnostics.ok && modelRouteDiagnostics.skipped.length > 0 ? (
               <div className="settingsSubtle compactHint">{modelRouteDiagnostics.skipped.slice(0, 2).join(" · ")}</div>
             ) : null}
+            {modelRouteTest ? (
+              <div className={`settingsSubtle compactHint ${modelRouteTest.ok ? "successText" : "dangerText"}`}>
+                {modelRouteTest.summary}
+                {modelRouteTest.resolved_model ? ` Routed via ${modelRouteTest.resolved_model}.` : ""}
+              </div>
+            ) : null}
           </div>
 
           <div className="settingsActions settingsSectionWide">
             <button className="btn subtleBtn" onClick={onLogout}>Logout</button>
             <div className="spacer" />
+            <button className="btn subtleBtn" onClick={onTestRoute} disabled={modelRouteTesting}>
+              {modelRouteTesting ? "Testing..." : "Test route"}
+            </button>
             <button className="btn primary" onClick={onSave}>Save changes</button>
           </div>
         </div>

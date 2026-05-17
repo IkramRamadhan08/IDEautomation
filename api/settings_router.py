@@ -21,6 +21,7 @@ class ProviderStatus(BaseModel):
     auth_type: str | None = None
     project_id: str | None = None
     source: str | None = None
+    managed_free: bool = False
     recommended_model: str | None = None
     free_tier_models: list[str] = []
 
@@ -44,6 +45,7 @@ class SettingsInfo(BaseModel):
     agent_min_gap_seconds: float = 4.0
     agent_requests_per_minute: int = 8
     nine_router_api_key_set: bool = False
+    managed_nine_router_enabled: bool = False
     openai_requests_per_minute: int | None = None
     anthropic_requests_per_minute: int | None = None
     openrouter_requests_per_minute: int | None = None
@@ -108,12 +110,18 @@ class SettingsUpdateReq(BaseModel):
     xai_api_key: str | None = None
 
 
+class NineRouterTestReq(BaseModel):
+    base_url: str | None = None
+    api_key: str | None = None
+    model: str = "free-forever"
+
+
 def build_settings_router(*, session_state, env_set, env_unset, reload_settings):
     router = APIRouter(prefix="/api", tags=["settings"])
 
     @router.get("/settings", response_model=SettingsInfo)
     def get_settings():
-        from .oauth_runtime import auth_snapshot
+        from .oauth_runtime import auth_snapshot, managed_nine_router_available
 
         s = settings_mod.settings
         statuses = auth_snapshot(session_state().get("workspace"))
@@ -150,6 +158,7 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
             agent_min_gap_seconds=float(getattr(s, "agent_min_gap_seconds", 4.0) or 4.0),
             agent_requests_per_minute=int(getattr(s, "agent_requests_per_minute", 8) or 8),
             nine_router_api_key_set=getattr(s, "nine_router_api_key_set", False),
+            managed_nine_router_enabled=managed_nine_router_available(),
             openai_requests_per_minute=getattr(s, "openai_requests_per_minute", None),
             anthropic_requests_per_minute=getattr(s, "anthropic_requests_per_minute", None),
             openrouter_requests_per_minute=getattr(s, "openrouter_requests_per_minute", None),
@@ -207,17 +216,13 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
 
     @router.get("/model-routes/diagnose")
     def diagnose_model_route(provider: str = Query("nine_router"), model: str = Query("free-forever")):
-        from .agent_router import build_direct_model_attempt, build_route_plan, normalize_smart_route, parse_model_ref
-        from .oauth_runtime import auth_snapshot, get_provider_cooldown_remaining
+        from .agent_router import normalize_smart_route
+        from .oauth_runtime import auth_snapshot
 
-        selected_provider = (provider or "nine_router").strip().lower()
+        selected_provider = "nine_router"
         selected_model = (model or "free-forever").strip()
         snapshot = auth_snapshot(session_state().get("workspace"))
-        connected = {
-            name
-            for name, status in snapshot.items()
-            if isinstance(status, dict) and status.get("connected")
-        }
+        connected = bool((snapshot.get("nine_router") or {}).get("connected"))
         statuses = {
             name: {
                 "connected": bool(status.get("connected")) if isinstance(status, dict) else False,
@@ -227,66 +232,34 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
         }
         route = normalize_smart_route(selected_model)
         skipped: list[str] = []
-        attempts: list[dict] = []
-        metadata: dict[str, str] = {}
-        unsupported_reason: str | None = None
-
-        if route:
-            plan = build_route_plan(
-                route_name=route,
-                selected_provider=selected_provider,
-                connected_providers=connected,
-                cooldown_remaining=get_provider_cooldown_remaining,
-            )
-            metadata = dict(plan.metadata)
-            skipped = list(plan.skipped)
-            attempts = [
-                {
-                    "provider": attempt.provider,
-                    "model": attempt.model,
-                    "source": attempt.source,
-                    "tier": attempt.tier,
-                    "connected": attempt.provider in connected,
-                }
-                for attempt in plan.attempts
-            ]
-        else:
-            direct, unsupported_reason = build_direct_model_attempt(selected_model, selected_provider=selected_provider)
-            parsed = parse_model_ref(selected_model, default_provider=selected_provider)
-            target_provider = direct.provider if direct else parsed.provider
-            if direct:
-                attempts = [{
-                    "provider": direct.provider,
-                    "model": direct.model,
-                    "source": direct.source,
-                    "tier": direct.tier,
-                    "connected": direct.provider in connected,
-                }]
-                if direct.provider not in connected:
-                    skipped.append(f"{direct.provider}/{direct.model}: provider {direct.provider} belum connected")
-            elif unsupported_reason:
-                skipped.append(f"{selected_model}: {unsupported_reason}")
-            elif target_provider and target_provider not in connected:
-                skipped.append(f"{selected_model}: provider {target_provider} belum connected")
-
-        usable_attempts = [item for item in attempts if item.get("connected")]
+        attempts: list[dict] = [{
+            "provider": "nine_router",
+            "model": selected_model,
+            "source": route or "direct",
+            "tier": "9Router gateway",
+            "connected": connected,
+        }]
+        metadata: dict[str, str] = {
+            "description": "Appora passes the model/combo through to 9Router unchanged.",
+            "fallback": "Provider fallback, quota checks, and combo expansion happen inside 9Router.",
+        }
+        if not connected:
+            skipped.append("nine_router: endpoint/API key belum connected")
         if route:
             summary = (
-                f"Route {route} siap: {len(usable_attempts)} attempt connected, {len(skipped)} skipped."
-                if usable_attempts
-                else f"Route {route} belum siap. Connect OpenRouter, Gemini, Groq, atau Cerebras key dulu."
+                f"Combo {route} siap dikirim ke 9Router."
+                if connected
+                else f"Combo {route} butuh 9Router endpoint dan API key."
             )
-        elif unsupported_reason:
-            summary = unsupported_reason
         else:
             summary = (
-                f"Model {selected_model} siap dipakai."
-                if usable_attempts
-                else f"Model {selected_model} belum punya provider connected."
+                f"Model {selected_model} siap dikirim ke 9Router."
+                if connected
+                else f"Model {selected_model} butuh 9Router endpoint dan API key."
             )
 
         return {
-            "ok": bool(usable_attempts),
+            "ok": connected,
             "provider": selected_provider,
             "model": selected_model,
             "route": route or None,
@@ -296,6 +269,15 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
             "metadata": metadata,
             "provider_status": statuses,
         }
+
+    @router.post("/model-routes/test")
+    def test_model_route(req: NineRouterTestReq):
+        from .oauth_runtime import test_nine_router_route
+
+        try:
+            return test_nine_router_route(model=req.model, base_url=req.base_url, api_key=req.api_key)
+        except Exception as exc:
+            return {"ok": False, "status": 0, "summary": f"9Router test gagal: {exc}", "model": req.model}
 
     @router.put("/settings")
     def update_settings(req: SettingsUpdateReq, authorization: str | None = Header(default=None), x_voiceide_user: str | None = Header(default=None)):
@@ -310,17 +292,7 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
         )
         secrets_ready = has_supabase() and bool((os.getenv("VOICEIDE_SECRET_KEY") or "").strip())
         hosted_mode = secrets_ready and user.auth_source == "supabase"
-        secret_updates = [
-            req.nine_router_api_key,
-            req.openai_api_key,
-            req.anthropic_api_key,
-            req.openrouter_api_key,
-            req.groq_api_key,
-            req.gemini_api_key,
-            req.together_api_key,
-            req.cerebras_api_key,
-            req.xai_api_key,
-        ]
+        secret_updates = [req.nine_router_api_key]
         has_secret_updates = any(value is not None for value in secret_updates)
         storage_note = None
         if user.auth_source == "supabase" and has_secret_updates and not secrets_ready:
@@ -335,27 +307,11 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
             req.build_mode,
             req.nine_router_base_url,
             req.nine_router_model,
-            req.openai_model,
-            req.anthropic_model,
-            req.openrouter_model,
-            req.groq_model,
-            req.gemini_model,
-            req.together_model,
-            req.cerebras_model,
-            req.xai_model,
             req.friendly_free_tier_mode,
             req.agent_refinement_mode,
             req.agent_min_gap_seconds,
             req.agent_requests_per_minute,
             req.nine_router_api_key,
-            req.openai_requests_per_minute,
-            req.anthropic_requests_per_minute,
-            req.openrouter_requests_per_minute,
-            req.groq_requests_per_minute,
-            req.gemini_requests_per_minute,
-            req.together_requests_per_minute,
-            req.cerebras_requests_per_minute,
-            req.xai_requests_per_minute,
             *secret_updates,
         ]
         if is_serverless and not hosted_mode and any(value is not None for value in all_updates):
@@ -385,130 +341,45 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
                     else:
                         delete_provider_secret(profile_id=secret_profile_id, provider="nine_router_base_url")
                     changed.append("nine_router_base_url")
-                if req.openai_api_key is not None:
-                    key = req.openai_api_key.strip()
-                    if key:
-                        upsert_provider_secret(profile_id=secret_profile_id, provider="openai", api_key=key)
-                    else:
-                        delete_provider_secret(profile_id=secret_profile_id, provider="openai")
-                    changed.append("openai_api_key")
-                if req.anthropic_api_key is not None:
-                    key = req.anthropic_api_key.strip()
-                    if key:
-                        upsert_provider_secret(profile_id=secret_profile_id, provider="anthropic", api_key=key)
-                    else:
-                        delete_provider_secret(profile_id=secret_profile_id, provider="anthropic")
-                    changed.append("anthropic_api_key")
-                if req.openrouter_api_key is not None:
-                    key = req.openrouter_api_key.strip()
-                    if key:
-                        upsert_provider_secret(profile_id=secret_profile_id, provider="openrouter", api_key=key)
-                    else:
-                        delete_provider_secret(profile_id=secret_profile_id, provider="openrouter")
-                    changed.append("openrouter_api_key")
-                if req.groq_api_key is not None:
-                    key = req.groq_api_key.strip()
-                    if key:
-                        upsert_provider_secret(profile_id=secret_profile_id, provider="groq", api_key=key)
-                    else:
-                        delete_provider_secret(profile_id=secret_profile_id, provider="groq")
-                    changed.append("groq_api_key")
-                for provider, api_key in [
-                    ("gemini", req.gemini_api_key),
-                    ("together", req.together_api_key),
-                    ("cerebras", req.cerebras_api_key),
-                    ("xai", req.xai_api_key),
-                ]:
-                    if api_key is None:
-                        continue
-                    key = api_key.strip()
-                    if key:
-                        upsert_provider_secret(profile_id=secret_profile_id, provider=provider, api_key=key)
-                    else:
-                        delete_provider_secret(profile_id=secret_profile_id, provider=provider)
-                    changed.append(f"{provider}_api_key")
-
                 pref_profile_id = user.user_id
                 pref_req = UserPreferencesUpdateReq(
-                    llm_provider=("nine_router" if req.llm_provider in {"9router", "nine-router"} else req.llm_provider),
+                    llm_provider="nine_router",
                     build_mode=req.build_mode,
-                    openai_model=req.openai_model,
-                    anthropic_model=req.anthropic_model,
+                    openai_model=None,
+                    anthropic_model=None,
                     nine_router_model=req.nine_router_model,
-                    openrouter_model=req.openrouter_model,
-                    groq_model=req.groq_model,
-                    gemini_model=req.gemini_model,
-                    together_model=req.together_model,
-                    cerebras_model=req.cerebras_model,
-                    xai_model=req.xai_model,
+                    openrouter_model=None,
+                    groq_model=None,
+                    gemini_model=None,
+                    together_model=None,
+                    cerebras_model=None,
+                    xai_model=None,
                 )
                 upsert_user_preferences(profile_id=pref_profile_id, req=pref_req)
             except HTTPException:
                 raise
             except Exception as exc:
                 raise HTTPException(400, f"Hosted settings save failed: {exc}")
-            if req.llm_provider is not None:
-                changed.append("llm_provider")
+            changed.append("llm_provider")
             if req.build_mode is not None:
                 changed.append("build_mode")
             if req.nine_router_base_url is not None:
                 changed.append("nine_router_base_url")
             if req.nine_router_model is not None:
                 changed.append("nine_router_model")
-            if req.openai_model is not None:
-                changed.append("openai_model")
-            if req.anthropic_model is not None:
-                changed.append("anthropic_model")
-            if req.openrouter_model is not None:
-                changed.append("openrouter_model")
-            if req.groq_model is not None:
-                changed.append("groq_model")
-            for name, value in [
-                ("gemini_model", req.gemini_model),
-                ("together_model", req.together_model),
-                ("cerebras_model", req.cerebras_model),
-                ("xai_model", req.xai_model),
-            ]:
-                if value is not None:
-                    changed.append(name)
             return {"ok": True, "changed": changed, "storage": "hosted_preferences", "note": "Advanced local runtime knobs stay env-backed for now."}
 
         mapping: list[tuple[str, str | None]] = [
             ("DEFAULT_WORKSPACE", req.default_workspace if req.default_workspace is not None else None),
-            ("LLM_PROVIDER", ("nine_router" if req.llm_provider in {"9router", "nine-router"} else req.llm_provider)),
+            ("LLM_PROVIDER", "nine_router" if req.llm_provider is not None else None),
             ("BUILD_MODE", req.build_mode),
             ("NINE_ROUTER_BASE_URL", req.nine_router_base_url.strip().rstrip("/") if req.nine_router_base_url is not None else None),
             ("NINE_ROUTER_MODEL", req.nine_router_model),
-            ("OPENAI_MODEL", req.openai_model),
-            ("OPENAI_CODEX_MODEL", req.openai_model),
-            ("ANTHROPIC_MODEL", req.anthropic_model),
-            ("OPENROUTER_MODEL", req.openrouter_model),
-            ("GROQ_MODEL", req.groq_model),
-            ("GEMINI_MODEL", req.gemini_model),
-            ("TOGETHER_MODEL", req.together_model),
-            ("CEREBRAS_MODEL", req.cerebras_model),
-            ("XAI_MODEL", req.xai_model),
             ("FRIENDLY_FREE_TIER_MODE", None if req.friendly_free_tier_mode is None else ("true" if req.friendly_free_tier_mode else "false")),
             ("AGENT_REFINEMENT_MODE", req.agent_refinement_mode),
             ("AGENT_MIN_GAP_SECONDS", None if req.agent_min_gap_seconds is None else str(req.agent_min_gap_seconds)),
             ("AGENT_REQUESTS_PER_MINUTE", None if req.agent_requests_per_minute is None else str(req.agent_requests_per_minute)),
             ("NINE_ROUTER_API_KEY", req.nine_router_api_key),
-            ("OPENAI_REQUESTS_PER_MINUTE", None if req.openai_requests_per_minute is None else str(req.openai_requests_per_minute)),
-            ("ANTHROPIC_REQUESTS_PER_MINUTE", None if req.anthropic_requests_per_minute is None else str(req.anthropic_requests_per_minute)),
-            ("OPENROUTER_REQUESTS_PER_MINUTE", None if req.openrouter_requests_per_minute is None else str(req.openrouter_requests_per_minute)),
-            ("GROQ_REQUESTS_PER_MINUTE", None if req.groq_requests_per_minute is None else str(req.groq_requests_per_minute)),
-            ("GEMINI_REQUESTS_PER_MINUTE", None if req.gemini_requests_per_minute is None else str(req.gemini_requests_per_minute)),
-            ("TOGETHER_REQUESTS_PER_MINUTE", None if req.together_requests_per_minute is None else str(req.together_requests_per_minute)),
-            ("CEREBRAS_REQUESTS_PER_MINUTE", None if req.cerebras_requests_per_minute is None else str(req.cerebras_requests_per_minute)),
-            ("XAI_REQUESTS_PER_MINUTE", None if req.xai_requests_per_minute is None else str(req.xai_requests_per_minute)),
-            ("OPENAI_API_KEY", req.openai_api_key),
-            ("ANTHROPIC_API_KEY", req.anthropic_api_key),
-            ("OPENROUTER_API_KEY", req.openrouter_api_key),
-            ("GROQ_API_KEY", req.groq_api_key),
-            ("GEMINI_API_KEY", req.gemini_api_key),
-            ("TOGETHER_API_KEY", req.together_api_key),
-            ("CEREBRAS_API_KEY", req.cerebras_api_key),
-            ("XAI_API_KEY", req.xai_api_key),
         ]
 
         if not ENV_PATH.exists():

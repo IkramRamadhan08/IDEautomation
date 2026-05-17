@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path, PurePosixPath
 import re
 from typing import Any, Callable, Literal, TypedDict
@@ -88,6 +89,12 @@ INTERACTION SEPARATION:
 
 _FRONTEND_EXTS = {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".css", ".scss", ".sass", ".less", ".html"}
 _RELATIVE_IMPORT_RE = re.compile(r'(?:import\s+(?:[^\"\']+?\s+from\s+)?|export\s+[^\"\']*?\s+from\s+|import\()\s*["\']([^"\']+)["\']')
+_IMPORT_FROM_RE = re.compile(
+    r'\bimport\s+(?P<clause>[^;\n]+?)\s+from\s*["\'](?P<spec>[^"\']+)["\']'
+    r'|\bexport\s+\{(?P<exports>[^}]+)\}\s+from\s*["\'](?P<export_spec>[^"\']+)["\']'
+)
+_NAMED_EXPORT_DECL_RE = re.compile(r'\bexport\s+(?:declare\s+)?(?:async\s+)?(?:function|const|let|var|class|interface|type|enum)\s+([A-Za-z_$][\w$]*)')
+_EXPORT_LIST_RE = re.compile(r'\bexport\s+\{([^}]+)\}')
 _PROJECT_INSTRUCTION_FILES = (
     "AGENTS.md",
     "CLAUDE.md",
@@ -100,6 +107,11 @@ _PROJECT_INSTRUCTION_FILES = (
 _PROJECT_INSTRUCTION_MAX_CHARS = 18_000
 _IMPORT_CHECK_EXTS = {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}
 _IMPORT_RESOLUTION_EXTS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json", ".css", ".scss"]
+_NODE_BUILTIN_MODULES = {
+    "assert", "buffer", "child_process", "cluster", "crypto", "dns", "events", "fs", "http", "https",
+    "net", "os", "path", "perf_hooks", "process", "querystring", "readline", "stream", "string_decoder",
+    "timers", "tls", "tty", "url", "util", "vm", "worker_threads", "zlib",
+}
 
 
 @dataclass(frozen=True)
@@ -432,6 +444,223 @@ def _missing_relative_imports(ctx: PreparedAgentContext, changes: list[dict[str,
             if _resolve_import_candidate(rel, specifier, candidate_files):
                 continue
             missing.append(f"{rel} imports {specifier}")
+            if len(missing) >= 12:
+                return missing
+    return missing
+
+
+def _file_content_for_verifier(ctx: PreparedAgentContext, rel: str, change_map: dict[str, str]) -> str | None:
+    clean = str(rel or "").strip().lstrip("/")
+    if not clean:
+        return None
+    if clean in change_map:
+        return change_map[clean]
+    if clean in ctx.relevant_files:
+        return ctx.relevant_files[clean]
+    try:
+        path = ctx.project_dir / clean
+        if path.exists() and path.is_file():
+            return path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return None
+    return None
+
+
+def _parse_named_specifiers(value: str) -> list[str]:
+    names: list[str] = []
+    for raw in str(value or "").split(","):
+        item = raw.strip()
+        if not item:
+            continue
+        item = re.sub(r"^(type\s+)", "", item).strip()
+        imported = re.split(r"\s+as\s+", item, flags=re.IGNORECASE)[0].strip()
+        if imported and re.match(r"^[A-Za-z_$][\w$]*$", imported):
+            names.append(imported)
+    return names
+
+
+def _module_exports(content: str) -> tuple[bool, set[str]]:
+    text = str(content or "")
+    named: set[str] = set(_NAMED_EXPORT_DECL_RE.findall(text))
+    for block in _EXPORT_LIST_RE.findall(text):
+        for raw in block.split(","):
+            item = raw.strip()
+            if not item:
+                continue
+            exported = re.split(r"\s+as\s+", item, flags=re.IGNORECASE)[-1].strip()
+            if exported and re.match(r"^[A-Za-z_$][\w$]*$", exported):
+                named.add(exported)
+    return bool(re.search(r"\bexport\s+default\b", text)), named
+
+
+def _import_clause_requirements(clause: str) -> tuple[bool, list[str]]:
+    clean = str(clause or "").strip()
+    if clean.startswith("type "):
+        clean = clean[5:].strip()
+    needs_default = False
+    named: list[str] = []
+    named_match = re.search(r"\{([^}]+)\}", clean)
+    if named_match:
+        named = _parse_named_specifiers(named_match.group(1))
+    before_named = clean.split("{", 1)[0].strip().rstrip(",").strip()
+    if before_named and not before_named.startswith("*") and not before_named.startswith("{"):
+        needs_default = True
+    return needs_default, named
+
+
+def _relative_import_export_mismatches(ctx: PreparedAgentContext, changes: list[dict[str, Any]]) -> list[str]:
+    change_map = _change_map_by_local_path(changes)
+    if not change_map:
+        return []
+    candidate_files = set(ctx.all_files) | set(change_map.keys())
+    mismatches: list[str] = []
+    for rel, content in change_map.items():
+        if PurePosixPath(rel).suffix.lower() not in _IMPORT_CHECK_EXTS:
+            continue
+        for match in _IMPORT_FROM_RE.finditer(content[:180_000]):
+            specifier = match.group("spec") or match.group("export_spec") or ""
+            if not specifier.startswith("."):
+                continue
+            target_rel = _resolve_import_candidate(rel, specifier, candidate_files)
+            if not target_rel or PurePosixPath(target_rel).suffix.lower() not in _IMPORT_CHECK_EXTS:
+                continue
+            target_content = _file_content_for_verifier(ctx, target_rel, change_map)
+            if target_content is None:
+                continue
+            has_default, named_exports = _module_exports(target_content)
+            if match.group("exports") is not None:
+                required_named = _parse_named_specifiers(match.group("exports") or "")
+                missing_named = [name for name in required_named if name not in named_exports]
+                for name in missing_named:
+                    mismatches.append(f"{rel} re-exports {name} from {specifier}, but {target_rel} does not export it")
+            else:
+                needs_default, required_named = _import_clause_requirements(match.group("clause") or "")
+                if needs_default and not has_default:
+                    mismatches.append(f"{rel} imports default from {specifier}, but {target_rel} has no default export")
+                missing_named = [name for name in required_named if name not in named_exports]
+                for name in missing_named:
+                    mismatches.append(f"{rel} imports {name} from {specifier}, but {target_rel} does not export it")
+            if len(mismatches) >= 12:
+                return mismatches
+    return mismatches
+
+
+def _reverse_relative_import_export_mismatches(ctx: PreparedAgentContext, changes: list[dict[str, Any]]) -> list[str]:
+    change_map = _change_map_by_local_path(changes)
+    if not change_map:
+        return []
+    changed_paths = set(change_map.keys())
+    candidate_files = set(ctx.all_files) | changed_paths
+    source_files = [
+        rel for rel in ctx.all_files[:700]
+        if rel not in changed_paths and PurePosixPath(rel).suffix.lower() in _IMPORT_CHECK_EXTS
+    ]
+    mismatches: list[str] = []
+
+    for source_rel in source_files:
+        source_content = _file_content_for_verifier(ctx, source_rel, change_map)
+        if not source_content:
+            continue
+        for match in _IMPORT_FROM_RE.finditer(source_content[:180_000]):
+            specifier = match.group("spec") or match.group("export_spec") or ""
+            if not specifier.startswith("."):
+                continue
+            target_rel = _resolve_import_candidate(source_rel, specifier, candidate_files)
+            if target_rel not in changed_paths:
+                continue
+            has_default, named_exports = _module_exports(change_map[target_rel])
+            if match.group("exports") is not None:
+                required_named = _parse_named_specifiers(match.group("exports") or "")
+                missing_named = [name for name in required_named if name not in named_exports]
+                for name in missing_named:
+                    mismatches.append(f"{source_rel} re-exports {name} from {specifier}, but changed {target_rel} no longer exports it")
+            else:
+                needs_default, required_named = _import_clause_requirements(match.group("clause") or "")
+                if needs_default and not has_default:
+                    mismatches.append(f"{source_rel} imports default from {specifier}, but changed {target_rel} no longer has default export")
+                missing_named = [name for name in required_named if name not in named_exports]
+                for name in missing_named:
+                    mismatches.append(f"{source_rel} imports {name} from {specifier}, but changed {target_rel} no longer exports it")
+            if len(mismatches) >= 12:
+                return mismatches
+    return mismatches
+
+
+def _package_name_from_import(specifier: str) -> str | None:
+    spec = str(specifier or "").strip()
+    if (
+        not spec
+        or spec.startswith((".", "/", "#", "@/"))
+        or spec.startswith(("node:", "virtual:"))
+        or spec in _NODE_BUILTIN_MODULES
+    ):
+        return None
+    if spec.startswith("@"):
+        parts = spec.split("/")
+        return "/".join(parts[:2]) if len(parts) >= 2 else None
+    return spec.split("/", 1)[0]
+
+
+def _declared_package_names(ctx: PreparedAgentContext) -> set[str]:
+    package_text = ctx.relevant_files.get("package.json")
+    if package_text is None:
+        package_path = ctx.project_dir / "package.json"
+        if package_path.exists() and package_path.is_file():
+            try:
+                package_text = package_path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                package_text = None
+    if not package_text:
+        return set()
+    try:
+        package_json = json.loads(package_text)
+    except Exception:
+        return set()
+    declared: set[str] = set()
+    for key in ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies"):
+        deps = package_json.get(key)
+        if isinstance(deps, dict):
+            declared.update(str(name) for name in deps.keys())
+    return declared
+
+
+def _installed_packages_from_actions(actions: list[dict[str, Any]]) -> set[str]:
+    installed: set[str] = set()
+    for item in actions:
+        if str(item.get("type") or "").lower() != "shell":
+            continue
+        command = str(item.get("command") or "")
+        if not re.search(r"\b(npm|pnpm|yarn|bun)\s+(?:add|install|i)\b", command):
+            continue
+        for token in re.split(r"\s+", command):
+            clean = token.strip().strip("'\"")
+            if not clean or clean.startswith("-") or clean in {"npm", "pnpm", "yarn", "bun", "add", "install", "i"}:
+                continue
+            if clean.startswith(("./", "../")) or "=" in clean:
+                continue
+            package_name = _package_name_from_import(clean)
+            if package_name:
+                installed.add(package_name)
+    return installed
+
+
+def _missing_external_dependencies(ctx: PreparedAgentContext, changes: list[dict[str, Any]], actions: list[dict[str, Any]]) -> list[str]:
+    declared = _declared_package_names(ctx)
+    declared.update(_installed_packages_from_actions(actions))
+    if not declared and not changes:
+        return []
+
+    missing: list[str] = []
+    seen: set[str] = set()
+    for rel, content in _change_map_by_local_path(changes).items():
+        if PurePosixPath(rel).suffix.lower() not in _IMPORT_CHECK_EXTS:
+            continue
+        for specifier in _RELATIVE_IMPORT_RE.findall(content[:180_000]):
+            package_name = _package_name_from_import(specifier)
+            if not package_name or package_name in declared or package_name in seen:
+                continue
+            seen.add(package_name)
+            missing.append(f"{rel} imports undeclared package {package_name}")
             if len(missing) >= 12:
                 return missing
     return missing
@@ -1423,6 +1652,31 @@ def _verify_node(state: AgentRuntimeState) -> AgentRuntimeState:
         "Changed relative imports resolve against the project tree." if not missing_imports else f"Missing relative imports: {', '.join(missing_imports[:6])}",
     )
 
+    export_mismatches = [
+        *_relative_import_export_mismatches(ctx, changes),
+        *_reverse_relative_import_export_mismatches(ctx, changes),
+    ]
+    add(
+        "relative-import-exports-match",
+        not export_mismatches,
+        (
+            "Changed relative imports match exported symbols in target files."
+            if not export_mismatches
+            else f"Import/export mismatches: {', '.join(export_mismatches[:6])}"
+        ),
+    )
+
+    missing_dependencies = _missing_external_dependencies(ctx, changes, actions)
+    add(
+        "external-dependencies-declared",
+        not missing_dependencies,
+        (
+            "Changed external imports are declared or installed by shell actions."
+            if not missing_dependencies
+            else f"Undeclared external imports: {', '.join(missing_dependencies[:6])}"
+        ),
+    )
+
     rewrite_warnings = _large_rewrite_warnings(ctx, changes, state["input"])
     add(
         "large-rewrite-review",
@@ -1534,6 +1788,7 @@ def _finalize_node(state: AgentRuntimeState) -> AgentRuntimeState:
 
     trace = {
         "passes": passes,
+        "context_files": sorted({*ctx.relevant_files.keys(), *ctx.open_files, ctx.active_rel} - {""})[:80],
         "memory_hits": list(ctx.trace_memory_hits),
         "skills": list(ctx.trace_skill_hits),
         "mcp_servers": list(ctx.trace_mcp_servers),
@@ -1542,6 +1797,7 @@ def _finalize_node(state: AgentRuntimeState) -> AgentRuntimeState:
         "plan": list(ctx.trace_plan),
         "verification": list(ctx.trace_verification),
         "warnings": list(ctx.trace_warnings),
+        "final_confidence": "high" if ctx.trace_verification and all(item.get("ok") for item in ctx.trace_verification) else "medium",
     }
 
     return {

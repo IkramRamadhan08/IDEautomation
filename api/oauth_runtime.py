@@ -47,12 +47,23 @@ GROQ_LOGIN_HINT = "Masukkan Groq API key di Settings. Groq cocok buat user yang 
 GEMINI_LOGIN_HINT = "Masukkan Gemini API key dari Google AI Studio. Gemini cocok buat user Google yang mau mulai dari free quota/rate limit."
 TOGETHER_LOGIN_HINT = "Masukkan Together AI API key. Together cocok buat akses banyak model open-source lewat API OpenAI-compatible."
 CEREBRAS_LOGIN_HINT = "Masukkan Cerebras API key. Cerebras cocok buat model open-source cepat dengan free/dev tier limit."
-NINE_ROUTER_LOGIN_HINT = "Masukkan 9Router API key dan endpoint 9Router. Appora akan memakai satu OpenAI-compatible router; semua provider/model diatur dari 9Router."
+NINE_ROUTER_LOGIN_HINT = "Jalankan 9Router, buka dashboard 9Router, lalu paste endpoint /v1 dan API key. Default lokal: http://127.0.0.1:20128/v1. Kalau Appora backend hosted/Railway, endpoint harus reachable dari backend."
 XAI_LOGIN_HINT = "Masukkan xAI API key. xAI cocok buat user yang ingin model Grok, biasanya paid/API-credit based."
 
 CURRENT_PROFILE_ID: ContextVar[str | None] = ContextVar("voiceide_profile_id", default=None)
 _PROVIDER_COOLDOWN_LOCK = threading.Lock()
 _PROVIDER_COOLDOWN_UNTIL: dict[str, float] = {}
+_MANAGED_QUOTA_LOCK = threading.Lock()
+_MANAGED_QUOTA_USAGE: dict[str, dict[str, int]] = {}
+_MANAGED_FREE_MODELS = {"free-forever", "always-on", "openclaw-free", "fast-free"}
+_MANAGED_FREE_MODEL_PREFIXES = (
+    "kr/",
+    "oc/",
+    "vertex/",
+    "gemini/",
+    "openrouter/openrouter/free",
+    "openrouter/free",
+)
 
 HOSTED_PROVIDER_CATALOG: dict[str, dict[str, Any]] = {
     NINE_ROUTER_PROVIDER: {
@@ -61,12 +72,19 @@ HOSTED_PROVIDER_CATALOG: dict[str, dict[str, Any]] = {
         "recommended_model": "free-forever",
         "free_tier_models": [
             "free-forever",
+            "always-on",
+            "openclaw-free",
             "kr/claude-sonnet-4.5",
             "kr/glm-5",
             "oc/<auto>",
+            "vertex/gemini-3-flash-preview",
             "openrouter/openrouter/free",
         ],
         "paid_models": [
+            "maximize-claude",
+            "coding-auto",
+            "cheap-auto",
+            "quality-auto",
             "cx/gpt-5.5",
             "cx/gpt-5.4",
             "cc/claude-opus-4-7",
@@ -204,6 +222,93 @@ def _provider_key_from_env_or_secret(provider: str) -> str:
     return str(_provider_key_info(provider).get("key") or "")
 
 
+def _managed_nine_router_base_url() -> str:
+    return (
+        os.getenv("APPORA_MANAGED_9ROUTER_BASE_URL")
+        or os.getenv("APPORA_FREE_9ROUTER_BASE_URL")
+        or ""
+    ).strip().rstrip("/")
+
+
+def _managed_nine_router_api_key() -> str:
+    return (
+        os.getenv("APPORA_MANAGED_9ROUTER_API_KEY")
+        or os.getenv("APPORA_FREE_9ROUTER_API_KEY")
+        or ""
+    ).strip()
+
+
+def _managed_free_model() -> str:
+    return (os.getenv("APPORA_MANAGED_FREE_MODEL") or os.getenv("APPORA_FREE_MODEL") or "free-forever").strip() or "free-forever"
+
+
+def managed_nine_router_available() -> bool:
+    return bool(_managed_nine_router_base_url() and _managed_nine_router_api_key())
+
+
+def _is_managed_free_model(model: str) -> bool:
+    clean = (model or "").strip()
+    return (
+        clean in _MANAGED_FREE_MODELS
+        or clean == _managed_free_model()
+        or any(clean.startswith(prefix) for prefix in _MANAGED_FREE_MODEL_PREFIXES)
+    )
+
+
+def _resolve_managed_free_route_model(model: str, source: str) -> str:
+    clean = (model or "").strip() or "free-forever"
+    if source != "appora_managed_free":
+        return clean
+    resolved = _managed_free_model()
+    if clean in _MANAGED_FREE_MODELS and resolved and resolved != clean:
+        return resolved
+    return clean
+
+
+def _managed_quota_limit() -> int:
+    raw = (os.getenv("APPORA_FREE_DAILY_MESSAGES") or os.getenv("APPORA_FREE_DAILY_AGENT_RUNS") or "30").strip()
+    try:
+        value = int(raw)
+    except Exception:
+        value = 30
+    return max(1, min(value, 500))
+
+
+def _managed_quota_subject() -> str:
+    return CURRENT_PROFILE_ID.get() or "anonymous"
+
+
+def _managed_quota_key() -> str:
+    return time.strftime("%Y-%m-%d", time.gmtime())
+
+
+def _consume_managed_quota() -> tuple[bool, int, int]:
+    limit = _managed_quota_limit()
+    subject = _managed_quota_subject()
+    day = _managed_quota_key()
+    key = f"{day}:{subject}"
+    with _MANAGED_QUOTA_LOCK:
+        usage = _MANAGED_QUOTA_USAGE.setdefault(key, {"count": 0})
+        if usage["count"] >= limit:
+            return False, usage["count"], limit
+        usage["count"] += 1
+        return True, usage["count"], limit
+
+
+def _nine_router_credentials_for_model(model: str, *, api_key: str | None = None, base_url: str | None = None) -> dict[str, Any]:
+    user_key = (api_key or _provider_key_from_env_or_secret(NINE_ROUTER_PROVIDER)).strip()
+    user_base = (base_url or _nine_router_base_url()).strip().rstrip("/")
+    if user_key:
+        return {"api_key": user_key, "base_url": user_base, "source": "user"}
+    if _is_managed_free_model(model) and managed_nine_router_available():
+        return {
+            "api_key": _managed_nine_router_api_key(),
+            "base_url": _managed_nine_router_base_url(),
+            "source": "appora_managed_free",
+        }
+    return {"api_key": "", "base_url": user_base, "source": None}
+
+
 def _env_key_for_provider(provider: str) -> str:
     env_map = {
         NINE_ROUTER_PROVIDER: "NINE_ROUTER_API_KEY",
@@ -251,14 +356,22 @@ def _provider_status(provider: str, login_hint: str) -> dict[str, Any]:
     catalog = HOSTED_PROVIDER_CATALOG[provider]
     source = str(key_info.get("source") or "") or None
     connected = bool(key_info.get("key"))
+    auth_type = "byok" if connected or source == "hosted_secret_unreadable" else None
+    if provider == NINE_ROUTER_PROVIDER and not connected and managed_nine_router_available():
+        connected = True
+        source = "appora_managed_free"
+        auth_type = "managed_free"
     hint = catalog["hint"] if connected else login_hint
+    if source == "appora_managed_free":
+        hint = "Appora Free Router aktif. free-forever bisa langsung dipakai; model premium butuh 9Router pribadi atau paket premium."
     if source == "hosted_secret_unreadable":
         hint = "API key tersimpan di akun ini, tapi backend tidak bisa decrypt. Re-save key di Settings atau cek VOICEIDE_SECRET_KEY deploy."
     return {
         "provider": provider,
         "connected": connected,
-        "auth_type": "byok" if connected or source == "hosted_secret_unreadable" else None,
+        "auth_type": auth_type,
         "source": source,
+        "managed_free": source == "appora_managed_free",
         "hint": hint,
         "recommended_model": catalog["recommended_model"],
         "free_tier_models": catalog["free_tier_models"],
@@ -271,7 +384,10 @@ def openai_status() -> dict[str, Any]:
 
 def nine_router_status() -> dict[str, Any]:
     status = _provider_status(NINE_ROUTER_PROVIDER, NINE_ROUTER_LOGIN_HINT)
-    status["base_url"] = _nine_router_base_url()
+    if status.get("source") == "appora_managed_free":
+        status["base_url"] = _managed_nine_router_base_url()
+    else:
+        status["base_url"] = _nine_router_base_url()
     return status
 
 
@@ -312,7 +428,7 @@ def require_provider_connected(provider: str, workspace: Path | None = None) -> 
         raise RuntimeError(f"Unsupported provider: {provider}")
     if not status.get("connected"):
         if provider == NINE_ROUTER_PROVIDER:
-            raise RuntimeError("9Router belum connected. Isi NINE_ROUTER_API_KEY dan NINE_ROUTER_BASE_URL di Settings.")
+            raise RuntimeError("9Router belum connected. free-forever butuh Appora managed router aktif, atau isi endpoint/API key 9Router pribadi di Settings.")
         if provider == OPENAI_PROVIDER:
             raise RuntimeError("OpenAI belum connected. Isi OPENAI_API_KEY (BYOK) di Settings.")
         if provider == ANTHROPIC_PROVIDER:
@@ -460,9 +576,9 @@ def _nine_router_base_url() -> str:
         os.getenv("NINE_ROUTER_BASE_URL")
         or os.getenv("APPORA_9ROUTER_BASE_URL")
         or getattr(settings_mod.settings, "nine_router_base_url", "")
-        or "http://localhost:20128/v1"
+        or "http://127.0.0.1:20128/v1"
     )
-    return str(value).strip().rstrip("/") or "http://localhost:20128/v1"
+    return str(value).strip().rstrip("/") or "http://127.0.0.1:20128/v1"
 
 
 def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str], *, provider: str | None = None) -> tuple[int, dict[str, Any] | None, str]:
@@ -479,7 +595,11 @@ def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str], *, pr
         try:
             with urlopen(req, timeout=180) as resp:
                 raw = resp.read().decode("utf-8", "replace")
-                return resp.status, json.loads(raw) if raw else {}, raw
+                try:
+                    data = json.loads(raw) if raw else {}
+                except Exception:
+                    data = {"error": {"message": raw[:500] or "Provider returned a non-JSON response."}}
+                return resp.status, data, raw
         except HTTPError as exc:
             raw = exc.read().decode("utf-8", "replace")
             try:
@@ -527,10 +647,13 @@ def _friendly_error(provider: str, status: int, data: dict[str, Any] | None, fal
 
 _NINE_ROUTER_MODELS = [
     "free-forever",
-    "fast-free",
+    "always-on",
+    "maximize-claude",
+    "openclaw-free",
     "coding-auto",
     "cheap-auto",
     "quality-auto",
+    "fast-free",
     "kr/claude-sonnet-4.5",
     "kr/claude-haiku-4.5",
     "kr/deepseek-3.2",
@@ -637,6 +760,12 @@ _NINE_ROUTER_MODELS = [
     "deepseek/deepseek-v4-pro",
     "deepseek/deepseek-v4-flash",
     "deepseek/deepseek-chat",
+    "glm/glm-5.1",
+    "glm/glm-5",
+    "minimax/minimax-m2.7",
+    "minimax/minimax-m2.5",
+    "kimi/kimi-k2.6",
+    "kimi/kimi-k2.5",
     "commandcode/deepseek/deepseek-v4-pro",
     "commandcode/moonshotai/Kimi-K2.6",
     "commandcode/zai-org/GLM-5.1",
@@ -807,19 +936,31 @@ def provider_catalog() -> dict[str, dict[str, Any]]:
 
 
 def nine_router_generate_json(*, model: str, system: str, user: str) -> dict[str, Any]:
-    api_key = _provider_key_from_env_or_secret(NINE_ROUTER_PROVIDER)
-    if not api_key:
+    credentials = _nine_router_credentials_for_model(model)
+    api_key = str(credentials.get("api_key") or "")
+    base_url = str(credentials.get("base_url") or "").rstrip("/")
+    source = str(credentials.get("source") or "")
+    if not api_key or not base_url:
         return {"text": "", "error_message": NINE_ROUTER_LOGIN_HINT}
+    if source == "appora_managed_free":
+        allowed, used, limit = _consume_managed_quota()
+        if not allowed:
+            return {
+                "text": "",
+                "error_message": f"Appora Free Router quota hari ini habis ({used}/{limit}). Pakai 9Router pribadi di Settings atau coba lagi besok.",
+            }
+    route_model = _resolve_managed_free_route_model(model, source)
     status, data, _raw = _post_json(
-        _nine_router_base_url() + "/chat/completions",
+        base_url + "/chat/completions",
         {
-            "model": model,
+            "model": route_model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
             "max_tokens": 2800 if _friendly_free_tier_mode() else 4000,
             "temperature": 0.2,
+            "stream": False,
         },
         {"Authorization": f"Bearer {api_key}"},
         provider=NINE_ROUTER_PROVIDER,
@@ -830,6 +971,48 @@ def nine_router_generate_json(*, model: str, system: str, user: str) -> dict[str
     first = choices[0] if isinstance(choices, list) and choices else {}
     message = first.get("message") if isinstance(first, dict) else {}
     return {"text": str((message or {}).get("content") or "")}
+
+
+def test_nine_router_route(*, model: str, base_url: str | None = None, api_key: str | None = None) -> dict[str, Any]:
+    selected_model = (model or "free-forever").strip() or "free-forever"
+    credentials = _nine_router_credentials_for_model(selected_model, api_key=api_key, base_url=base_url)
+    key = str(credentials.get("api_key") or "").strip()
+    endpoint = str(credentials.get("base_url") or "").strip().rstrip("/")
+    source = str(credentials.get("source") or "")
+    if not key or not endpoint:
+        return {"ok": False, "status": 0, "summary": NINE_ROUTER_LOGIN_HINT, "model": model}
+    route_model = _resolve_managed_free_route_model(selected_model, source)
+    status, data, _raw = _post_json(
+        endpoint + "/chat/completions",
+        {
+            "model": route_model,
+            "messages": [{"role": "user", "content": "Reply with OK."}],
+            "max_tokens": 8,
+            "temperature": 0,
+            "stream": False,
+        },
+        {"Authorization": f"Bearer {key}"},
+        provider=NINE_ROUTER_PROVIDER,
+    )
+    if status < 200 or status >= 300:
+        return {
+            "ok": False,
+            "status": status,
+            "summary": _friendly_error(NINE_ROUTER_PROVIDER, status, data, f"9Router error {status}"),
+            "model": model,
+        }
+    choices = (data or {}).get("choices") if isinstance(data, dict) else []
+    first = choices[0] if isinstance(choices, list) and choices else {}
+    message = first.get("message") if isinstance(first, dict) else {}
+    text = str((message or {}).get("content") or "").strip()
+    return {
+        "ok": True,
+        "status": status,
+        "summary": "Connected. Appora Free Router accepted the selected model/combo." if source == "appora_managed_free" else "Connected. 9Router accepted the selected model/combo.",
+        "model": model,
+        "resolved_model": route_model if route_model != selected_model else None,
+        "response": text[:200],
+    }
 
 
 def openai_generate_json(*, model: str, system: str, user: str) -> dict[str, Any]:

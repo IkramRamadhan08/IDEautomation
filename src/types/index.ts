@@ -26,6 +26,8 @@ export type AgentAuditSnapshot = {
   id: string;
   label: string;
   passes: number;
+  contextFiles?: string[];
+  finalConfidence?: string;
   memoryHits: Array<{
     kind: string;
     source: string;
@@ -64,6 +66,33 @@ export type AgentAuditSnapshot = {
     ok: boolean;
     detail: string;
   }>;
+  validationRuns?: Array<{
+    label: string;
+    ok: boolean;
+    ran: number;
+    failed: number;
+    commands: string[];
+  }>;
+  previewAudits?: Array<{
+    label: string;
+    ok: boolean;
+    auditMode: string;
+    blocking: number;
+    warnings: number;
+    summary: string;
+  }>;
+  repairPasses?: Array<{
+    label: string;
+    producedChanges: number;
+    producedActions: number;
+    verifierFailures: number;
+  }>;
+  commandPolicyDecisions?: Array<{
+    command: string;
+    riskLevel: string;
+    ok: boolean;
+    reason: string;
+  }>;
 };
 export type WorkspaceInfo = { path: string | null; default: string | null };
 export type WorkspaceProvisionInfo = { ok: boolean; path: string; created: boolean; managed: boolean };
@@ -99,6 +128,7 @@ export type ProviderStatus = {
   auth_type?: string | null;
   project_id?: string | null;
   source?: string | null;
+  managed_free?: boolean;
   recommended_model?: string | null;
   free_tier_models?: string[];
 };
@@ -120,6 +150,7 @@ export type SettingsInfo = {
   agent_refinement_mode: "auto" | "off" | "always";
   agent_min_gap_seconds: number;
   nine_router_api_key_set: boolean;
+  managed_nine_router_enabled: boolean;
   openai_api_key_set: boolean;
   anthropic_api_key_set: boolean;
   openrouter_api_key_set: boolean;
@@ -190,6 +221,15 @@ export type ModelRouteDiagnostics = {
   }>;
   skipped: string[];
   metadata: Record<string, string>;
+};
+
+export type ModelRouteTestResult = {
+  ok: boolean;
+  status: number;
+  summary: string;
+  model: string;
+  resolved_model?: string | null;
+  response?: string;
 };
 export type UserPreferences = {
   profile_id: string;

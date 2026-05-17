@@ -2,19 +2,23 @@ import type { Dispatch, SetStateAction } from "react";
 import {
   applyMany,
   auditPreview,
+  checkCommandPolicy,
   fetchAgentCapabilities,
+  preflightApplyMany,
   readFile,
   streamAgent,
   terminalRun,
   validateProject,
   type AgentIntent,
   type AgentRunTrace,
+  type ApplyManyOp,
   type PreviewAuditResult,
   type ProjectValidationRun,
+  type CommandPolicyDecision,
   type TerminalRunResult,
 } from "../api";
 import type { AgentAction, AgentAuditSnapshot, AgentChange, AgentLiveItem, BuildMode, FileBuffer } from "../types";
-import { buildRepairPrompt, buildVerifierRepairPrompt, getAgentRunPlan } from "./runtime";
+import { buildApplyConflictRepairPrompt, buildRepairPrompt, buildVerifierRepairPrompt, getAgentRunPlan } from "./runtime";
 
 type Setter<T> = Dispatch<SetStateAction<T>>;
 
@@ -31,6 +35,38 @@ type ShellActionRun = TerminalRunResult & {
   command: string;
   error?: string;
 };
+
+type RunEvidence = {
+  validationRuns: AgentAuditSnapshot["validationRuns"];
+  previewAudits: AgentAuditSnapshot["previewAudits"];
+  repairPasses: AgentAuditSnapshot["repairPasses"];
+  commandPolicyDecisions: AgentAuditSnapshot["commandPolicyDecisions"];
+};
+
+type ApplyPreflightConflict = {
+  path: string;
+  reason: string;
+  detail: string;
+};
+
+type ApplyPreflightWarning = {
+  path: string;
+  reason: string;
+  detail: string;
+};
+
+class ApplyPreflightError extends Error {
+  conflicts: ApplyPreflightConflict[];
+  warnings: ApplyPreflightWarning[];
+
+  constructor(conflicts: ApplyPreflightConflict[], warnings: ApplyPreflightWarning[]) {
+    const conflictText = formatApplyPreflightConflicts(conflicts);
+    super(`Apply preflight failed: ${conflictText || "file conflict"}`);
+    this.name = "ApplyPreflightError";
+    this.conflicts = conflicts;
+    this.warnings = warnings;
+  }
+}
 
 type WorkflowArgs = {
   agentInput: string;
@@ -143,7 +179,32 @@ function formatShellActionReport(results: ShellActionRun[], maxChars = 8000) {
   return report.length > maxChars ? `${report.slice(0, maxChars)}\n…[truncated]` : report;
 }
 
+function formatApplyPreflightConflicts(conflicts: ApplyPreflightConflict[], maxItems = 8) {
+  return conflicts
+    .slice(0, maxItems)
+    .map((item) => item.detail || `${item.path}: ${item.reason}`)
+    .join("; ");
+}
+
+function formatApplyPreflightReport(error: ApplyPreflightError, maxChars = 4000) {
+  const conflicts = error.conflicts.length > 0
+    ? `conflicts:\n- ${error.conflicts.map((item) => `${item.path}: ${item.reason} - ${item.detail}`).join("\n- ")}`
+    : "conflicts: none";
+  const warnings = error.warnings.length > 0
+    ? `warnings:\n- ${error.warnings.map((item) => `${item.path}: ${item.reason} - ${item.detail}`).join("\n- ")}`
+    : null;
+  const report = [conflicts, warnings].filter(Boolean).join("\n\n");
+  return report.length > maxChars ? `${report.slice(0, maxChars)}\n…[truncated]` : report;
+}
+
+function isApplyPreflightError(error: unknown): error is ApplyPreflightError {
+  return error instanceof ApplyPreflightError;
+}
+
 function formatPreviewAuditReport(audit: PreviewAuditResult, maxChars = 4000) {
+  const issueDetails = audit.issue_details && audit.issue_details.length > 0
+    ? `issue_details:\n- ${audit.issue_details.map((issue) => `${issue.severity}: ${issue.category} - ${issue.detail}${issue.suggested_fix ? ` (fix: ${issue.suggested_fix})` : ""}`).join("\n- ")}`
+    : null;
   const qualitySection = audit.quality_checks && audit.quality_checks.length > 0
     ? `quality_checks:\n- ${audit.quality_checks.map((check) => `${check.ok ? "ok" : "warn"}: ${check.label} - ${check.detail}`).join("\n- ")}`
     : null;
@@ -171,6 +232,7 @@ function formatPreviewAuditReport(audit: PreviewAuditResult, maxChars = 4000) {
     audit.page_errors.length > 0 ? `page_errors:\n- ${audit.page_errors.join("\n- ")}` : null,
     audit.console_errors.length > 0 ? `console_errors:\n- ${audit.console_errors.join("\n- ")}` : null,
     audit.issues.length > 0 ? `issues:\n- ${audit.issues.join("\n- ")}` : "issues: none",
+    issueDetails,
   ].filter(Boolean);
 
   if (audit.excerpt.trim()) {
@@ -181,11 +243,25 @@ function formatPreviewAuditReport(audit: PreviewAuditResult, maxChars = 4000) {
   return report.length > maxChars ? `${report.slice(0, maxChars)}\n…[truncated]` : report;
 }
 
-function toAuditSnapshot(label: string, trace: AgentRunTrace, makeId: () => string): AgentAuditSnapshot {
+function previewBlockingIssueCount(audit: PreviewAuditResult | null) {
+  if (!audit) return 0;
+  const details = audit.issue_details || [];
+  if (details.length === 0) return audit.ok ? 0 : audit.issues.length;
+  return details.filter((issue) => issue.severity === "blocking").length;
+}
+
+function previewWarningIssueCount(audit: PreviewAuditResult | null) {
+  if (!audit) return 0;
+  return (audit.issue_details || []).filter((issue) => issue.severity === "warning").length;
+}
+
+function toAuditSnapshot(label: string, trace: AgentRunTrace, makeId: () => string, evidence?: RunEvidence): AgentAuditSnapshot {
   return {
     id: makeId(),
     label,
     passes: trace.passes,
+    contextFiles: trace.context_files || [],
+    finalConfidence: trace.final_confidence,
     memoryHits: trace.memory_hits.map((hit) => ({
       kind: hit.kind,
       source: hit.source,
@@ -215,6 +291,10 @@ function toAuditSnapshot(label: string, trace: AgentRunTrace, makeId: () => stri
     })),
     plan: trace.plan || [],
     verification: trace.verification || [],
+    validationRuns: evidence?.validationRuns || [],
+    previewAudits: evidence?.previewAudits || [],
+    repairPasses: evidence?.repairPasses || [],
+    commandPolicyDecisions: evidence?.commandPolicyDecisions || [],
   };
 }
 
@@ -338,6 +418,12 @@ export async function runAgentWorkflow({
   let workingBuffers = buffers;
   let currentPreviewUrl = previewUrl || "";
   let combinedActions: AgentAction[] = [];
+  const evidence: RunEvidence = {
+    validationRuns: [],
+    previewAudits: [],
+    repairPasses: [],
+    commandPolicyDecisions: [],
+  };
   let finalStatus = "Agent task finished";
   let finalToast: WorkflowToast = {
     kind: "success",
@@ -363,6 +449,16 @@ export async function runAgentWorkflow({
   const appendLogSection = (label: string, content: string) => {
     if (!content.trim()) return;
     setAgentLog((prev) => `${prev}\n\n[${label}]\n${content}`);
+  };
+
+  const refreshAuditTrailEvidence = () => {
+    setAgentAuditTrail((prev) => prev.map((snapshot) => ({
+      ...snapshot,
+      validationRuns: evidence.validationRuns,
+      previewAudits: evidence.previewAudits,
+      repairPasses: evidence.repairPasses,
+      commandPolicyDecisions: evidence.commandPolicyDecisions,
+    })));
   };
 
   const runAgentPass = async (prompt: string, passEditorStatus: string, resetReply = true) => {
@@ -452,7 +548,7 @@ export async function runAgentWorkflow({
       text: `Aku terapin ${changes.length} file ke project dulu.`,
       meta: `checkpoint ${checkpointPath}`,
     });
-    await applyMany([
+    const ops: ApplyManyOp[] = [
       { path: checkpointPath, content: JSON.stringify(checkpoint, null, 2) + "\n" },
       ...changes.map((change) => ({
         path: change.path,
@@ -460,9 +556,97 @@ export async function runAgentWorkflow({
         expected_sha256: change.old_sha256 || null,
         expected_exists: typeof change.old_exists === "boolean" ? change.old_exists : null,
       })),
-    ], true);
+    ];
+    const preflight = await preflightApplyMany(ops, true);
+    if (!preflight.ok) {
+      const conflictText = formatApplyPreflightConflicts(preflight.conflicts);
+      pushAgentLiveItem({
+        role: "tool",
+        tone: "error",
+        text: "Patch dibatalkan karena file berubah sebelum apply.",
+        meta: conflictText || "conflict",
+      });
+      throw new ApplyPreflightError(preflight.conflicts, preflight.warnings);
+    }
+    if (preflight.warnings.length > 0) {
+      pushAgentLiveItem({
+        role: "tool",
+        tone: "working",
+        text: "Preflight patch lolos dengan catatan.",
+        meta: preflight.warnings.map((item) => item.detail || item.reason).slice(0, 4).join("; "),
+      });
+    }
+    await applyMany(ops, true);
     syncBuffers(changes);
     await refreshExplorer();
+  };
+
+  const applyChangesWithConflictRepair = async (
+    initialChanges: AgentChange[],
+    initialActions: AgentAction[],
+    statusLabel = "Applying",
+  ): Promise<{ changes: AgentChange[]; actions: AgentAction[] }> => {
+    let nextChanges = initialChanges;
+    let nextActions = initialActions;
+    const maxConflictRepairPasses = buildMode === "full-agent" ? 2 : 1;
+
+    for (let pass = 0; pass <= maxConflictRepairPasses; pass += 1) {
+      try {
+        await applyChanges(nextChanges, pass === 0 ? statusLabel : "Applying conflict repair");
+        return { changes: nextChanges, actions: nextActions };
+      } catch (error) {
+        if (!isApplyPreflightError(error) || pass >= maxConflictRepairPasses) {
+          throw error;
+        }
+
+        const repairPass = pass + 1;
+        const conflictReport = formatApplyPreflightReport(error);
+        appendLogSection(`APPLY PREFLIGHT CONFLICT ${repairPass}`, conflictReport);
+        setWorkingMsg(`Patch conflict, meminta agent rebase perubahan ${repairPass}/${maxConflictRepairPasses}…`);
+        setEditorStatus(`Rebasing agent patch (${repairPass}/${maxConflictRepairPasses})...`);
+        pushAgentLiveItem({
+          role: "tool",
+          tone: "working",
+          text: `Patch conflict repair ${repairPass}/${maxConflictRepairPasses}: agent baca ulang file terbaru lalu bikin patch baru.`,
+          meta: formatApplyPreflightConflicts(error.conflicts) || "file conflict",
+        });
+
+        const repairRes = await runAgentPass(
+          buildApplyConflictRepairPrompt(buildMode, agentInput, conflictReport, repairPass, maxConflictRepairPasses),
+          `Rebasing agent patch (${repairPass}/${maxConflictRepairPasses})...`,
+          false,
+        );
+        appendLogSection(`APPLY CONFLICT REPAIR PASS ${repairPass}`, repairRes.log);
+        if (repairRes.spoken) setAgentReply(repairRes.spoken);
+        const repairTrace = repairRes.trace;
+        pushRunTrace(pushAgentLiveItem, repairTrace);
+        evidence.repairPasses?.push({
+          label: `Apply conflict repair ${repairPass}`,
+          producedChanges: (repairRes.changes || []).length,
+          producedActions: (repairRes.actions || []).length,
+          verifierFailures: failedVerifierChecks(repairTrace).length,
+        });
+        if (repairTrace) {
+          setAgentAuditTrail((prev) => [...prev, toAuditSnapshot(`Apply conflict repair ${repairPass}`, repairTrace, makeAgentLiveId, evidence)]);
+        } else {
+          refreshAuditTrailEvidence();
+        }
+
+        const verifierFailures = blockingVerifierChecks(repairTrace);
+        if (verifierFailures.length > 0) {
+          throw new Error(`Apply conflict repair failed verifier: ${verifierFailureSummary(repairTrace)}`);
+        }
+
+        nextChanges = repairRes.changes || [];
+        nextActions = [...nextActions, ...(repairRes.actions || [])];
+
+        if (nextChanges.length === 0) {
+          throw new Error("Apply conflict repair did not produce replacement file changes.");
+        }
+      }
+    }
+
+    return { changes: nextChanges, actions: nextActions };
   };
 
   const runShellActionsForPass = async (actions: AgentAction[]) => {
@@ -498,9 +682,36 @@ export async function runAgentWorkflow({
         continue;
       }
       setWorkingMsg(`Menjalankan: ${action.command}`);
-      pushAgentLiveItem({ role: "tool", tone: "working", text: "Aku jalanin command tambahan buat ngeberesin flow.", meta: action.command });
+      const reason = typeof action.reason === "string" ? action.reason : "Agent requested project command.";
+      let policy: CommandPolicyDecision | null = null;
       try {
-        const runRes = await terminalRun(action.command, selectedProject !== "." ? selectedProject : undefined);
+        policy = await checkCommandPolicy(action.command, selectedProject !== "." ? selectedProject : undefined, reason);
+        evidence.commandPolicyDecisions?.push({
+          command: policy.command,
+          riskLevel: policy.risk_level,
+          ok: policy.ok,
+          reason: policy.reason,
+        });
+        refreshAuditTrailEvidence();
+        if (!policy.ok) {
+          results.push({
+            command: action.command,
+            ok: false,
+            stdout: "",
+            stderr: policy.reason,
+            returncode: 126,
+            policy,
+          });
+          pushAgentLiveItem({
+            role: "tool",
+            tone: "error",
+            text: "Command ditahan guarded autonomy.",
+            meta: `${policy.risk_level}: ${policy.reason}`,
+          });
+          continue;
+        }
+        pushAgentLiveItem({ role: "tool", tone: "working", text: "Aku jalanin command tambahan buat ngeberesin flow.", meta: `${action.command} • ${policy.reason}` });
+        const runRes = await terminalRun(action.command, selectedProject !== "." ? selectedProject : undefined, reason);
         results.push({ command: action.command, ...runRes });
         appendLogSection(runRes.ok ? "TERMINAL STDOUT" : "TERMINAL STDERR", runRes.ok ? runRes.stdout : runRes.stderr);
         pushAgentLiveItem({
@@ -521,6 +732,7 @@ export async function runAgentWorkflow({
           stderr: "",
           returncode: 1,
           error: message,
+          ...(policy ? { policy } : {}),
         });
         appendLogSection("TERMINAL ERROR", message);
         pushAgentLiveItem({ role: "tool", tone: "error", text: "Ada command yang gagal dieksekusi.", meta: message });
@@ -552,6 +764,14 @@ export async function runAgentWorkflow({
   const runValidationPass = async (label: string) => {
     setWorkingMsg("Menjalankan validasi proyek…");
     const validation = await validateProject(selectedProject);
+    evidence.validationRuns?.push({
+      label,
+      ok: validation.ok,
+      ran: validation.ran,
+      failed: validation.failed,
+      commands: validation.commands,
+    });
+    refreshAuditTrailEvidence();
     appendLogSection(label, formatValidationReport(validation));
     pushAgentLiveItem({
       role: "tool",
@@ -566,11 +786,22 @@ export async function runAgentWorkflow({
     if (!url) return null;
     setWorkingMsg("Mengaudit preview yang lagi live…");
     const audit = await auditPreview(url, selectedProject);
+    const blocking = previewBlockingIssueCount(audit);
+    const warnings = previewWarningIssueCount(audit);
+    evidence.previewAudits?.push({
+      label,
+      ok: audit.ok,
+      auditMode: audit.audit_mode,
+      blocking,
+      warnings,
+      summary: audit.summary,
+    });
+    refreshAuditTrailEvidence();
     appendLogSection(label, formatPreviewAuditReport(audit));
     pushAgentLiveItem({
       role: "tool",
-      tone: audit.issues.length === 0 ? "success" : "error",
-      text: audit.issues.length === 0 ? "Preview-nya aman, nggak ada temuan visual penting." : `Preview audit nemu ${audit.issues.length} hal yang masih perlu dirapihin.`,
+      tone: blocking === 0 ? "success" : "error",
+      text: blocking === 0 ? `Preview tidak punya blocker. Warning: ${warnings}.` : `Preview audit nemu ${blocking} blocker yang harus dirapihin.`,
       meta: label,
     });
     return audit;
@@ -667,7 +898,7 @@ export async function runAgentWorkflow({
     let mainTrace = res.trace;
     pushRunTrace(pushAgentLiveItem, mainTrace);
     if (mainTrace) {
-      setAgentAuditTrail([toAuditSnapshot("Main pass", mainTrace, makeAgentLiveId)]);
+      setAgentAuditTrail([toAuditSnapshot("Main pass", mainTrace, makeAgentLiveId, evidence)]);
     }
     let mainVerifierFailures = failedVerifierChecks(mainTrace);
     let mainBlockingVerifierFailures = blockingVerifierChecks(mainTrace);
@@ -695,7 +926,7 @@ export async function runAgentWorkflow({
       const verifierRepairTrace = verifierRepairRes.trace;
       pushRunTrace(pushAgentLiveItem, verifierRepairTrace);
       if (verifierRepairTrace) {
-        setAgentAuditTrail((prev) => [...prev, toAuditSnapshot("Verifier repair pass", verifierRepairTrace, makeAgentLiveId)]);
+        setAgentAuditTrail((prev) => [...prev, toAuditSnapshot("Verifier repair pass", verifierRepairTrace, makeAgentLiveId, evidence)]);
       }
       changes = verifierRepairRes.changes || [];
       actions = verifierRepairRes.actions || [];
@@ -726,7 +957,11 @@ export async function runAgentWorkflow({
     }
 
     if (outputSafeToApply && changes.length > 0) {
-      await applyChanges(changes);
+      const applied = await applyChangesWithConflictRepair(changes, actions);
+      changes = applied.changes;
+      actions = applied.actions;
+      combinedActions = [...actions];
+      setAgentActions(combinedActions);
     }
 
     const shellResults = outputSafeToApply && actions.length > 0
@@ -760,11 +995,11 @@ export async function runAgentWorkflow({
     const needsRepair = () => {
       const validationFailing = Boolean(latestValidation && !latestValidation.ok);
       const shellFailing = latestShellResults.some((result) => !result.ok);
-      const previewFailing = Boolean(latestPreviewAudit && latestPreviewAudit.issues.length > 0);
+      const previewFailing = previewBlockingIssueCount(latestPreviewAudit) > 0;
       return shellFailing || validationFailing || (buildMode === "full-agent" || !friendlyFreeTierMode ? previewFailing : false);
     };
     const hasValidationIssues = Boolean(latestValidation && !latestValidation.ok);
-    const hasPreviewIssues = Boolean(latestPreviewAudit && latestPreviewAudit.issues.length > 0);
+    const hasPreviewIssues = previewBlockingIssueCount(latestPreviewAudit) > 0;
 
     if ((resolvedIntent.kind === "conversation" || resolvedIntent.kind === "inspection") && changes.length === 0 && actions.length === 0) {
       // pure read-only run, nothing else to do
@@ -794,8 +1029,16 @@ export async function runAgentWorkflow({
         if (repairRes.spoken) setAgentReply(repairRes.spoken);
         const repairTrace = repairRes.trace;
         pushRunTrace(pushAgentLiveItem, repairTrace);
+        evidence.repairPasses?.push({
+          label: `Repair pass ${pass}`,
+          producedChanges: (repairRes.changes || []).length,
+          producedActions: (repairRes.actions || []).length,
+          verifierFailures: failedVerifierChecks(repairTrace).length,
+        });
         if (repairTrace) {
-          setAgentAuditTrail((prev) => [...prev, toAuditSnapshot(`Repair pass ${pass}`, repairTrace, makeAgentLiveId)]);
+          setAgentAuditTrail((prev) => [...prev, toAuditSnapshot(`Repair pass ${pass}`, repairTrace, makeAgentLiveId, evidence)]);
+        } else {
+          refreshAuditTrailEvidence();
         }
         latestVerifierFailures = failedVerifierChecks(repairTrace);
         if (latestVerifierFailures.length > 0) {
@@ -807,8 +1050,9 @@ export async function runAgentWorkflow({
           });
         }
 
-        const repairChanges: AgentChange[] = repairRes.changes || [];
-        const repairActions: AgentAction[] = repairRes.actions || [];
+        let repairChanges: AgentChange[] = repairRes.changes || [];
+        let repairActions: AgentAction[] = repairRes.actions || [];
+        const combinedActionsBeforeRepair = combinedActions;
         combinedActions = [...combinedActions, ...repairActions];
         setAgentActions(combinedActions);
 
@@ -825,7 +1069,11 @@ export async function runAgentWorkflow({
         const retryFailedShellActions = retryActionsForFailedShell(latestShellResults);
 
         if (repairChanges.length > 0) {
-          await applyChanges(repairChanges, "Applying repair");
+          const appliedRepair = await applyChangesWithConflictRepair(repairChanges, repairActions, "Applying repair");
+          repairChanges = appliedRepair.changes;
+          repairActions = appliedRepair.actions;
+          combinedActions = [...combinedActionsBeforeRepair, ...repairActions];
+          setAgentActions(combinedActions);
         }
         const shellActionsToRun = repairActions.length > 0
           ? repairActions
@@ -851,7 +1099,7 @@ export async function runAgentWorkflow({
 
       const validationStillFailing = Boolean(latestValidation && !latestValidation.ok);
       const shellStillFailing = latestShellResults.some((result) => !result.ok);
-      const previewStillFailing = Boolean(latestPreviewAudit && latestPreviewAudit.issues.length > 0);
+      const previewStillFailing = previewBlockingIssueCount(latestPreviewAudit) > 0;
       const verifierStillFailing = latestVerifierFailures.length > 0;
 
       if (!shellStillFailing && !validationStillFailing && !previewStillFailing && !verifierStillFailing) {

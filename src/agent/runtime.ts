@@ -368,3 +368,24 @@ export function buildVerifierRepairPrompt(
     "Return a corrected JSON result. If this is a build/edit request, include valid file changes or valid shell actions. Do not return raw tool/MCP actions as the final output.",
   ].filter(Boolean).join("\n\n");
 }
+
+export function buildApplyConflictRepairPrompt(
+  buildMode: BuildMode,
+  originalInput: string,
+  conflictReport: string,
+  passNumber: number,
+  maxPasses: number,
+): string {
+  const profile = getBuildModeProfile(buildMode);
+  const modeDirective = buildMode === "full-agent"
+    ? `${profile.personaName}, keep ownership of the task, but preserve the user's latest file edits.`
+    : `${profile.personaName}, keep the fix scoped and preserve the user's latest file edits.`;
+
+  return [
+    originalInput.trim(),
+    modeDirective,
+    `Apply conflict repair pass ${passNumber} of ${maxPasses}. The previous patch was not written because one or more files changed after the agent prepared it.`,
+    `Conflict report:\n${conflictReport.trim()}`,
+    "Read the current project state through the normal backend context, then return a fresh JSON result with updated file changes. Do not blindly re-send the old patch. Preserve user edits and only change what is needed for the original task.",
+  ].filter(Boolean).join("\n\n");
+}

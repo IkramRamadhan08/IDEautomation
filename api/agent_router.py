@@ -8,19 +8,16 @@ from typing import Callable, Iterable
 
 
 APPORA_SUPPORTED_PROVIDERS = {
-    "openai",
-    "anthropic",
-    "openrouter",
-    "groq",
-    "gemini",
-    "together",
-    "cerebras",
-    "xai",
+    "nine_router",
 }
 
 PROVIDER_ALIASES: dict[str, str] = {
-    # 9router OAuth/subscription-style aliases. Appora can parse these and either
-    # route supported providers directly or report an actionable unsupported hint.
+    "9router": "nine_router",
+    "nine-router": "nine_router",
+    "ninerouter": "nine_router",
+    "nine_router": "nine_router",
+    # 9Router aliases are pass-through model IDs for Appora. 9Router owns
+    # provider auth, combo expansion, free routes, and fallback.
     "cc": "claude",
     "cx": "codex",
     "gc": "gemini-cli",
@@ -35,7 +32,7 @@ PROVIDER_ALIASES: dict[str, str] = {
     "cl": "cline",
     "oc": "opencode",
     "ocg": "opencode-go",
-    # API-key providers that Appora can call today.
+    # Provider-like prefixes are also passed through to 9Router.
     "openai": "openai",
     "oa": "openai",
     "anthropic": "anthropic",
@@ -121,7 +118,7 @@ _ROUTE_ROTATION_STATE: dict[str, tuple[int, int]] = {}
 BUILTIN_SMART_ROUTES: dict[str, SmartRoute] = {
     "free-forever": SmartRoute(
         name="free-forever",
-        description="9router-inspired zero-platform-cost route: free/OAuth-like aliases first, then Appora-supported free/quota-friendly APIs.",
+        description="9Router zero-platform-cost combo. Appora passes it through to 9Router unchanged.",
         models=(
             "kr/claude-sonnet-4.5",
             "kr/glm-5",
@@ -139,6 +136,27 @@ BUILTIN_SMART_ROUTES: dict[str, SmartRoute] = {
         ),
         monthly_cost_label="$0 Appora routing cost; provider quotas/credits still apply",
         quality_label="free-first production-capable",
+    ),
+    "always-on": SmartRoute(
+        name="always-on",
+        description="9Router availability-first combo.",
+        models=("always-on",),
+        monthly_cost_label="handled by 9Router",
+        quality_label="availability-first",
+    ),
+    "maximize-claude": SmartRoute(
+        name="maximize-claude",
+        description="9Router Claude-preferred combo.",
+        models=("maximize-claude",),
+        monthly_cost_label="handled by 9Router",
+        quality_label="Claude-first",
+    ),
+    "openclaw-free": SmartRoute(
+        name="openclaw-free",
+        description="9Router OpenClaw/OpenCode free combo.",
+        models=("openclaw-free",),
+        monthly_cost_label="$0 Appora routing cost; provider quotas/credits still apply",
+        quality_label="free coding",
     ),
     "fast-free": SmartRoute(
         name="fast-free",
@@ -215,21 +233,9 @@ def resolve_provider_alias(alias_or_id: str) -> str:
 def parse_model_ref(model_ref: str, *, default_provider: str | None = None) -> ParsedModelRef:
     raw = str(model_ref or "").strip()
     if not raw:
-        return ParsedModelRef(provider=default_provider, model="")
-    if "/" not in raw:
-        return ParsedModelRef(provider=default_provider, model=raw)
-
-    provider_alias, model = raw.split("/", 1)
-    provider = resolve_provider_alias(provider_alias)
-    if provider in APPORA_SUPPORTED_PROVIDERS:
-        return ParsedModelRef(provider=provider, model=model, provider_alias=provider_alias)
-    return ParsedModelRef(
-        provider=None,
-        model=model,
-        provider_alias=provider_alias,
-        unsupported_provider=provider,
-        unsupported_reason=UNSUPPORTED_9ROUTER_PROVIDERS.get(provider, f"Provider {provider} belum tersedia di Appora hosted."),
-    )
+        return ParsedModelRef(provider="nine_router", model="")
+    provider_alias = raw.split("/", 1)[0] if "/" in raw else None
+    return ParsedModelRef(provider="nine_router", model=raw, provider_alias=provider_alias)
 
 
 def _custom_routes_from_env() -> dict[str, SmartRoute]:
@@ -312,22 +318,18 @@ def build_route_plan(
     seen: set[tuple[str, str]] = set()
     for ref in _rotate_attempts(route, list(route.models)):
         parsed = parse_model_ref(ref, default_provider=selected_provider)
-        if not parsed.is_supported:
-            if parsed.unsupported_reason:
-                plan.skipped.append(f"{ref}: {parsed.unsupported_reason}")
-            continue
-        provider = parsed.provider or selected_provider
+        provider = "nine_router"
         if provider not in connected_providers:
-            plan.skipped.append(f"{ref}: provider {provider} belum connected")
+            plan.skipped.append(f"{ref}: 9Router belum connected")
             continue
-        if provider != selected_provider and cooldown_remaining(provider) > 0:
-            plan.skipped.append(f"{ref}: provider {provider} masih cooldown")
+        if cooldown_remaining(provider) > 0:
+            plan.skipped.append(f"{ref}: 9Router masih cooldown")
             continue
-        key = (provider, parsed.model)
+        key = (provider, ref)
         if key in seen:
             continue
         seen.add(key)
-        plan.attempts.append(ModelAttempt(provider=provider, model=parsed.model, source=route.name, tier=route.quality_label))
+        plan.attempts.append(ModelAttempt(provider=provider, model=ref, source=route.name, tier=route.quality_label))
     return plan
 
 

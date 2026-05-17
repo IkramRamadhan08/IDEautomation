@@ -14,35 +14,14 @@ from typing import Any
 from . import settings as settings_mod
 from .preferences import UserPreferencesRecord, get_user_preferences
 from .oauth_runtime import (
-    ANTHROPIC_PROVIDER,
-    CEREBRAS_PROVIDER,
     CURRENT_PROFILE_ID,
-    GEMINI_PROVIDER,
-    GROQ_PROVIDER,
     NINE_ROUTER_PROVIDER,
-    OPENAI_PROVIDER,
-    OPENROUTER_PROVIDER,
-    TOGETHER_PROVIDER,
-    XAI_PROVIDER,
-    anthropic_generate_json,
-    cerebras_generate_json,
-    gemini_generate_json,
-    groq_generate_json,
     nine_router_generate_json,
-    openai_generate_json,
-    openrouter_generate_json,
-    together_generate_json,
-    xai_generate_json,
     require_provider_connected,
     get_provider_cooldown_remaining,
     auth_snapshot,
-    list_models,
-    provider_catalog,
 )
-from .agent_router import (
-    build_route_plan,
-    normalize_smart_route,
-)
+from .agent_router import normalize_smart_route
 
 _REF_CACHE: dict[str, tuple[float, str]] = {}
 _SCAFFOLD_CACHE: dict[str, tuple[float, "ScaffoldResult"]] = {}
@@ -57,14 +36,6 @@ _DEFAULT_FRIENDLY_CONTEXT_CHARS: int = 48_000
 _DEFAULT_STANDARD_CONTEXT_CHARS: int = 140_000
 _SUPPORTED_AGENT_PROVIDERS = {
     NINE_ROUTER_PROVIDER,
-    OPENAI_PROVIDER,
-    ANTHROPIC_PROVIDER,
-    OPENROUTER_PROVIDER,
-    GROQ_PROVIDER,
-    GEMINI_PROVIDER,
-    TOGETHER_PROVIDER,
-    CEREBRAS_PROVIDER,
-    XAI_PROVIDER,
 }
 
 def _normalize_smart_route(model: str) -> str:
@@ -73,16 +44,7 @@ def _normalize_smart_route(model: str) -> str:
 
 def _effective_requests_per_minute(provider: str) -> int:
     settings = settings_mod.settings
-    per_provider = {
-        OPENAI_PROVIDER: getattr(settings, "openai_requests_per_minute", None),
-        ANTHROPIC_PROVIDER: getattr(settings, "anthropic_requests_per_minute", None),
-        OPENROUTER_PROVIDER: getattr(settings, "openrouter_requests_per_minute", None),
-        GROQ_PROVIDER: getattr(settings, "groq_requests_per_minute", None),
-        GEMINI_PROVIDER: getattr(settings, "gemini_requests_per_minute", None),
-        TOGETHER_PROVIDER: getattr(settings, "together_requests_per_minute", None),
-        CEREBRAS_PROVIDER: getattr(settings, "cerebras_requests_per_minute", None),
-        XAI_PROVIDER: getattr(settings, "xai_requests_per_minute", None),
-    }.get(provider)
+    per_provider = None
     default_rpm = _DEFAULT_FRIENDLY_RPM if bool(getattr(settings, "friendly_free_tier_mode", True)) else _DEFAULT_STANDARD_RPM
     candidates = [per_provider, getattr(settings, "agent_requests_per_minute", default_rpm), default_rpm]
     for value in candidates:
@@ -498,44 +460,12 @@ def _model_from_global_settings(provider: str) -> str:
     s = settings_mod.settings
     if provider == NINE_ROUTER_PROVIDER:
         return getattr(s, "nine_router_model", "free-forever")
-    if provider == OPENAI_PROVIDER:
-        return s.openai_model
-    if provider == ANTHROPIC_PROVIDER:
-        return s.anthropic_model
-    if provider == OPENROUTER_PROVIDER:
-        return s.openrouter_model
-    if provider == GROQ_PROVIDER:
-        return s.groq_model
-    if provider == GEMINI_PROVIDER:
-        return s.gemini_model
-    if provider == TOGETHER_PROVIDER:
-        return s.together_model
-    if provider == CEREBRAS_PROVIDER:
-        return s.cerebras_model
-    if provider == XAI_PROVIDER:
-        return s.xai_model
     raise RuntimeError(f"Unsupported provider: {provider}")
 
 
 def _model_from_preferences(provider: str, prefs: UserPreferencesRecord) -> str:
     if provider == NINE_ROUTER_PROVIDER:
-        return prefs.nine_router_model or prefs.openrouter_model or getattr(settings_mod.settings, "nine_router_model", "free-forever")
-    if provider == OPENAI_PROVIDER:
-        return prefs.openai_model or ""
-    if provider == ANTHROPIC_PROVIDER:
-        return prefs.anthropic_model or ""
-    if provider == OPENROUTER_PROVIDER:
-        return prefs.openrouter_model or ""
-    if provider == GROQ_PROVIDER:
-        return prefs.groq_model or ""
-    if provider == GEMINI_PROVIDER:
-        return prefs.gemini_model or ""
-    if provider == TOGETHER_PROVIDER:
-        return prefs.together_model or ""
-    if provider == CEREBRAS_PROVIDER:
-        return prefs.cerebras_model or ""
-    if provider == XAI_PROVIDER:
-        return prefs.xai_model or ""
+        return prefs.nine_router_model or getattr(settings_mod.settings, "nine_router_model", "free-forever")
     return ""
 
 
@@ -552,7 +482,9 @@ def _current_user_preferences() -> UserPreferencesRecord | None:
 def _selected_provider() -> str:
     prefs = _current_user_preferences()
     provider = str((prefs.llm_provider if prefs else None) or settings_mod.settings.llm_provider or "").strip().lower()
-    return provider if provider in _SUPPORTED_AGENT_PROVIDERS else ""
+    if provider in {"", "9router", "nine-router", "ninerouter", NINE_ROUTER_PROVIDER}:
+        return NINE_ROUTER_PROVIDER
+    return NINE_ROUTER_PROVIDER
 
 
 def _provider_and_model() -> tuple[str, str]:
@@ -564,44 +496,9 @@ def _provider_and_model() -> tuple[str, str]:
 
 
 def _fallback_provider_order(selected_provider: str) -> list[str]:
-    free_first = [
-        NINE_ROUTER_PROVIDER,
-        OPENROUTER_PROVIDER,
-        GEMINI_PROVIDER,
-        GROQ_PROVIDER,
-        CEREBRAS_PROVIDER,
-        TOGETHER_PROVIDER,
-        XAI_PROVIDER,
-        OPENAI_PROVIDER,
-        ANTHROPIC_PROVIDER,
-    ]
-    quality_first = [
-        NINE_ROUTER_PROVIDER,
-        OPENAI_PROVIDER,
-        ANTHROPIC_PROVIDER,
-        OPENROUTER_PROVIDER,
-        GEMINI_PROVIDER,
-        TOGETHER_PROVIDER,
-        XAI_PROVIDER,
-        GROQ_PROVIDER,
-        CEREBRAS_PROVIDER,
-    ]
-    base = free_first if _friendly_free_tier_mode() else quality_first
-    ordered = [selected_provider, *base]
-    out: list[str] = []
-    seen: set[str] = set()
     snapshot = auth_snapshot()
-    for provider in ordered:
-        if not provider or provider in seen:
-            continue
-        seen.add(provider)
-        status = snapshot.get(provider) or {}
-        if not status.get("connected"):
-            continue
-        if provider != selected_provider and get_provider_cooldown_remaining(provider) > 0:
-            continue
-        out.append(provider)
-    return out
+    status = snapshot.get(NINE_ROUTER_PROVIDER) or {}
+    return [NINE_ROUTER_PROVIDER] if status.get("connected") else []
 
 
 def _dedupe_models(models: list[str]) -> list[str]:
@@ -622,75 +519,20 @@ def _is_openrouter_free_model(model: str) -> bool:
 
 
 def _free_tier_models_for_provider(provider: str) -> list[str]:
-    catalog = provider_catalog().get(provider) or {}
-    models = catalog.get("free_tier_models")
-    out: list[str] = []
-    if not isinstance(models, list):
-        return out
-    for model in models:
-        clean = str(model or "").strip()
-        if not clean or _normalize_smart_route(clean):
-            continue
-        out.append(clean)
-    return out
+    return []
 
 
 def _candidate_models_for_provider(provider: str) -> list[str]:
     configured_model = _model_for_provider(provider)
     if provider == NINE_ROUTER_PROVIDER:
         return [configured_model or "free-forever"]
-    smart_route = _normalize_smart_route(configured_model)
-    if smart_route:
-        plan = build_route_plan(
-            route_name=smart_route,
-            selected_provider=provider,
-            connected_providers={provider},
-            cooldown_remaining=lambda _provider: 0.0,
-        )
-        route_models = [attempt.model for attempt in plan.attempts if attempt.provider == provider]
-        if route_models:
-            return _dedupe_models(route_models)[:8]
-        if _friendly_free_tier_mode():
-            return []
-
-    if not _friendly_free_tier_mode():
-        return [configured_model] if configured_model else []
-
-    free_models = _free_tier_models_for_provider(provider)
-    preferred: list[str] = []
-    if provider == OPENROUTER_PROVIDER:
-        preferred.append("openrouter/free")
-        if _is_openrouter_free_model(configured_model):
-            preferred.append(configured_model)
-        preferred.extend(free_models)
-        return _dedupe_models(preferred)[:8]
-
-    if configured_model and configured_model in free_models:
-        preferred.append(configured_model)
-    preferred.extend(free_models)
-    return _dedupe_models(preferred)[:6]
+    return []
 
 
 def _combo_attempts_for_selected_model(selected_provider: str, selected_model: str) -> tuple[list[tuple[str, str]], dict[str, Any]]:
     route = _normalize_smart_route(selected_model)
     metadata: dict[str, Any] = {"route": route, "skipped": []}
-    if not route:
-        return [], metadata
-    snapshot = auth_snapshot()
-    connected = {
-        provider
-        for provider, status in snapshot.items()
-        if isinstance(status, dict) and status.get("connected")
-    }
-    plan = build_route_plan(
-        route_name=route,
-        selected_provider=selected_provider,
-        connected_providers=connected,
-        cooldown_remaining=get_provider_cooldown_remaining,
-    )
-    metadata.update(plan.metadata)
-    metadata["skipped"] = plan.skipped[:12]
-    return [(attempt.provider, attempt.model) for attempt in plan.attempts], metadata
+    return [], metadata
 
 
 def _is_fallback_worthy_error(message: str) -> bool:
@@ -727,138 +569,25 @@ def _generate_json_once(provider: str, model: str, *, system: str, user: str) ->
             raise RuntimeError("9Router returned an empty response")
         return _extract_json_object(text)
 
-    if provider == OPENAI_PROVIDER:
-        raw = openai_generate_json(model=model, system=system, user=user)
-        text = str(raw.get("text") or "")
-        if not text.strip():
-            err = str(raw.get("error_message") or "").strip()
-            if err:
-                raise RuntimeError(err)
-            raise RuntimeError("OpenAI returned an empty response")
-        return _extract_json_object(text)
-
-    if provider == ANTHROPIC_PROVIDER:
-        raw = anthropic_generate_json(model=model, system=system, user=user)
-        text = str(raw.get("text") or "")
-        if not text.strip():
-            err = str(raw.get("error_message") or "").strip()
-            if err:
-                raise RuntimeError(err)
-            raise RuntimeError("Anthropic returned an empty response")
-        return _extract_json_object(text)
-
-    if provider == OPENROUTER_PROVIDER:
-        raw = openrouter_generate_json(model=model, system=system, user=user)
-        text = str(raw.get("text") or "")
-        if not text.strip():
-            err = str(raw.get("error_message") or "").strip()
-            if err:
-                raise RuntimeError(err)
-            raise RuntimeError("OpenRouter returned an empty response")
-        return _extract_json_object(text)
-
-    if provider == GROQ_PROVIDER:
-        raw = groq_generate_json(model=model, system=system, user=user)
-        text = str(raw.get("text") or "")
-        if not text.strip():
-            err = str(raw.get("error_message") or "").strip()
-            if err:
-                raise RuntimeError(err)
-            raise RuntimeError("Groq returned an empty response")
-        return _extract_json_object(text)
-
-    provider_generators = {
-        GEMINI_PROVIDER: (gemini_generate_json, "Gemini"),
-        TOGETHER_PROVIDER: (together_generate_json, "Together AI"),
-        CEREBRAS_PROVIDER: (cerebras_generate_json, "Cerebras"),
-        XAI_PROVIDER: (xai_generate_json, "xAI"),
-    }
-    if provider in provider_generators:
-        generate, label = provider_generators[provider]
-        raw = generate(model=model, system=system, user=user)
-        text = str(raw.get("text") or "")
-        if not text.strip():
-            err = str(raw.get("error_message") or "").strip()
-            if err:
-                raise RuntimeError(err)
-            raise RuntimeError(f"{label} returned an empty response")
-        return _extract_json_object(text)
-
     raise RuntimeError(f"Unsupported provider: {provider}")
 
 
 def _generate_json(*, system: str, user: str) -> tuple[str, str, dict[str, Any]]:
-    selected_provider = _selected_provider()
-    if not selected_provider:
-        snapshot = auth_snapshot()
-        for provider in _fallback_provider_order(OPENROUTER_PROVIDER):
-            if (snapshot.get(provider) or {}).get("connected"):
-                selected_provider = provider
-                break
-    if not selected_provider:
-        raise RuntimeError("No provider selected yet. Open Settings, choose a provider, then save credentials first.")
-    candidates = _fallback_provider_order(selected_provider)
-    if not candidates:
-        raise RuntimeError("Belum ada provider connected. Isi minimal satu API key di Settings.")
-
-    errors: list[str] = []
-    attempt_index = 0
-    selected_model = _model_for_provider(selected_provider) if selected_provider else ""
-    attempt_pairs, route_metadata = _combo_attempts_for_selected_model(selected_provider, selected_model)
-    if attempt_pairs and _normalize_smart_route(selected_model):
-        for provider in candidates:
-            for model in _candidate_models_for_provider(provider):
-                pair = (provider, model)
-                if pair not in attempt_pairs:
-                    attempt_pairs.append(pair)
-    else:
-        for provider in candidates:
-            models = _candidate_models_for_provider(provider)
-            if not models:
-                if _friendly_free_tier_mode():
-                    errors.append(f"{provider}: dilewati karena mode gratis aktif dan provider/model ini tidak punya free-tier model yang jelas"[:500])
-                    continue
-                errors.append(f"{provider}: no model configured"[:500])
-                continue
-            attempt_pairs.extend((provider, model) for model in models)
-
-    if not attempt_pairs and _normalize_smart_route(selected_model):
-        skipped = route_metadata.get("skipped") if isinstance(route_metadata, dict) else []
-        skipped_note = f" Skipped: {' | '.join(str(item) for item in skipped[:4])}" if skipped else ""
-        raise RuntimeError(f"Route {selected_model} belum punya provider Appora yang connected. Isi OpenRouter, Gemini, Groq, atau Cerebras API key di Settings.{skipped_note}")
-
-    for provider, model in attempt_pairs:
-        attempt_index += 1
-        fallback_attempt = provider != selected_provider or model != selected_model
-        try:
-            require_provider_connected(provider)
-            _throttle_llm_calls(provider, _effective_min_gap_seconds() if attempt_index == 1 else 0.0)
-            data = _generate_json_once(provider, model, system=system, user=user)
-            if fallback_attempt:
-                data["_voiceide_provider_fallback"] = {
-                    "selected_provider": selected_provider,
-                    "used_provider": provider,
-                    "used_model": model,
-                    "previous_errors": errors[-3:],
-                }
-            if _normalize_smart_route(selected_model) and isinstance(data, dict):
-                data["_appora_route"] = {
-                    "name": _normalize_smart_route(selected_model),
-                    "used_provider": provider,
-                    "used_model": model,
-                    "skipped": list(route_metadata.get("skipped") or [])[:6],
-                    "monthly_cost": str(route_metadata.get("monthly_cost") or ""),
-                    "quality": str(route_metadata.get("quality") or ""),
-                }
-            return provider, model, data
-        except Exception as exc:
-            message = str(exc)
-            errors.append(f"{provider}/{model}: {message}"[:500])
-            if _is_fallback_worthy_error(message):
-                continue
-            raise RuntimeError(message)
-
-    raise RuntimeError("Semua provider fallback gagal: " + " | ".join(errors[-4:]))
+    provider = NINE_ROUTER_PROVIDER
+    model = _model_for_provider(provider) or "free-forever"
+    require_provider_connected(provider)
+    _throttle_llm_calls(provider, _effective_min_gap_seconds())
+    data = _generate_json_once(provider, model, system=system, user=user)
+    if _normalize_smart_route(model) and isinstance(data, dict):
+        data["_appora_route"] = {
+            "name": _normalize_smart_route(model),
+            "used_provider": provider,
+            "used_model": model,
+            "skipped": [],
+            "monthly_cost": "handled by 9Router",
+            "quality": "handled by 9Router",
+        }
+    return provider, model, data
 
 
 def _provider_fallback_log(data: dict[str, Any]) -> str:

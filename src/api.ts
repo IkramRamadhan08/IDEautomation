@@ -38,6 +38,7 @@ export type ProviderStatus = {
   auth_type?: string | null;
   project_id?: string | null;
   source?: string | null;
+  managed_free?: boolean;
   recommended_model?: string | null;
   free_tier_models?: string[];
 };
@@ -64,6 +65,7 @@ export type SettingsInfo = {
   agent_refinement_mode: "auto" | "off" | "always";
   agent_min_gap_seconds: number;
   nine_router_api_key_set: boolean;
+  managed_nine_router_enabled: boolean;
   openai_api_key_set: boolean;
   anthropic_api_key_set: boolean;
   openrouter_api_key_set: boolean;
@@ -166,6 +168,29 @@ export type ModelRouteDiagnostics = {
   }>;
   skipped: string[];
   metadata: Record<string, string>;
+};
+
+export type ModelRouteTestResult = {
+  ok: boolean;
+  status: number;
+  summary: string;
+  model: string;
+  resolved_model?: string | null;
+  response?: string;
+};
+
+export type ApplyManyOp = {
+  path: string;
+  content: string;
+  expected_sha256?: string | null;
+  expected_exists?: boolean | null;
+};
+
+export type ApplyManyPreflightResult = {
+  ok: boolean;
+  count: number;
+  conflicts: Array<{ path: string; reason: string; detail: string }>;
+  warnings: Array<{ path: string; reason: string; detail: string }>;
 };
 
 const envBase = (import.meta.env.VITE_API_BASE ?? "").trim().replace(/\/$/, "");
@@ -503,6 +528,16 @@ export async function getModelRouteDiagnostics(provider: string, model: string):
   return r.json();
 }
 
+export async function testNineRouterRoute(payload: { base_url: string; api_key?: string | null; model: string }): Promise<ModelRouteTestResult> {
+  const r = await apiFetch(`/api/model-routes/test`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
 export async function updateSettings(patch: SettingsUpdate): Promise<{ ok: boolean; changed: string[] }> {
   const r = await apiFetch(`/api/settings`, {
     method: "PUT",
@@ -513,10 +548,17 @@ export async function updateSettings(patch: SettingsUpdate): Promise<{ ok: boole
   return r.json();
 }
 
-export async function applyMany(
-  ops: Array<{ path: string; content: string; expected_sha256?: string | null; expected_exists?: boolean | null }>,
-  overwrite = false
-): Promise<{ ok: boolean; count: number }> {
+export async function preflightApplyMany(ops: ApplyManyOp[], overwrite = false): Promise<ApplyManyPreflightResult> {
+  const r = await apiFetch(`/api/fs/apply_many/preflight`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ops, overwrite }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function applyMany(ops: ApplyManyOp[], overwrite = false): Promise<{ ok: boolean; count: number }> {
   const r = await apiFetch(`/api/fs/apply_many`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -613,6 +655,13 @@ export type PreviewAuditResult = {
   page_errors: string[];
   runtime_warnings: string[];
   issues: string[];
+  issue_details?: Array<{
+    severity: "blocking" | "warning" | "info" | string;
+    category: string;
+    selector?: string;
+    detail: string;
+    suggested_fix?: string;
+  }>;
   quality_checks?: Array<{
     id: string;
     label: string;
@@ -659,13 +708,32 @@ export type TerminalRunResult = {
   stderr: string;
   returncode: number;
   synced_files?: number;
+  policy?: CommandPolicyDecision;
 };
 
-export async function terminalRun(command: string, cwd?: string): Promise<TerminalRunResult> {
+export type CommandPolicyDecision = {
+  ok: boolean;
+  command: string;
+  risk_level: "safe" | "approval_required" | "blocked" | string;
+  reason: string;
+  requires_approval: boolean;
+};
+
+export async function checkCommandPolicy(command: string, cwd?: string, reason?: string | null): Promise<CommandPolicyDecision> {
+  const r = await apiFetch(`/api/agent/command-policy/check`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ command, cwd, reason }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function terminalRun(command: string, cwd?: string, reason?: string | null): Promise<TerminalRunResult> {
   const r = await apiFetch(`/api/terminal/run`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ command, cwd }),
+    body: JSON.stringify({ command, cwd, reason }),
   });
   if (!r.ok) throw new Error(await r.text());
   return r.json();
@@ -701,6 +769,7 @@ export type AgentIntent = {
 };
 export type AgentRunTrace = {
   passes: number;
+  context_files?: string[];
   memory_hits: Array<{
     kind: string;
     source: string;
@@ -744,6 +813,7 @@ export type AgentRunTrace = {
     phase: string;
     message: string;
   }>;
+  final_confidence?: "low" | "medium" | "high" | string;
 };
 export type AgentResult = {
   job_id?: string | null;

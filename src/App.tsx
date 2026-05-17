@@ -19,6 +19,7 @@ import {
   provisionWorkspace,
   resetClientIdentity,
   setWorkspace,
+  testNineRouterRoute,
   updateSettings,
   updateUserPreferences,
   updateProjectPreferences,
@@ -58,6 +59,7 @@ import {
   type AgentLiveItem,
   type UploadedImageAsset,
   type ModelRouteDiagnostics,
+  type ModelRouteTestResult,
 } from "./types";
 
 import { Topbar } from "./components/navigation/Topbar";
@@ -155,7 +157,7 @@ export default function App() {
   const [workingMsg, setWorkingMsg] = useState<string>("");
   const [agentLiveItems, setAgentLiveItems] = useState<AgentLiveItem[]>([]);
   const [agentAuditTrail, setAgentAuditTrail] = useState<AgentAuditSnapshot[]>([]);
-  const [agentCapabilities, setAgentCapabilities] = useState<AgentCapabilities | null>(null);
+  const [, setAgentCapabilities] = useState<AgentCapabilities | null>(null);
 
   const projectOptions = hostedProjects.length > 0
     ? hostedProjects.map((project) => ({ root: project.root, name: project.name }))
@@ -182,25 +184,18 @@ export default function App() {
   const [projectEditingId, setProjectEditingId] = useState<string>("");
   const [projectRenameDraft, setProjectRenameDraft] = useState("");
   const [settings, setSettings] = useState<SettingsInfo | null>(null);
-  const [llmProviderDraft, setLlmProviderDraft] = useState<ProviderChoice>("");
   const [buildMode, setBuildMode] = useState<BuildMode>("hybrid");
   const [buildModeDraft, setBuildModeDraft] = useState<BuildMode>("hybrid");
   const [modelDraft, setModelDraft] = useState<string>("");
   const [nineRouterBaseUrlDraft, setNineRouterBaseUrlDraft] = useState<string>("http://127.0.0.1:20128/v1");
   const [nineRouterApiKeyDraft, setNineRouterApiKeyDraft] = useState<string>("");
-  const [openaiApiKeyDraft, setOpenaiApiKeyDraft] = useState<string>("");
-  const [anthropicApiKeyDraft, setAnthropicApiKeyDraft] = useState<string>("");
-  const [openrouterApiKeyDraft, setOpenrouterApiKeyDraft] = useState<string>("");
-  const [groqApiKeyDraft, setGroqApiKeyDraft] = useState<string>("");
-  const [geminiApiKeyDraft, setGeminiApiKeyDraft] = useState<string>("");
-  const [togetherApiKeyDraft, setTogetherApiKeyDraft] = useState<string>("");
-  const [cerebrasApiKeyDraft, setCerebrasApiKeyDraft] = useState<string>("");
-  const [xaiApiKeyDraft, setXaiApiKeyDraft] = useState<string>("");
   const [models, setModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState<string>("");
   const [modelRouteDiagnostics, setModelRouteDiagnostics] = useState<ModelRouteDiagnostics | null>(null);
   const [modelRouteLoading, setModelRouteLoading] = useState(false);
+  const [modelRouteTest, setModelRouteTest] = useState<ModelRouteTestResult | null>(null);
+  const [modelRouteTesting, setModelRouteTesting] = useState(false);
 
   const [explorerItems, setExplorerItems] = useState<ExplorerItem[]>([]);
   const [treeExpanded, setTreeExpanded] = useState<Record<string, boolean>>({});
@@ -217,7 +212,7 @@ export default function App() {
 
   const modelFromSettings = (provider: ProviderChoice, source: SettingsInfo | null): string => {
     if (!source) return "";
-    if (provider === "nine_router") return source.nine_router_model || source.openrouter_model || "free-forever";
+    if (provider === "nine_router") return source.nine_router_model || "free-forever";
     if (provider === "openai") return source.openai_model || "";
     if (provider === "anthropic") return source.anthropic_model || "";
     if (provider === "openrouter") return source.openrouter_model || "";
@@ -253,7 +248,7 @@ export default function App() {
 
   const modelFromPreferences = (provider: ProviderChoice, prefs: UserPreferences | null): string => {
     if (!prefs) return "";
-    if (provider === "nine_router") return prefs.nine_router_model || prefs.openrouter_model || "free-forever";
+    if (provider === "nine_router") return prefs.nine_router_model || "free-forever";
     if (provider === "openai") return prefs.openai_model || "";
     if (provider === "anthropic") return prefs.anthropic_model || "";
     if (provider === "openrouter") return prefs.openrouter_model || "";
@@ -479,7 +474,7 @@ export default function App() {
           if (requestAuthUserKey !== latestAuthUserKeyRef.current) return;
           const prefs = prefRes.preferences;
           nextBuildMode = prefs.build_mode || nextBuildMode;
-          nextProvider = (prefs.llm_provider || nextProvider) as ProviderChoice;
+          nextProvider = "nine_router";
           nextModel = modelFromPreferences(nextProvider, prefs) || modelFromSettings(nextProvider, s);
         } catch {
           // ignore hosted preference load failures and keep global settings fallback
@@ -489,7 +484,6 @@ export default function App() {
       setBuildMode(nextBuildMode);
       setBuildModeDraft(nextBuildMode);
       nextProvider = "nine_router";
-      setLlmProviderDraft(nextProvider);
       setModelDraft(nextModel || modelFromSettings(nextProvider, s));
       setNineRouterBaseUrlDraft(s.nine_router_base_url || "http://127.0.0.1:20128/v1");
     } catch { /* ignore */ }
@@ -1152,6 +1146,32 @@ export default function App() {
     };
   }, [settingsOpen, modelDraft]);
 
+  const testSelectedNineRouterRoute = async () => {
+    setModelRouteTesting(true);
+    setModelRouteTest(null);
+    try {
+      const result = await testNineRouterRoute({
+        base_url: nineRouterBaseUrlDraft,
+        api_key: nineRouterApiKeyDraft || null,
+        model: modelDraft || "free-forever",
+      });
+      setModelRouteTest(result);
+      if (result.ok) toast.success(result.summary);
+      else toast.error(result.summary);
+    } catch (e) {
+      const result = {
+        ok: false,
+        status: 0,
+        summary: "Gagal test 9Router: " + errorMessage(e),
+        model: modelDraft || "free-forever",
+      };
+      setModelRouteTest(result);
+      toast.error(result.summary);
+    } finally {
+      setModelRouteTesting(false);
+    }
+  };
+
   const saveSettings = async () => {
     try {
       const patch: SettingsUpdate = {
@@ -1161,24 +1181,8 @@ export default function App() {
       };
       if (modelDraft) {
         patch.nine_router_model = modelDraft;
-        if (llmProviderDraft === "openai") patch.openai_model = modelDraft;
-        else if (llmProviderDraft === "anthropic") patch.anthropic_model = modelDraft;
-        else if (llmProviderDraft === "openrouter") patch.openrouter_model = modelDraft;
-        else if (llmProviderDraft === "groq") patch.groq_model = modelDraft;
-        else if (llmProviderDraft === "gemini") patch.gemini_model = modelDraft;
-        else if (llmProviderDraft === "together") patch.together_model = modelDraft;
-        else if (llmProviderDraft === "cerebras") patch.cerebras_model = modelDraft;
-        else if (llmProviderDraft === "xai") patch.xai_model = modelDraft;
       }
       if (nineRouterApiKeyDraft) patch.nine_router_api_key = nineRouterApiKeyDraft;
-      if (openaiApiKeyDraft) patch.openai_api_key = openaiApiKeyDraft;
-      if (anthropicApiKeyDraft) patch.anthropic_api_key = anthropicApiKeyDraft;
-      if (openrouterApiKeyDraft) patch.openrouter_api_key = openrouterApiKeyDraft;
-      if (groqApiKeyDraft) patch.groq_api_key = groqApiKeyDraft;
-      if (geminiApiKeyDraft) patch.gemini_api_key = geminiApiKeyDraft;
-      if (togetherApiKeyDraft) patch.together_api_key = togetherApiKeyDraft;
-      if (cerebrasApiKeyDraft) patch.cerebras_api_key = cerebrasApiKeyDraft;
-      if (xaiApiKeyDraft) patch.xai_api_key = xaiApiKeyDraft;
 
       await updateSettings(patch);
 
@@ -1186,15 +1190,15 @@ export default function App() {
         await updateUserPreferences({
           llm_provider: "nine_router",
           build_mode: buildModeDraft,
-          openai_model: llmProviderDraft === "openai" ? modelDraft : null,
-          anthropic_model: llmProviderDraft === "anthropic" ? modelDraft : null,
+          openai_model: null,
+          anthropic_model: null,
           nine_router_model: modelDraft,
-          openrouter_model: llmProviderDraft === "openrouter" ? modelDraft : null,
-          groq_model: llmProviderDraft === "groq" ? modelDraft : null,
-          gemini_model: llmProviderDraft === "gemini" ? modelDraft : null,
-          together_model: llmProviderDraft === "together" ? modelDraft : null,
-          cerebras_model: llmProviderDraft === "cerebras" ? modelDraft : null,
-          xai_model: llmProviderDraft === "xai" ? modelDraft : null,
+          openrouter_model: null,
+          groq_model: null,
+          gemini_model: null,
+          together_model: null,
+          cerebras_model: null,
+          xai_model: null,
         });
       }
 
@@ -1283,7 +1287,7 @@ export default function App() {
       ["Admin portal", "Tables, forms, permissions, activity"],
       ["Portfolio app", "Content pages, templates, deployment"],
     ];
-    const providers = ["OpenAI", "Gemini", "Anthropic", "OpenRouter", "Groq", "Together", "Cerebras", "xAI", "Supabase", "Vercel"];
+    const providers = ["9Router", "free-forever", "Kiro", "OpenCode", "Vertex", "Claude Code", "Codex", "Copilot", "Cursor", "Supabase", "Vercel"];
 
     return (
     <div
@@ -1337,7 +1341,7 @@ export default function App() {
               </div>
             ) : null}
             <div className="apporaSignalRow" aria-label="Platform signals">
-              <span>BYOK Models</span>
+              <span>9Router Models</span>
               <span>Serverless Ready</span>
               <span>Project Memory</span>
             </div>
@@ -1419,11 +1423,11 @@ export default function App() {
         <section className="apporaSection apporaSplit" id="docs">
           <div className="apporaSectionCopy">
             <span className="apporaSectionIndex">03</span>
-            <h2>Bring Your Own Keys, Use The Models People Actually Have.</h2>
-            <p>Provider routing is built for free-tier friendly experimentation: OpenAI, Gemini, OpenRouter, Groq, Together, Cerebras, xAI, and more through hosted settings.</p>
+            <h2>One 9Router Key, Every Model Route Behind It.</h2>
+            <p>Appora sends every request to the 9Router OpenAI-compatible gateway. Free models, subscription aliases, cheap API routes, and combo fallback stay inside 9Router.</p>
           </div>
           <div className="apporaDocsPanel">
-            <div><ShieldCheck size={18} /><strong>Hosted settings</strong><span>API keys stay in user-scoped provider secrets.</span></div>
+            <div><ShieldCheck size={18} /><strong>Hosted settings</strong><span>The 9Router endpoint and API key stay in user-scoped provider secrets.</span></div>
             <div><Database size={18} /><strong>Supabase memory</strong><span>Project files, settings, job ledger, and memory chunks persist.</span></div>
             <div><Workflow size={18} /><strong>MCP/tool loop</strong><span>Actions are separated from assistant responses for clearer UX.</span></div>
           </div>
@@ -1438,7 +1442,7 @@ export default function App() {
             {[
               ["Can It Deploy?", "The app is shaped for Vercel serverless with Supabase as the durable backend."],
               ["Can Beginners Use It?", "The primary flow is prompt, preview, edit with agent help, then ship from a saved project."],
-              ["Can I Use Free Models?", "Yes. The provider layer supports BYOK model routing so users can pick what they already have."],
+              ["Can I Use Free Models?", "Yes. Choose 9Router combos like free-forever or direct aliases like kr/claude-sonnet-4.5."],
               ["Where Do Actions Show?", "Agent actions belong in Live Interaction. Model conversation streams through the orb/chat surface."],
             ].map(([question, answer]) => (
               <article key={question}>
@@ -1832,46 +1836,25 @@ export default function App() {
           settingsOpen={settingsOpen}
           identity={identity}
           settings={settings}
-          llmProviderDraft={llmProviderDraft}
           buildModeDraft={buildModeDraft}
           modelDraft={modelDraft}
           nineRouterBaseUrlDraft={nineRouterBaseUrlDraft}
           nineRouterApiKeyDraft={nineRouterApiKeyDraft}
-          openaiApiKeyDraft={openaiApiKeyDraft}
-          anthropicApiKeyDraft={anthropicApiKeyDraft}
-          openrouterApiKeyDraft={openrouterApiKeyDraft}
-          groqApiKeyDraft={groqApiKeyDraft}
-          geminiApiKeyDraft={geminiApiKeyDraft}
-          togetherApiKeyDraft={togetherApiKeyDraft}
-          cerebrasApiKeyDraft={cerebrasApiKeyDraft}
-          xaiApiKeyDraft={xaiApiKeyDraft}
           models={models}
           modelsLoading={modelsLoading}
           modelsError={modelsError}
           modelRouteDiagnostics={modelRouteDiagnostics}
           modelRouteLoading={modelRouteLoading}
+          modelRouteTest={modelRouteTest}
+          modelRouteTesting={modelRouteTesting}
           onClose={() => setSettingsOpen(false)}
-          onLlmProviderChange={p => {
-            const provider = p || "nine_router";
-            setLlmProviderDraft(provider);
-            setModelDraft(modelFromSettings(provider, settings));
-            void loadProviderModels(provider);
-          }}
           onBuildModeDraftChange={setBuildModeDraft}
           onModelDraftChange={setModelDraft}
           onNineRouterBaseUrlChange={setNineRouterBaseUrlDraft}
           onApiKeyChange={(p, k) => {
             if (p === "nine_router") setNineRouterApiKeyDraft(k);
-            else
-            if (p === "openai") setOpenaiApiKeyDraft(k);
-            else if (p === "anthropic") setAnthropicApiKeyDraft(k);
-            else if (p === "openrouter") setOpenrouterApiKeyDraft(k);
-            else if (p === "groq") setGroqApiKeyDraft(k);
-            else if (p === "gemini") setGeminiApiKeyDraft(k);
-            else if (p === "together") setTogetherApiKeyDraft(k);
-            else if (p === "cerebras") setCerebrasApiKeyDraft(k);
-            else if (p === "xai") setXaiApiKeyDraft(k);
           }}
+          onTestRoute={testSelectedNineRouterRoute}
           onLogout={logoutToStart}
           onSave={saveSettings}
         />

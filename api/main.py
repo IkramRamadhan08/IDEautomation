@@ -431,6 +431,23 @@ def _translate_package_manager_command(command: str, project_dir: Path) -> tuple
     )
 
 
+def _package_install_command(manager_name: str, manager_cmd: list[str]) -> list[str]:
+    executable = manager_cmd[0] if manager_cmd else manager_name
+    if manager_name == "npm":
+        return [executable, "install"]
+    if manager_name == "pnpm":
+        return [*manager_cmd, "install"]
+    if manager_name == "yarn":
+        return [*manager_cmd, "install"]
+    if manager_name == "bun":
+        return [*manager_cmd, "install"]
+    return [*manager_cmd, "install"]
+
+
+def _package_run_script_command(manager_cmd: list[str], script: str, port: int) -> list[str]:
+    return [*manager_cmd, "run", script, "--", "--host", "127.0.0.1", "--strictPort", "--port", str(port)]
+
+
 def _spoken_stream_chunks(text: str, *, max_chars: int = 28) -> list[str]:
     clean = " ".join(str(text or "").split())
     if not clean:
@@ -651,47 +668,67 @@ def _session_state() -> dict:
     return sessions[sid]
 
 
-@app.middleware("http")
-async def bind_voiceide_session(request: Request, call_next):
-    if request.method.upper() == "OPTIONS":
-        return await call_next(request)
+class VoiceIDESessionMiddleware:
+    def __init__(self, inner_app):
+        self.app = inner_app
 
-    session_token = CURRENT_SESSION_ID.set(_sanitize_session_id(request.headers.get("X-Appora-Session") or request.headers.get("X-VoiceIDE-Session")))
-    resolved_user = resolve_request_user(
-        authorization=request.headers.get("Authorization"),
-        x_voiceide_user=request.headers.get("X-Appora-User") or request.headers.get("X-VoiceIDE-User"),
-    )
-    user_token = CURRENT_USER_ID.set(resolved_user.user_id)
-    profile_token = CURRENT_PROFILE_ID.set(resolved_user.user_id)
-    request_user_token = CURRENT_REQUEST_USER.set(resolved_user)
-    try:
-        if _requires_verified_hosted_user(request.url.path) and resolved_user.auth_source != "supabase":
-            return JSONResponse(
-                status_code=401,
-                content={
-                    "detail": (
-                        "Hosted agent/workspace routes require verified login. "
-                        "Sign in so the frontend can send a Supabase bearer token."
-                    )
-                },
-            )
-        session = _session_state()
-        google_user = session.get("google_user") or {}
-        if resolved_user.auth_source != "supabase":
-            sub = str(google_user.get("sub") or "").strip()
-            email = str(google_user.get("email") or "").strip().lower()
-            if sub:
-                CURRENT_USER_ID.set(sanitize_user_id(f"google-{sub}"))
-            elif email:
-                CURRENT_USER_ID.set(sanitize_user_id(f"google-{email}"))
-        response = await call_next(request)
-        response.headers["X-Appora-Auth-Source"] = resolved_user.auth_source
-        return response
-    finally:
-        CURRENT_REQUEST_USER.reset(request_user_token)
-        CURRENT_PROFILE_ID.reset(profile_token)
-        CURRENT_USER_ID.reset(user_token)
-        CURRENT_SESSION_ID.reset(session_token)
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http" or str(scope.get("method") or "").upper() == "OPTIONS":
+            await self.app(scope, receive, send)
+            return
+
+        headers = {
+            key.decode("latin1").lower(): value.decode("latin1")
+            for key, value in scope.get("headers", [])
+        }
+        session_token = CURRENT_SESSION_ID.set(_sanitize_session_id(headers.get("x-appora-session") or headers.get("x-voiceide-session")))
+        resolved_user = resolve_request_user(
+            authorization=headers.get("authorization"),
+            x_voiceide_user=headers.get("x-appora-user") or headers.get("x-voiceide-user"),
+        )
+        user_token = CURRENT_USER_ID.set(resolved_user.user_id)
+        profile_token = CURRENT_PROFILE_ID.set(resolved_user.user_id)
+        request_user_token = CURRENT_REQUEST_USER.set(resolved_user)
+        try:
+            if _requires_verified_hosted_user(str(scope.get("path") or "")) and resolved_user.auth_source != "supabase":
+                response = JSONResponse(
+                    status_code=401,
+                    content={
+                        "detail": (
+                            "Hosted agent/workspace routes require verified login. "
+                            "Sign in so the frontend can send a Supabase bearer token."
+                        )
+                    },
+                )
+                await response(scope, receive, send)
+                return
+
+            session = _session_state()
+            google_user = session.get("google_user") or {}
+            if resolved_user.auth_source != "supabase":
+                sub = str(google_user.get("sub") or "").strip()
+                email = str(google_user.get("email") or "").strip().lower()
+                if sub:
+                    CURRENT_USER_ID.set(sanitize_user_id(f"google-{sub}"))
+                elif email:
+                    CURRENT_USER_ID.set(sanitize_user_id(f"google-{email}"))
+
+            async def send_with_auth_header(message):
+                if message.get("type") == "http.response.start":
+                    raw_headers = list(message.get("headers") or [])
+                    raw_headers.append((b"x-appora-auth-source", resolved_user.auth_source.encode("latin1")))
+                    message = {**message, "headers": raw_headers}
+                await send(message)
+
+            await self.app(scope, receive, send_with_auth_header)
+        finally:
+            CURRENT_REQUEST_USER.reset(request_user_token)
+            CURRENT_PROFILE_ID.reset(profile_token)
+            CURRENT_USER_ID.reset(user_token)
+            CURRENT_SESSION_ID.reset(session_token)
+
+
+app.add_middleware(VoiceIDESessionMiddleware)
 
 
 @app.get("/api/healthz")
@@ -943,34 +980,75 @@ def _build_preview_audit_result(
     page_errors = [str(item).strip()[:240] for item in (snapshot.get("page_errors") or []) if str(item).strip()][:6]
     quality_checks = _build_quality_checks(snapshot, project_signals=project_signals)
     quality_failures = [check for check in quality_checks if not check.get("ok")]
+    issue_details: list[dict[str, str]] = []
+
+    def add_issue(severity: str, category: str, detail: str, suggested_fix: str = "") -> None:
+        issue_details.append({
+            "severity": severity,
+            "category": category,
+            "detail": detail[:300],
+            "suggested_fix": suggested_fix[:300],
+        })
 
     issues: list[str] = []
     if not title:
-        issues.append("Preview page is missing a <title> tag.")
+        detail = "Preview page is missing a <title> tag."
+        issues.append(detail)
+        add_issue("warning", "metadata", detail, "Tambahkan title yang menjelaskan app/page.")
     if not meta_description:
-        issues.append("Preview page is missing a meta description.")
+        detail = "Preview page is missing a meta description."
+        issues.append(detail)
+        add_issue("warning", "metadata", detail, "Tambahkan meta description singkat untuk kualitas production.")
     if not headings:
-        issues.append("Preview page has no visible H1 heading.")
+        detail = "Preview page has no visible H1 heading."
+        issues.append(detail)
+        add_issue("blocking", "content", detail, "Tambahkan H1 yang jelas di first viewport.")
     if word_count < 40:
-        issues.append("Preview content is very sparse, which usually means the page feels unfinished.")
+        detail = "Preview content is very sparse, which usually means the page feels unfinished."
+        issues.append(detail)
+        add_issue("warning", "content", detail, "Lengkapi copy dan section utama agar app tidak terasa placeholder.")
     if not buttons and form_count == 0 and len(links) < 2:
-        issues.append("Preview has very little obvious interaction or navigation.")
+        detail = "Preview has very little obvious interaction or navigation."
+        issues.append(detail)
+        add_issue("warning", "interaction", detail, "Tambahkan CTA, navigasi, form, atau kontrol yang relevan.")
     if images_missing_alt > 0:
-        issues.append(f"Preview has {images_missing_alt} image(s) without useful alt text.")
+        detail = f"Preview has {images_missing_alt} image(s) without useful alt text."
+        issues.append(detail)
+        add_issue("warning", "accessibility", detail, "Isi alt text pada image non-dekoratif.")
     if broken_images:
-        issues.append(f"Preview has {len(broken_images)} broken image(s): {', '.join(broken_images[:3])}.")
+        detail = f"Preview has {len(broken_images)} broken image(s): {', '.join(broken_images[:3])}."
+        issues.append(detail)
+        add_issue("blocking", "assets", detail, "Perbaiki path asset, pakai asset lokal yang ada, atau hilangkan referensi rusak.")
     if unlabeled_interactive:
-        issues.append(f"Preview has {len(unlabeled_interactive)} unlabeled interactive element(s).")
+        detail = f"Preview has {len(unlabeled_interactive)} unlabeled interactive element(s)."
+        issues.append(detail)
+        add_issue("blocking", "accessibility", detail, "Tambahkan visible text atau aria-label yang bermakna.")
     if mobile_text_overflow_nodes:
-        issues.append(f"Preview has {len(mobile_text_overflow_nodes)} mobile text overflow issue(s).")
+        detail = f"Preview has {len(mobile_text_overflow_nodes)} mobile text overflow issue(s)."
+        issues.append(detail)
+        add_issue("blocking", "responsive", detail, "Atur wrapping, min-width, grid, atau ukuran kontainer mobile.")
     if fixed_overlays or mobile_fixed_overlays:
-        issues.append("Preview has large fixed overlay(s) that may block interaction.")
+        detail = "Preview has large fixed overlay(s) that may block interaction."
+        issues.append(detail)
+        add_issue("blocking", "responsive", detail, "Pastikan fixed layer tidak menutup konten/aksi penting di mobile.")
     if page_errors:
-        issues.append(f"Preview threw {len(page_errors)} runtime browser error(s).")
+        detail = f"Preview threw {len(page_errors)} runtime browser error(s)."
+        issues.append(detail)
+        add_issue("blocking", "runtime", detail, "Baca stack/error browser lalu perbaiki runtime exception.")
     if console_errors:
-        issues.append(f"Preview logged {len(console_errors)} browser console warning/error message(s).")
+        detail = f"Preview logged {len(console_errors)} browser console warning/error message(s)."
+        issues.append(detail)
+        add_issue("warning", "runtime", detail, "Bersihkan console errors/warnings yang berasal dari app.")
     if quality_failures:
-        issues.append(f"Preview quality checks flagged {len(quality_failures)} area(s) across responsive/a11y/state readiness.")
+        detail = f"Preview quality checks flagged {len(quality_failures)} area(s) across responsive/a11y/state readiness."
+        issues.append(detail)
+        for check in quality_failures:
+            check_id = str(check.get("id") or "")
+            severity = "blocking" if check_id in {"responsive-overflow", "a11y-interactive-labels", "mobile-text-fit", "image-loads", "blocking-overlays"} else "warning"
+            add_issue(severity, check_id or "quality", str(check.get("detail") or detail), "Perbaiki area quality check terkait.")
+
+    blocking_count = sum(1 for issue in issue_details if issue.get("severity") == "blocking")
+    warning_count = sum(1 for issue in issue_details if issue.get("severity") == "warning")
 
     summary_parts = [
         f"mode={audit_mode}",
@@ -981,11 +1059,12 @@ def _build_preview_audit_result(
         f"forms={form_count}",
         f"interactive={interactive_count}",
         f"words={word_count}",
-        f"quality_failures={len(quality_failures)}",
+        f"blocking={blocking_count}",
+        f"warnings={warning_count}",
     ]
 
     return {
-        "ok": len(issues) == 0,
+        "ok": blocking_count == 0,
         "preview_url": preview_url,
         "audit_mode": audit_mode,
         "title": title,
@@ -1013,6 +1092,7 @@ def _build_preview_audit_result(
         "page_errors": page_errors,
         "runtime_warnings": runtime_warnings or [],
         "issues": issues,
+        "issue_details": issue_details,
         "quality_checks": quality_checks,
         "excerpt": excerpt,
         "summary": "; ".join(summary_parts),
@@ -1208,6 +1288,77 @@ def _run_shell_command(command: str, cwd: Path, timeout: int = 120) -> dict:
         }
 
 
+class CommandPolicyDecision(BaseModel):
+    ok: bool
+    command: str
+    risk_level: Literal["safe", "approval_required", "blocked"]
+    reason: str
+    requires_approval: bool = False
+
+
+_SAFE_COMMAND_PREFIXES = (
+    ("npm", "run"),
+    ("npm", "test"),
+    ("npm", "install"),
+    ("npm", "ci"),
+    ("pnpm", "run"),
+    ("pnpm", "test"),
+    ("pnpm", "install"),
+    ("yarn", "run"),
+    ("yarn", "test"),
+    ("yarn", "install"),
+    ("bun", "run"),
+    ("bun", "test"),
+    ("bun", "install"),
+    ("python3", "-m", "compileall"),
+    ("python", "-m", "compileall"),
+)
+
+_APPROVAL_COMMANDS = {"git", "npx", "pnpm", "yarn", "bun", "npm"}
+_BLOCKED_COMMANDS = {"rm", "sudo", "su", "dd", "mkfs", "mount", "umount", "shutdown", "reboot", "kill", "pkill"}
+_DESTRUCTIVE_GIT_ARGS = {"reset", "clean", "checkout", "restore", "rebase"}
+
+
+def _command_policy_decision(command: str) -> CommandPolicyDecision:
+    clean = str(command or "").strip()
+    if not clean:
+        return CommandPolicyDecision(ok=False, command=clean, risk_level="blocked", reason="Command kosong.", requires_approval=True)
+
+    lowered = clean.lower()
+    if any(token in lowered for token in ("curl ", "wget ", "| sh", "| bash", " > /", ">> /", " --global", " -g ")):
+        return CommandPolicyDecision(
+            ok=False,
+            command=clean,
+            risk_level="approval_required",
+            reason="Command berpotensi mengunduh/menulis di luar project atau mengubah environment global.",
+            requires_approval=True,
+        )
+
+    try:
+        parts = shlex.split(clean)
+    except ValueError as exc:
+        return CommandPolicyDecision(ok=False, command=clean, risk_level="blocked", reason=f"Command tidak bisa diparse: {exc}", requires_approval=True)
+
+    if not parts:
+        return CommandPolicyDecision(ok=False, command=clean, risk_level="blocked", reason="Command kosong.", requires_approval=True)
+
+    executable = Path(parts[0]).name
+    if executable in _BLOCKED_COMMANDS:
+        return CommandPolicyDecision(ok=False, command=clean, risk_level="blocked", reason=f"Command '{executable}' diblokir oleh guarded autonomy.", requires_approval=True)
+
+    if executable == "git" and len(parts) > 1 and parts[1] in _DESTRUCTIVE_GIT_ARGS:
+        return CommandPolicyDecision(ok=False, command=clean, risk_level="approval_required", reason=f"git {parts[1]} butuh approval eksplisit.", requires_approval=True)
+
+    tuple_parts = tuple(parts)
+    if any(tuple_parts[:len(prefix)] == prefix for prefix in _SAFE_COMMAND_PREFIXES):
+        return CommandPolicyDecision(ok=True, command=clean, risk_level="safe", reason="Command validasi/install project-scoped yang boleh auto-run.", requires_approval=False)
+
+    if executable in _APPROVAL_COMMANDS:
+        return CommandPolicyDecision(ok=False, command=clean, risk_level="approval_required", reason="Command package/git di luar allowlist safe butuh approval eksplisit.", requires_approval=True)
+
+    return CommandPolicyDecision(ok=False, command=clean, risk_level="approval_required", reason="Command belum masuk allowlist guarded autonomy.", requires_approval=True)
+
+
 def _infer_validation_commands(project_dir: Path) -> list[str]:
     commands: list[str] = []
     package_manager = _resolve_package_manager(project_dir)
@@ -1248,6 +1399,18 @@ def _infer_validation_commands(project_dir: Path) -> list[str]:
 class TerminalRunReq(BaseModel):
     command: str
     cwd: str | None = None
+    reason: str | None = None
+
+
+class CommandPolicyReq(BaseModel):
+    command: str
+    cwd: str | None = None
+    reason: str | None = None
+
+
+@app.post("/api/agent/command-policy/check", response_model=CommandPolicyDecision)
+def command_policy_check(req: CommandPolicyReq):
+    return _command_policy_decision(req.command)
 
 
 @app.post("/api/terminal/run")
@@ -1261,7 +1424,11 @@ def terminal_run(req: TerminalRunReq):
         cwd = safe_join(ws_root, req.cwd)
 
     try:
+        policy = _command_policy_decision(req.command)
+        if not policy.ok:
+            raise HTTPException(403, {"message": policy.reason, "policy": policy.model_dump()})
         result = _run_shell_command(req.command, cwd)
+        result["policy"] = policy.model_dump()
         result["synced_files"] = _sync_hosted_project_text_files_after_shell(ws_root, cwd)
         return result
     except HTTPException:
@@ -1771,16 +1938,24 @@ def run_start(req: RunStartReq, request: Request):
             if len(logs) > 2000:
                 del logs[:500]
 
-    # Check if this is a static project (no package.json or no dev script)
+    # Check if this is a static project (no package.json or no runnable preview script)
     pj_path = proj / "package.json"
     is_static = not pj_path.exists()
+    preview_script = "dev"
 
     if not is_static:
         try:
             import json
             data = json.loads(pj_path.read_text(encoding="utf-8"))
             scripts = data.get("scripts") or {}
-            is_static = "dev" not in scripts
+            if isinstance(scripts, dict) and "dev" in scripts:
+                preview_script = "dev"
+                is_static = False
+            elif isinstance(scripts, dict) and "preview" in scripts:
+                preview_script = "preview"
+                is_static = False
+            else:
+                is_static = True
         except Exception:
             is_static = True
 
@@ -1804,7 +1979,7 @@ def run_start(req: RunStartReq, request: Request):
             )
 
         manager_name, manager_cmd = package_manager
-        install_cmd = [*manager_cmd, "install"]
+        install_cmd = _package_install_command(manager_name, manager_cmd)
         logs.append(f"$ {_shell_join(install_cmd)}")
         install = subprocess.run(install_cmd, cwd=str(proj), capture_output=True, text=True)
         if manager_name != "npm":
@@ -1818,7 +1993,7 @@ def run_start(req: RunStartReq, request: Request):
             raise HTTPException(400, f"Install failed\n\n--- package manager output (tail) ---\n{tail}")
 
         # strictPort so we know the port; if it's taken, user can run again (we'll pick a new port)
-        cmd = [*manager_cmd, "run", "dev", "--", "--host", "127.0.0.1", "--strictPort", "--port", str(port)]
+        cmd = _package_run_script_command(manager_cmd, preview_script, port)
         logs.append(f"$ {_shell_join(cmd)}")
         proc = subprocess.Popen(cmd, cwd=str(proj), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
 
@@ -2036,36 +2211,63 @@ class ApplyManyReq(BaseModel):
     overwrite: bool = False
 
 
-@app.post("/api/fs/apply_many")
-def fs_apply_many(req: ApplyManyReq):
-    root = _ws()
-    conflicts: list[str] = []
+def _preflight_apply_many(root: Path, req: ApplyManyReq) -> dict:
+    conflicts: list[dict[str, str]] = []
+    warnings: list[dict[str, str]] = []
 
-    # preflight
     for op in req.ops:
-        p = safe_join(root, op.path)
+        if not op.path.strip() or ".." in op.path.split("/"):
+            conflicts.append({"path": op.path, "reason": "invalid_path", "detail": f"{op.path} is not a safe project-relative path"})
+            continue
+        try:
+            p = safe_join(root, op.path)
+        except ValueError as exc:
+            conflicts.append({"path": op.path, "reason": "invalid_path", "detail": str(exc)})
+            continue
         if op.expected_exists is not None:
             exists = p.exists()
             if op.expected_exists is False and exists:
-                conflicts.append(f"{op.path} changed: expected file to be absent")
+                conflicts.append({"path": op.path, "reason": "expected_absent", "detail": f"{op.path} changed: expected file to be absent"})
                 continue
             if op.expected_exists is True and not exists:
-                conflicts.append(f"{op.path} changed: expected file to exist")
+                conflicts.append({"path": op.path, "reason": "expected_present", "detail": f"{op.path} changed: expected file to exist"})
                 continue
             if exists and op.expected_sha256:
                 try:
                     current_hash = _sha256_text(p.read_text(encoding="utf-8"))
                 except UnicodeDecodeError:
-                    conflicts.append(f"{op.path} changed: current file is not UTF-8 text")
+                    conflicts.append({"path": op.path, "reason": "non_utf8", "detail": f"{op.path} changed: current file is not UTF-8 text"})
                     continue
                 if current_hash != op.expected_sha256:
-                    conflicts.append(f"{op.path} changed since agent prepared the patch")
+                    conflicts.append({"path": op.path, "reason": "stale_hash", "detail": f"{op.path} changed since agent prepared the patch"})
                     continue
         elif p.exists() and not req.overwrite:
-            conflicts.append(op.path)
+            conflicts.append({"path": op.path, "reason": "exists", "detail": f"{op.path} already exists"})
 
+        if not isinstance(op.content, str) or op.content == "":
+            warnings.append({"path": op.path, "reason": "empty_content", "detail": f"{op.path} would be written empty"})
+
+    return {
+        "ok": not conflicts,
+        "count": len(req.ops),
+        "conflicts": conflicts,
+        "warnings": warnings,
+    }
+
+
+@app.post("/api/fs/apply_many/preflight")
+def fs_apply_many_preflight(req: ApplyManyReq):
+    return _preflight_apply_many(_ws(), req)
+
+
+@app.post("/api/fs/apply_many")
+def fs_apply_many(req: ApplyManyReq):
+    root = _ws()
+    preflight = _preflight_apply_many(root, req)
+    conflicts = list(preflight.get("conflicts") or [])
     if conflicts:
-        raise HTTPException(409, f"Conflicts (already exist): {', '.join(conflicts[:20])}")
+        details = [str(item.get("detail") or item.get("path") or "") for item in conflicts if isinstance(item, dict)]
+        raise HTTPException(409, {"message": f"Conflicts: {', '.join(details[:20])}", **preflight})
 
     for op in req.ops:
         write_text(root, op.path, op.content)
@@ -2628,23 +2830,25 @@ def _run_persisted_agent_job(job: dict, *, event_cb=None) -> dict:
 def _run_agent_worker_jobs(*, job_id: str | None, limit: int) -> dict:
     jobs: list[dict] = []
     if job_id:
-        job = get_agent_job_any(job_id=job_id)
-        if not job:
-            local = _local_agent_jobs().get(job_id)
-            if isinstance(local, dict):
-                job = local
+        job = None
+        local = _local_agent_jobs().get(job_id)
+        if isinstance(local, dict):
+            job = local
+        if not job and has_supabase():
+            job = get_agent_job_any(job_id=job_id)
         if not job:
             raise HTTPException(404, "agent job not found")
         jobs = [job]
     else:
-        remote_jobs = list_agent_jobs_by_status(status="queued", limit=limit)
-        if remote_jobs is not None:
-            jobs = remote_jobs
-        else:
-            jobs = [
-                job for job in _local_agent_jobs().values()
-                if isinstance(job, dict) and str(job.get("status") or "") == "queued"
-            ][: max(1, min(int(limit or 1), 5))]
+        local_jobs = [
+            job for job in _local_agent_jobs().values()
+            if isinstance(job, dict) and str(job.get("status") or "") == "queued"
+        ][: max(1, min(int(limit or 1), 5))]
+        if local_jobs:
+            jobs = local_jobs
+        elif has_supabase():
+            remote_jobs = list_agent_jobs_by_status(status="queued", limit=limit)
+            jobs = remote_jobs or []
 
     results: list[dict] = []
     for job in jobs[: max(1, min(int(limit or 1), 5))]:

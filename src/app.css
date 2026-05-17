@@ -6231,6 +6231,14 @@ a {
   margin-top: 8px;
 }
 
+.settingsSubtle.successText {
+  color: #2f9e44;
+}
+
+.settingsSubtle.dangerText {
+  color: #e03131;
+}
+
 .settingsActions {
   display: flex;
   align-items: center;
