@@ -495,7 +495,16 @@ export async function runAgentWorkflow({
             setAgentReply((prev) => (prev ? `${prev} ${spokenChunk}` : spokenChunk));
             appendAssistantLiveText(spokenChunk);
           }
-          if (message) setWorkingMsg(message);
+          if (message) {
+            setWorkingMsg(message);
+            if (/^(Function call:|Function .* selesai\.|Function .* gagal:|Tool |MCP )/i.test(message)) {
+              pushAgentLiveItem({
+                role: "tool",
+                tone: /gagal|failed/i.test(message) ? "error" : /selesai|finished/i.test(message) ? "success" : "working",
+                text: message,
+              });
+            }
+          }
         }
       },
       activeFile || null,
@@ -828,9 +837,9 @@ export async function runAgentWorkflow({
       role: "tool",
       tone: "default",
       text: buildMode === "full-agent"
-        ? "Free-tier guard aktif, tapi Clara tetap boleh repair hasil build yang gagal supaya flow preview lebih reliable."
+        ? "Free-tier guard aktif, tapi Clara tetap boleh repair hasil build yang gagal supaya full preview lebih reliable."
         : "Free-tier guard aktif: agent hemat panggilan model dan context supaya limit provider nggak cepat mentok.",
-      meta: buildMode === "full-agent" ? "Clara: maksimal 2 repair" : "Raka: maksimal 1 repair untuk validasi/shell",
+      meta: buildMode === "full-agent" ? "Full Preview: maksimal 2 repair" : "Raka: maksimal 1 repair untuk validasi/shell",
     });
   }
 
@@ -1013,7 +1022,7 @@ export async function runAgentWorkflow({
           role: "tool",
           tone: "working",
           text: `Repair loop ${pass}/${maxRepairPasses}: agent baca output terbaru lalu coba benerin lagi.`,
-          meta: buildMode === "full-agent" ? "Clara reliability loop: maksimal 2 repair" : (friendlyFreeTierMode ? "free-tier guard: maksimal 1 repair" : "bounded loop: maksimal 2 repair"),
+          meta: buildMode === "full-agent" ? "Full Preview reliability loop: maksimal 2 repair" : (friendlyFreeTierMode ? "free-tier guard: maksimal 1 repair" : "bounded loop: maksimal 2 repair"),
         });
 
         const validationReport = latestValidation && !latestValidation.ok ? formatValidationReport(latestValidation, 6000) : null;

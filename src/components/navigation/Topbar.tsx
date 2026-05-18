@@ -77,7 +77,7 @@ export const Topbar: React.FC<TopbarProps> = ({
           className={`btn modeBtn ${buildMode === "full-agent" ? "primary" : ""}`}
           onClick={() => onQuickSwitchBuildMode("full-agent")}
         >
-          Clara
+          Clara Preview
         </button>
       </div>
 

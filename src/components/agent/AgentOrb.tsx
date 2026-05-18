@@ -361,7 +361,7 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
                     <div className="agentOrbRunHeader">
                       <div>
                         <div className="agentOrbSectionLabel">Live run</div>
-                        <div className="agentOrbRunTitle">{agentStatus === "thinking" ? `${modeProfile.personaName} lagi ngobrol live` : `Obrolan terakhir ${modeProfile.personaName}`}</div>
+                        <div className="agentOrbRunTitle">{agentStatus === "thinking" ? `${modeProfile.personaName} lagi kerja live` : `Lanjut ngobrol dengan ${modeProfile.personaName}`}</div>
                       </div>
                       {agentStatus !== "thinking" ? (
                         <button className="btn subtleBtn agentOrbNewTaskBtn" onClick={onResetRunView}>
@@ -372,21 +372,42 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
                     </div>
 
                     <AgentLiveStage
-                      items={visibleConversationItems}
+                      items={agentStatus === "thinking" ? agentLiveItems : (agentLiveItems.length > 0 ? agentLiveItems : visibleConversationItems)}
                       agentStatus={agentStatus}
                       personaName={modeProfile.personaName}
                       workingMsg={workingMsg}
                       emptyText={agentReply || `Begitu kamu run, jawaban ${modeProfile.personaName} bakal muncul live di sini.`}
-                      includeTools={false}
-                      conversationOnly
+                      includeTools
+                      conversationOnly={false}
                     />
+                    {agentStatus !== "thinking" ? (
+                      <>
+                        <textarea
+                          className="textarea promptBox agentOrbPrompt"
+                          placeholder="Tulis follow-up, minta revisi, atau kasih task berikutnya..."
+                          value={agentInput}
+                          onChange={(e) => onAgentInputChange(e.target.value)}
+                        />
+
+                        <div className="agentOrbActions">
+                          <button className="btn subtleBtn" onClick={onPickAgentImage} disabled={imageUploading}>
+                            <Paperclip size={14} />
+                            <span>{imageUploading ? "Uploading..." : "Attach"}</span>
+                          </button>
+                          <button className="btn primary" onClick={onRunAgent} disabled={!agentInput.trim()}>
+                            <SendHorizontal size={14} />
+                            <span>Run</span>
+                          </button>
+                        </div>
+                      </>
+                    ) : null}
                   </>
                 ) : (
                   <>
                     <textarea
                       className="textarea promptBox agentOrbPrompt"
                       placeholder={buildMode === "full-agent"
-                        ? "Kasih brief, target produk, atau suruh Clara ambil alih build-nya..."
+                        ? "Kasih brief, target produk, atau suruh Clara build di Full Preview..."
                         : "Ceritain blocker, file yang lagi susah, atau minta Raka bantu di titik ini..."}
                       value={agentInput}
                       onChange={(e) => onAgentInputChange(e.target.value)}

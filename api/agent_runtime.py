@@ -1262,6 +1262,8 @@ def _should_run_deep_preflight(ctx: PreparedAgentContext, user_input: str) -> bo
         return False
     if not (ctx.intent.should_write_files or ctx.intent.kind == "inspection"):
         return False
+    if ctx.intent.should_write_files or ctx.intent.kind == "inspection":
+        return True
     hint = (user_input or "").lower()
     deep_keywords = (
         "app besar", "app gede", "large", "complex", "architecture", "arsitektur", "refactor",
@@ -1322,6 +1324,7 @@ def _deep_preflight_node(state: AgentRuntimeState) -> AgentRuntimeState:
     for spec in tool_specs:
         tool_name = str(spec.get("tool") or "")
         arguments = spec.get("arguments") if isinstance(spec.get("arguments"), dict) else {}
+        _emit(state, "delta", {"message": f"Function call: {tool_name}..."})
         result = execute_local_tool(ctx.ws_root, ctx.project_dir, tool_name=tool_name, arguments=arguments)
         results.append(result)
         ctx.trace_local_tools_used.append(
@@ -1336,6 +1339,17 @@ def _deep_preflight_node(state: AgentRuntimeState) -> AgentRuntimeState:
         )
         if not result.ok:
             ctx.trace_warnings.append({"phase": "deep-preflight", "message": f"Tool {result.tool} gagal ({result.error or 'unknown error'})."[:240]})
+        _emit(
+            state,
+            "delta",
+            {
+                "message": (
+                    f"Function {tool_name} selesai."
+                    if result.ok
+                    else f"Function {tool_name} gagal: {(result.error or 'unknown error')[:120]}"
+                )
+            },
+        )
 
     local_prompt = format_local_tool_results_prompt(results)
     if local_prompt:
@@ -1377,6 +1391,16 @@ def _draft_node(state: AgentRuntimeState) -> AgentRuntimeState:
 
     intent_prefix = ctx.intent.prompt_block + "\n"
     base_instruction = ctx.mode_profile.instruction_prefix + intent_prefix + ctx.asset_prompt + follow_up_prefix + state["input"]
+    streamed_spoken_chars = 0
+
+    def emit_spoken_delta(delta: str) -> None:
+        nonlocal streamed_spoken_chars
+        text = str(delta or "")
+        if text == "":
+            return
+        streamed_spoken_chars += len(text)
+        _emit(state, "delta", {"spoken_chunk": text, "native_stream": True})
+
     try:
         sug = suggest(
             instruction=base_instruction,
@@ -1387,6 +1411,7 @@ def _draft_node(state: AgentRuntimeState) -> AgentRuntimeState:
             extra_context=ctx.extra_context,
             workspace_root=ctx.project_dir,
             system=ctx.mode_profile.system_prompt,
+            on_spoken_delta=emit_spoken_delta,
         )
         spoken = sug.spoken
         log = sug.log
@@ -1415,6 +1440,7 @@ def _draft_node(state: AgentRuntimeState) -> AgentRuntimeState:
         "actions": actions,
         "passes": 1,
         "refine_skipped": False,
+        "streamed_spoken_chars": streamed_spoken_chars,
     }
 
 

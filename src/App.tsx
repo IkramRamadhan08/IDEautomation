@@ -1213,8 +1213,11 @@ export default function App() {
 
   // --- Agent ---
   const runAgentAndAutoApply = async () => {
+    const input = agentInput.trim();
+    if (!input || agentStatus === "thinking") return;
+    setAgentInput("");
     await runAgentWorkflow({
-      agentInput,
+      agentInput: input,
       agentStatus,
       buildMode,
       friendlyFreeTierMode: settings?.friendly_free_tier_mode ?? true,
@@ -1275,7 +1278,7 @@ export default function App() {
   const renderGoogleLoginGate = () => {
     const heroNodes = [
       { label: "Prompt", detail: "Describe the app", icon: Sparkles },
-      { label: "Autopilot", detail: "Clara takes over the build", icon: Bot },
+      { label: "Full Preview", detail: "Clara builds around the browser", icon: Bot },
       { label: "Copilot", detail: "Raka helps while you code", icon: Code2 },
       { label: "Preview", detail: "Inspect in browser", icon: Globe2 },
       { label: "Memory", detail: "Project context stays", icon: Layers3 },
@@ -1322,8 +1325,8 @@ export default function App() {
           <div className="apporaHeroCopy">
             <h1>THE FUTURE JUST IN YOUR HEAD</h1>
             <p>
-              Appora turns a rough idea into a hosted workspace with Clara as the autopilot builder,
-              Raka as the coding copilot, live preview, project memory, Supabase data, and Vercel-ready output.
+              Appora turns a rough idea into a hosted workspace with Clara Full Preview,
+              Raka coding mode, live preview, project memory, Supabase data, and Vercel-ready output.
             </p>
             <div className="apporaHeroActions">
               <button className="apporaPrimaryButton" onClick={openAppora}>
@@ -1358,7 +1361,7 @@ export default function App() {
               </div>
               <div className="apporaPromptLine">Build a booking app with auth, admin dashboard, and deploy notes.</div>
               <div className="apporaAgentRows">
-                <div><Bot size={17} /><strong>Clara</strong><span>autopilot mode for users who want the app built end to end</span></div>
+                <div><Bot size={17} /><strong>Clara</strong><span>full preview mode for users who want the app built end to end</span></div>
                 <div><Terminal size={17} /><strong>Raka</strong><span>copilot mode for devs who want focused help while staying in control</span></div>
               </div>
             </div>
@@ -1524,7 +1527,7 @@ export default function App() {
                 setNewProjectName(event.target.value);
                 if (projectSetupError) setProjectSetupError("");
               }}
-              placeholder="Contoh: Portfolio Raka"
+              placeholder="Contoh: Portfolio Studio"
               disabled={newProjectSaving || projectAuthChecking}
               autoFocus
             />
@@ -1744,7 +1747,7 @@ export default function App() {
             </div>
             <div className="gateFeatureCard">
               <div className="gateFeatureTitle">Create new project</div>
-              <div className="gateFeatureText">Best when you want Clara to take over a fresh build, or Raka to help you code it step by step.</div>
+              <div className="gateFeatureText">Best when you want Clara to build around a full preview, or Raka to help you code it step by step.</div>
             </div>
           </div>
           {hasVerifiedHostedAuth ? renderSavedProjectsPanel("setup") : null}

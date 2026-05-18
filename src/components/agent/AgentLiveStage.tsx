@@ -30,7 +30,7 @@ export const AgentLiveStage: React.FC<AgentLiveStageProps> = ({
   agentStatus,
   personaName = "Agent",
   workingMsg,
-  emptyText = "Run agent untuk lihat jawaban Clara muncul live di sini.",
+  emptyText = "Run agent untuk lihat jawaban muncul live di sini.",
   compact = false,
   includeTools = true,
   conversationOnly = false,
@@ -60,7 +60,7 @@ export const AgentLiveStage: React.FC<AgentLiveStageProps> = ({
       {agentStatus === "thinking" ? (
         <div className="agentLiveTyping">
           <span className="spinner" />
-          <span>{workingMsg || "Clara lagi jalan…"}</span>
+          <span>{workingMsg || `${personaName} lagi jalan...`}</span>
         </div>
       ) : null}
     </div>

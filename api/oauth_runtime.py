@@ -935,7 +935,67 @@ def provider_catalog() -> dict[str, dict[str, Any]]:
     return HOSTED_PROVIDER_CATALOG
 
 
-def nine_router_generate_json(*, model: str, system: str, user: str) -> dict[str, Any]:
+def _post_chat_completions_stream(
+    url: str,
+    payload: dict[str, Any],
+    headers: dict[str, str],
+    *,
+    provider: str | None = None,
+    on_text_delta=None,
+) -> tuple[int, dict[str, Any] | None, str]:
+    body = json.dumps({**payload, "stream": True}).encode("utf-8")
+    req = Request(url, data=body, method="POST", headers={"Content-Type": "application/json", **headers})
+    cooldown = get_provider_cooldown_remaining(provider)
+    if cooldown > 0:
+        return 429, {"error": {"message": f"Provider masih cooldown {int(cooldown)} detik. Coba lagi sebentar atau pilih model yang lebih ringan."}}, ""
+
+    chunks: list[str] = []
+    try:
+        with urlopen(req, timeout=180) as resp:
+            for raw_line in resp:
+                line = raw_line.decode("utf-8", "replace").strip()
+                if not line or not line.startswith("data:"):
+                    continue
+                data_text = line[5:].strip()
+                if not data_text or data_text == "[DONE]":
+                    continue
+                try:
+                    event = json.loads(data_text)
+                except Exception:
+                    continue
+                choices = event.get("choices") if isinstance(event, dict) else []
+                first = choices[0] if isinstance(choices, list) and choices else {}
+                delta = first.get("delta") if isinstance(first, dict) else {}
+                content = ""
+                if isinstance(delta, dict):
+                    content = str(delta.get("content") or "")
+                if not content:
+                    message = first.get("message") if isinstance(first, dict) else {}
+                    if isinstance(message, dict):
+                        content = str(message.get("content") or "")
+                if not content:
+                    continue
+                chunks.append(content)
+                if on_text_delta:
+                    try:
+                        on_text_delta(content)
+                    except Exception:
+                        pass
+            return resp.status, {"choices": [{"message": {"content": "".join(chunks)}}]}, ""
+    except HTTPError as exc:
+        raw = exc.read().decode("utf-8", "replace")
+        try:
+            data = json.loads(raw) if raw else None
+        except Exception:
+            data = None
+        if exc.code == 429:
+            _set_provider_cooldown(provider, _extract_retry_after_seconds(exc) or 20.0)
+        return exc.code, data, raw
+    except URLError as exc:
+        return 599, None, str(exc)
+
+
+def nine_router_generate_json(*, model: str, system: str, user: str, on_text_delta=None) -> dict[str, Any]:
     credentials = _nine_router_credentials_for_model(model)
     api_key = str(credentials.get("api_key") or "")
     base_url = str(credentials.get("base_url") or "").rstrip("/")
@@ -950,21 +1010,31 @@ def nine_router_generate_json(*, model: str, system: str, user: str) -> dict[str
                 "error_message": f"Appora Free Router quota hari ini habis ({used}/{limit}). Pakai 9Router pribadi di Settings atau coba lagi besok.",
             }
     route_model = _resolve_managed_free_route_model(model, source)
-    status, data, _raw = _post_json(
-        base_url + "/chat/completions",
-        {
-            "model": route_model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "max_tokens": 2800 if _friendly_free_tier_mode() else 4000,
-            "temperature": 0.2,
-            "stream": False,
-        },
-        {"Authorization": f"Bearer {api_key}"},
-        provider=NINE_ROUTER_PROVIDER,
-    )
+    payload = {
+        "model": route_model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "max_tokens": 2800 if _friendly_free_tier_mode() else 4000,
+        "temperature": 0.2,
+        "stream": False,
+    }
+    if on_text_delta:
+        status, data, _raw = _post_chat_completions_stream(
+            base_url + "/chat/completions",
+            payload,
+            {"Authorization": f"Bearer {api_key}"},
+            provider=NINE_ROUTER_PROVIDER,
+            on_text_delta=on_text_delta,
+        )
+    else:
+        status, data, _raw = _post_json(
+            base_url + "/chat/completions",
+            payload,
+            {"Authorization": f"Bearer {api_key}"},
+            provider=NINE_ROUTER_PROVIDER,
+        )
     if status < 200 or status >= 300:
         return {"text": "", "error_message": _friendly_error(NINE_ROUTER_PROVIDER, status, data, f"9Router error {status}")}
     choices = (data or {}).get("choices") if isinstance(data, dict) else []

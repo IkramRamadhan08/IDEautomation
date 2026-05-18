@@ -2553,8 +2553,8 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "clara": {
                 "build_mode": "full-agent",
                 "name": "Clara",
-                "vibe": "autonomous product builder",
-                "default_scope": "broad, end-to-end delivery (preview-ready)",
+                "vibe": "full preview product builder",
+                "default_scope": "broad, end-to-end delivery with the browser preview as the main surface",
             },
             "raka": {
                 "build_mode": "hybrid",
@@ -2591,7 +2591,7 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "preview_audit_mode": "browser" if browser_audit_ready else "html",
             "tool_actions": ["shell", "mcp", "tool"],
             "streaming_transport": True,
-            "native_provider_token_streaming": False,
+            "native_provider_token_streaming": True,
             "friendly_free_tier_mode": friendly_free_tier,
             "context_budget_chars": context_budget,
             "provider_fallback_routing": True,
@@ -2876,8 +2876,13 @@ def agent_worker_run_get(request: Request, job_id: str | None = None, limit: int
 
 
 def _run_agent_impl(req: AgentReq, event_cb=None, job_id: str | None = None):
+    streamed_spoken = False
+
     def emit(event: str, data: dict):
+        nonlocal streamed_spoken
         payload = dict(data or {})
+        if event == "delta" and payload.get("spoken_chunk"):
+            streamed_spoken = True
         if job_id:
             payload.setdefault("job_id", job_id)
             _record_agent_job_event(job_id, event, payload)
@@ -2934,8 +2939,9 @@ def _run_agent_impl(req: AgentReq, event_cb=None, job_id: str | None = None):
             "trace": dict(pipeline.get("trace") or {}),
             "no_changes": len(out_changes) == 0 and len(normalized_actions) == 0,
         }
-        for chunk in _spoken_stream_chunks(sug_spoken):
-            emit("delta", {"spoken_chunk": chunk})
+        if not streamed_spoken:
+            for chunk in _spoken_stream_chunks(sug_spoken):
+                emit("delta", {"spoken_chunk": chunk})
         _update_agent_job_record(job_id, "completed", result=result)
         emit("done", {"message": "Beres, hasil agent siap dipakai.", "result": result})
         return result

@@ -9,7 +9,7 @@ import urllib.request
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from . import settings as settings_mod
 from .preferences import UserPreferencesRecord, get_user_preferences
@@ -558,9 +558,74 @@ def _is_fallback_worthy_error(message: str) -> bool:
     ])
 
 
-def _generate_json_once(provider: str, model: str, *, system: str, user: str) -> dict[str, Any]:
+def _extract_spoken_prefix_from_json_stream(raw: str) -> str:
+    match = re.search(r'"spoken"\s*:\s*"', raw)
+    if not match:
+        return ""
+    i = match.end()
+    out: list[str] = []
+    while i < len(raw):
+        ch = raw[i]
+        if ch == '"':
+            break
+        if ch != "\\":
+            out.append(ch)
+            i += 1
+            continue
+        i += 1
+        if i >= len(raw):
+            break
+        esc = raw[i]
+        if esc == "u":
+            hex_part = raw[i + 1:i + 5]
+            if len(hex_part) < 4 or not re.fullmatch(r"[0-9a-fA-F]{4}", hex_part):
+                break
+            out.append(chr(int(hex_part, 16)))
+            i += 5
+            continue
+        out.append({
+            '"': '"',
+            "\\": "\\",
+            "/": "/",
+            "b": "\b",
+            "f": "\f",
+            "n": "\n",
+            "r": "\r",
+            "t": "\t",
+        }.get(esc, esc))
+        i += 1
+    return "".join(out)
+
+
+class _StreamingSpokenExtractor:
+    def __init__(self, on_spoken_delta: Callable[[str], None] | None):
+        self.on_spoken_delta = on_spoken_delta
+        self.raw = ""
+        self.emitted_chars = 0
+
+    def feed(self, chunk: str) -> None:
+        if not self.on_spoken_delta:
+            return
+        self.raw += str(chunk or "")
+        spoken = _extract_spoken_prefix_from_json_stream(self.raw)
+        if len(spoken) <= self.emitted_chars:
+            return
+        delta = spoken[self.emitted_chars:]
+        self.emitted_chars = len(spoken)
+        if delta:
+            self.on_spoken_delta(delta)
+
+
+def _generate_json_once(
+    provider: str,
+    model: str,
+    *,
+    system: str,
+    user: str,
+    on_text_delta: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
     if provider == NINE_ROUTER_PROVIDER:
-        raw = nine_router_generate_json(model=model, system=system, user=user)
+        raw = nine_router_generate_json(model=model, system=system, user=user, on_text_delta=on_text_delta)
         text = str(raw.get("text") or "")
         if not text.strip():
             err = str(raw.get("error_message") or "").strip()
@@ -572,12 +637,21 @@ def _generate_json_once(provider: str, model: str, *, system: str, user: str) ->
     raise RuntimeError(f"Unsupported provider: {provider}")
 
 
-def _generate_json(*, system: str, user: str) -> tuple[str, str, dict[str, Any]]:
+def _generate_json(
+    *,
+    system: str,
+    user: str,
+    on_spoken_delta: Callable[[str], None] | None = None,
+) -> tuple[str, str, dict[str, Any]]:
     provider = NINE_ROUTER_PROVIDER
     model = _model_for_provider(provider) or "free-forever"
     require_provider_connected(provider)
     _throttle_llm_calls(provider, _effective_min_gap_seconds())
-    data = _generate_json_once(provider, model, system=system, user=user)
+    spoken_extractor = _StreamingSpokenExtractor(on_spoken_delta)
+    if on_spoken_delta:
+        data = _generate_json_once(provider, model, system=system, user=user, on_text_delta=spoken_extractor.feed)
+    else:
+        data = _generate_json_once(provider, model, system=system, user=user)
     if _normalize_smart_route(model) and isinstance(data, dict):
         data["_appora_route"] = {
             "name": _normalize_smart_route(model),
@@ -612,6 +686,7 @@ def suggest(
     extra_context: str | None = None,
     workspace_root: str | Path | None = None,
     system: str | None = None,
+    on_spoken_delta: Callable[[str], None] | None = None,
 ) -> AgentSuggestion:
     file_tree = file_tree or []
     relevant_files = relevant_files or {}
@@ -641,6 +716,7 @@ def suggest(
     provider, model, data = _generate_json(
         system=system or DEFAULT_SYSTEM_PATCH,
         user=user,
+        on_spoken_delta=on_spoken_delta,
     )
     changes = data.get("changes") or []
     if not isinstance(changes, list):

@@ -218,7 +218,7 @@ export const MonacoEditor: React.FC<MonacoEditorProps> = ({
                 <div className="emptyState">
                   <div className="emptyStateTitle">Open a file to begin</div>
                   <div className="emptyStateText">
-                    Keep the layout calm, edit deliberately, and use Assist when you want Raka to help with a focused change.
+                    Keep the layout calm, edit deliberately, and use Assist when you want focused agent help.
                   </div>
                 </div>
               </div>

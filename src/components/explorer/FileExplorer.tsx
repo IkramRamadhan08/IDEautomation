@@ -137,7 +137,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
           {explorerItems.length === 0 ? (
             <div className="emptyState compactEmptyState">
               <div className="emptyStateTitle">No files yet</div>
-              <div className="emptyStateText">Open a folder, create a file, or let Clara scaffold the project structure for you.</div>
+              <div className="emptyStateText">Open a folder, create a file, or let the agent scaffold the project structure for you.</div>
             </div>
           ) : (
             renderTree(explorerItems)

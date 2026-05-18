@@ -48,7 +48,7 @@ export const FullAgentWorkspace: React.FC<FullAgentWorkspaceProps> = ({
   const recentActions = agentActions.slice(-4);
   const toolItems = agentLiveItems.filter(isOperationalLiveItem).slice(-6);
   const statusText = agentStatus === "thinking"
-    ? workingMsg || "Clara lagi ngerakit hasilnya."
+    ? workingMsg || "Clara lagi ngerakit preview-nya."
     : agentStatus === "error"
       ? "Clara lagi bongkar problem yang muncul."
       : previewUrl
@@ -60,7 +60,7 @@ export const FullAgentWorkspace: React.FC<FullAgentWorkspaceProps> = ({
       <aside className="fullAgentRail fullAgentRailLeft pane">
         <div className="paneTitle">
           <div>
-            <div className="paneEyebrow">Autonomous lane</div>
+            <div className="paneEyebrow">Full Preview</div>
             <div className="paneHeading">{profile.personaName}</div>
           </div>
           <div className={`previewStatusPill ${previewUrl ? "live" : "idle"}`}>{profile.personaRole}</div>
@@ -70,7 +70,7 @@ export const FullAgentWorkspace: React.FC<FullAgentWorkspaceProps> = ({
             <div className="missionCardHeader">
               <div>
                 <div className="missionCardEyebrow">Mission status</div>
-                <div className="missionCardTitle">Clara pegang build dari ujung ke ujung</div>
+                <div className="missionCardTitle">Clara pegang build, preview jadi pusatnya</div>
               </div>
               <Bot size={16} />
             </div>
@@ -95,7 +95,7 @@ export const FullAgentWorkspace: React.FC<FullAgentWorkspaceProps> = ({
               <div className="missionCompactItem static">
                 <div>
                   <div className="missionCompactPrimary">Preview target</div>
-                  <div className="missionCompactMeta">{previewUrl ? "A living product surface is already available." : "Clara will push toward a runnable preview, not just code edits."}</div>
+                  <div className="missionCompactMeta">{previewUrl ? "A living product surface is already available." : "Clara will push toward a runnable full preview, not just code edits."}</div>
                 </div>
               </div>
               {attachedAssetName ? (
@@ -117,15 +117,15 @@ export const FullAgentWorkspace: React.FC<FullAgentWorkspaceProps> = ({
         <div className="missionCard fullAgentStageIntro">
           <div className="missionCardHeader">
             <div>
-              <div className="missionCardEyebrow">Build stage</div>
-              <div className="missionCardTitle">Autonomous product runway</div>
+              <div className="missionCardEyebrow">Full Preview</div>
+              <div className="missionCardTitle">Preview-first product stage</div>
             </div>
             <button className="btn primary" onClick={onEnsurePreviewRunning} disabled={!ws} title="Start preview">
               <Play size={14} />
               <span>{previewUrl ? "Refresh preview" : "Start preview"}</span>
             </button>
           </div>
-          <div className="missionPrimaryText">This lane is for handing over the product build. Clara should be able to turn a rough idea into a runnable, polished direction without babysitting every file.</div>
+          <div className="missionPrimaryText">This lane keeps the browser preview as the main surface while Clara turns a rough idea into a runnable, polished direction.</div>
         </div>
         <div className="fullAgentPreview">
           <PreviewPane ws={ws} previewUrl={previewUrl} previewFrameKey={previewFrameKey} onEnsurePreviewRunning={onEnsurePreviewRunning} />
@@ -135,7 +135,7 @@ export const FullAgentWorkspace: React.FC<FullAgentWorkspaceProps> = ({
       <aside className="fullAgentRail fullAgentRailRight pane">
         <div className="paneTitle">
           <div>
-            <div className="paneEyebrow">Delivery rail</div>
+            <div className="paneEyebrow">Preview delivery</div>
             <div className="paneHeading">What Clara just did</div>
           </div>
           <div className={`previewStatusPill ${agentStatus === "error" ? "idle" : "live"}`}>{agentStatus === "thinking" ? "Building" : agentStatus === "error" ? "Needs review" : "Latest result"}</div>

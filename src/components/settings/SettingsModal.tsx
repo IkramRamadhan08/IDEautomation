@@ -105,7 +105,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 className={`btn modeBtn ${buildModeDraft === "full-agent" ? "primary" : ""}`}
                 onClick={() => onBuildModeDraftChange("full-agent")}
               >
-                Clara
+                Clara Preview
               </button>
             </div>
           </div>

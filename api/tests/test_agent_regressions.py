@@ -1601,7 +1601,7 @@ class ProviderCatalogRegressionTests(unittest.TestCase):
             {
                 "APPORA_MANAGED_9ROUTER_BASE_URL": "https://router.appora.ai/v1",
                 "APPORA_MANAGED_9ROUTER_API_KEY": "managed-key",
-                "APPORA_FREE_DAILY_MESSAGES": "3",
+                "APPORA_FREE_DAILY_MESSAGES": "1000",
             },
             clear=False,
         ), patch("api.oauth_runtime.has_provider_secret", return_value=False), \
@@ -1629,7 +1629,7 @@ class ProviderCatalogRegressionTests(unittest.TestCase):
             {
                 "APPORA_MANAGED_9ROUTER_BASE_URL": "https://router.appora.ai/v1",
                 "APPORA_MANAGED_9ROUTER_API_KEY": "managed-key",
-                "APPORA_FREE_DAILY_MESSAGES": "3",
+                "APPORA_FREE_DAILY_MESSAGES": "1000",
             },
             clear=False,
         ), patch("api.oauth_runtime.has_provider_secret", return_value=False), \
@@ -1671,6 +1671,61 @@ class ProviderCatalogRegressionTests(unittest.TestCase):
 
         self.assertIn("\"spoken\":\"ok\"", result["text"])
         self.assertEqual(calls, ["kr/claude-sonnet-4.5"])
+
+    def test_streaming_spoken_extractor_preserves_incremental_spaces(self) -> None:
+        chunks: list[str] = []
+        extractor = agent_mod._StreamingSpokenExtractor(chunks.append)
+
+        for part in ['{"spoken":"Halo', " ", "bro", '","changes":[]}', " trailing"]:
+            extractor.feed(part)
+
+        self.assertEqual(chunks, ["Halo", " ", "bro"])
+        self.assertEqual("".join(chunks), "Halo bro")
+
+    def test_nine_router_generate_json_streams_sse_content(self) -> None:
+        from api import oauth_runtime
+
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def __iter__(self):
+                return iter([
+                    b'data: {"choices":[{"delta":{"content":"{\\"spoken\\":\\"Halo"}}]}\n\n',
+                    b'data: {"choices":[{"delta":{"content":" "}}]}\n\n',
+                    b'data: {"choices":[{"delta":{"content":"bro\\",\\"changes\\":[]}"}}]}\n\n',
+                    b"data: [DONE]\n\n",
+                ])
+
+        streamed: list[str] = []
+        with patch.dict(
+            "os.environ",
+            {
+                "APPORA_MANAGED_9ROUTER_BASE_URL": "https://router.appora.ai/v1",
+                "APPORA_MANAGED_9ROUTER_API_KEY": "managed-key",
+                "APPORA_FREE_DAILY_MESSAGES": "1000",
+            },
+            clear=False,
+        ), patch("api.oauth_runtime.has_provider_secret", return_value=False), \
+            patch("api.oauth_runtime.urlopen", return_value=FakeResponse()):
+            token = CURRENT_PROFILE_ID.set("sb-user-123")
+            try:
+                result = oauth_runtime.nine_router_generate_json(
+                    model="free-forever",
+                    system="system",
+                    user="user",
+                    on_text_delta=streamed.append,
+                )
+            finally:
+                CURRENT_PROFILE_ID.reset(token)
+
+        self.assertEqual(streamed, ['{"spoken":"Halo', " ", 'bro","changes":[]}'])
+        self.assertEqual(result["text"], '{"spoken":"Halo bro","changes":[]}')
 
     def test_managed_free_router_does_not_unlock_premium_alias_without_user_key(self) -> None:
         from api import oauth_runtime
