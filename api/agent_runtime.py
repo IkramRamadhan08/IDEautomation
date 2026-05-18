@@ -130,6 +130,7 @@ _PLAN_ONLY_REPLY_RE = re.compile(
 _STRICT_AGENTIC_BLOCKED_TEXT = (
     "Agent stopped after repeated plan-only turns without taking a concrete action."
 )
+_MAX_AUTONOMOUS_TASK_LOOPS = 2
 
 
 @dataclass(frozen=True)
@@ -289,6 +290,7 @@ class PreparedAgentContext:
     trace_mcp_tools_used: list[dict[str, Any]]
     trace_local_tools_used: list[dict[str, Any]]
     trace_plan: list[dict[str, Any]]
+    trace_task_state: dict[str, Any]
     trace_verification: list[dict[str, Any]]
     trace_warnings: list[dict[str, str]]
     suggested_mcp_actions: list[dict[str, Any]]
@@ -310,8 +312,10 @@ class AgentRuntimeState(TypedDict, total=False):
     refine_skipped: bool
     tool_iterations: int
     mcp_call_count: int
+    autonomous_iterations: int
     intent: dict[str, Any]
     plan: list[dict[str, Any]]
+    task_state: dict[str, Any]
     deep_preflight: bool
     emit: EventEmitter | None
     strict_agentic_retried: bool
@@ -345,6 +349,171 @@ def _get_project_work_state(project_root: str) -> dict[str, Any] | None:
     return state if isinstance(state, dict) else None
 
 
+def _compact_task_state_for_memory(task_state: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(task_state, dict) or not task_state:
+        return {}
+    nodes: list[dict[str, Any]] = []
+    for node in list(task_state.get("nodes") or [])[:10]:
+        if not isinstance(node, dict):
+            continue
+        nodes.append({
+            "id": str(node.get("id") or "")[:80],
+            "stage": str(node.get("stage") or "")[:80],
+            "title": str(node.get("title") or "")[:140],
+            "status": str(node.get("status") or "")[:60],
+            "detail": str(node.get("detail") or "")[:220],
+            "files": [str(item)[:180] for item in list(node.get("files") or [])[:6]],
+        })
+    return {
+        "goal": str(task_state.get("goal") or "")[:260],
+        "intent": str(task_state.get("intent") or "")[:80],
+        "status": str(task_state.get("status") or "")[:80],
+        "next_action": str(task_state.get("next_action") or "")[:260],
+        "changes": int(task_state.get("changes") or 0) if str(task_state.get("changes") or "").isdigit() else task_state.get("changes"),
+        "actions": int(task_state.get("actions") or 0) if str(task_state.get("actions") or "").isdigit() else task_state.get("actions"),
+        "blocking_checks": [str(item)[:120] for item in list(task_state.get("blocking_checks") or [])[:8]],
+        "nodes": nodes,
+    }
+
+
+def _compact_completion_report_for_memory(completion_report: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(completion_report, dict) or not completion_report:
+        return {}
+    criteria: list[dict[str, str]] = []
+    for item in list(completion_report.get("criteria") or [])[:8]:
+        if not isinstance(item, dict):
+            continue
+        criteria.append({
+            "label": str(item.get("label") or "")[:80],
+            "status": str(item.get("status") or "")[:80],
+            "detail": str(item.get("detail") or "")[:220],
+        })
+    return {
+        "ok": bool(completion_report.get("ok")),
+        "state": str(completion_report.get("state") or "")[:80],
+        "summary": str(completion_report.get("summary") or "")[:360],
+        "criteria": criteria,
+        "residual_risks": [str(item)[:220] for item in list(completion_report.get("residual_risks") or [])[:6]],
+    }
+
+
+def _compact_failure_analysis_for_memory(failure_analysis: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(failure_analysis, dict) or not failure_analysis:
+        return {}
+    failures: list[dict[str, str]] = []
+    for item in list(failure_analysis.get("failures") or [])[:4]:
+        if not isinstance(item, dict):
+            continue
+        failures.append({
+            "kind": str(item.get("kind") or "")[:80],
+            "marker": str(item.get("marker") or "")[:120],
+            "command": str(item.get("command") or "")[:180],
+            "category": str(item.get("category") or "")[:120],
+            "excerpt": str(item.get("excerpt") or "")[:360],
+        })
+    return {
+        "current_signature": str(failure_analysis.get("current_signature") or "")[:80],
+        "primary_failure": str(failure_analysis.get("primary_failure") or "")[:240],
+        "summary": str(failure_analysis.get("summary") or "")[:360],
+        "suggested_next_move": str(failure_analysis.get("suggested_next_move") or "")[:360],
+        "evidence_excerpt": str(failure_analysis.get("evidence_excerpt") or "")[:900],
+        "failures": failures,
+        "repeated_failure": bool(failure_analysis.get("repeated_failure")),
+        "repeated_count": int(failure_analysis.get("repeated_count") or 0) if str(failure_analysis.get("repeated_count") or "").isdigit() else failure_analysis.get("repeated_count"),
+    }
+
+
+def _format_persisted_task_state(task_state: dict[str, Any] | None) -> list[str]:
+    if not isinstance(task_state, dict) or not task_state:
+        return []
+    lines = [
+        f"- Task goal: {str(task_state.get('goal') or '').strip() or '(unknown)'}",
+        f"- Task status: {str(task_state.get('status') or '').strip() or '(unknown)'}",
+        f"- Next action: {str(task_state.get('next_action') or '').strip() or '(none)'}",
+    ]
+    blockers = [str(item) for item in list(task_state.get("blocking_checks") or []) if str(item).strip()]
+    if blockers:
+        lines.append(f"- Blocking checks: {', '.join(blockers[:6])}")
+    nodes = [node for node in list(task_state.get("nodes") or []) if isinstance(node, dict)]
+    if nodes:
+        node_bits = [
+            f"{node.get('stage') or node.get('id')}={node.get('status') or 'unknown'}"
+            for node in nodes[:8]
+        ]
+        lines.append(f"- Task nodes: {', '.join(node_bits)}")
+    return lines
+
+
+def _format_persisted_completion_report(completion_report: dict[str, Any] | None) -> list[str]:
+    if not isinstance(completion_report, dict) or not completion_report:
+        return []
+    lines = [
+        f"- Last execution state: {str(completion_report.get('state') or '').strip() or '(unknown)'}",
+        f"- Last execution summary: {str(completion_report.get('summary') or '').strip() or '(none)'}",
+    ]
+    criteria = [item for item in list(completion_report.get("criteria") or []) if isinstance(item, dict)]
+    if criteria:
+        lines.append("- Completion criteria: " + ", ".join(
+            f"{item.get('label') or '?'}={item.get('status') or '?'}"
+            for item in criteria[:8]
+        ))
+    risks = [str(item) for item in list(completion_report.get("residual_risks") or []) if str(item).strip()]
+    if risks:
+        lines.append(f"- Residual risks: {' | '.join(risks[:4])}")
+    return lines
+
+
+def _format_persisted_failure_analysis(failure_analysis: dict[str, Any] | None) -> list[str]:
+    if not isinstance(failure_analysis, dict) or not failure_analysis:
+        return []
+    lines = []
+    primary = str(failure_analysis.get("primary_failure") or "").strip()
+    if primary:
+        lines.append(f"- Last failure: {primary}")
+    next_move = str(failure_analysis.get("suggested_next_move") or "").strip()
+    if next_move:
+        lines.append(f"- Suggested next move: {next_move}")
+    signature = str(failure_analysis.get("current_signature") or "").strip()
+    if signature:
+        repeated = " repeated" if failure_analysis.get("repeated_failure") else ""
+        lines.append(f"- Failure signature: {signature}{repeated}")
+    evidence_excerpt = str(failure_analysis.get("evidence_excerpt") or "").strip()
+    if evidence_excerpt:
+        lines.append(f"- Failure evidence excerpt: {evidence_excerpt[:900]}")
+    failures = [item for item in list(failure_analysis.get("failures") or []) if isinstance(item, dict)]
+    if failures:
+        lines.append("- Failure evidence pack: " + " | ".join(
+            f"{item.get('kind') or '?'}:{item.get('marker') or item.get('category') or '?'}"
+            for item in failures[:4]
+        ))
+    return lines
+
+
+def _active_work_followup_directive(active: dict[str, Any]) -> str:
+    completion_report = active.get("completion_report") if isinstance(active.get("completion_report"), dict) else {}
+    failure_analysis = active.get("failure_analysis") if isinstance(active.get("failure_analysis"), dict) else {}
+    task_state = active.get("task_state") if isinstance(active.get("task_state"), dict) else {}
+    state = str(completion_report.get("state") or task_state.get("status") or "").strip().lower()
+    criteria = [item for item in list(completion_report.get("criteria") or []) if isinstance(item, dict)]
+    failed_labels = [
+        str(item.get("label") or "").strip()
+        for item in criteria
+        if str(item.get("status") or "").strip().lower() == "failed"
+    ]
+    residual_risks = [str(item) for item in list(completion_report.get("residual_risks") or []) if str(item).strip()]
+    suggested_next_move = str(failure_analysis.get("suggested_next_move") or task_state.get("next_action") or "").strip()
+    if failed_labels or residual_risks or state in {"blocked", "failed"}:
+        objective = suggested_next_move or f"clear failing criteria: {', '.join(failed_labels) or 'unknown'}"
+        return (
+            "Continuation directive: first inspect or rerun the evidence for the last failing criterion "
+            f"({', '.join(failed_labels) or state or 'unknown'}), then make the smallest concrete fix. "
+            f"Objective: {objective}"
+        )[:700]
+    if state == "complete":
+        return "Continuation directive: previous execution was complete; continue only with the user's new requested increment and keep existing passing criteria intact."
+    return "Continuation directive: continue the active implementation task and validate the next concrete increment."
+
+
 def _remember_project_work_state(
     *,
     project_root: str,
@@ -354,9 +523,15 @@ def _remember_project_work_state(
     changes: list[dict[str, Any]],
     actions: list[dict[str, Any]],
     intent: AgentIntent,
+    task_state: dict[str, Any] | None = None,
+    completion_report: dict[str, Any] | None = None,
+    failure_analysis: dict[str, Any] | None = None,
 ) -> None:
     if not (changes or actions or intent.should_write_files):
         return
+    compact_task_state = _compact_task_state_for_memory(task_state)
+    compact_completion_report = _compact_completion_report_for_memory(completion_report)
+    compact_failure_analysis = _compact_failure_analysis_for_memory(failure_analysis)
     _agent_work_state()[_project_work_state_key(project_root)] = {
         "kind": "command",
         "build_mode": build_mode,
@@ -364,6 +539,9 @@ def _remember_project_work_state(
         "last_spoken": str(spoken or "")[:500],
         "change_paths": [str(item.get("path") or "") for item in changes if isinstance(item, dict)][:12],
         "action_commands": [str(item.get("command") or "") for item in actions if isinstance(item, dict) and str(item.get("command") or "").strip()][:8],
+        "task_state": compact_task_state,
+        "completion_report": compact_completion_report,
+        "failure_analysis": compact_failure_analysis,
     }
 
 
@@ -389,6 +567,10 @@ def _intent_with_active_work_context(intent: AgentIntent, *, text: str, project_
         f"- Files touched: {', '.join(active.get('change_paths') or []) or '(none)'}",
         f"- Commands/actions: {', '.join(active.get('action_commands') or []) or '(none)'}",
         f"- Current mode: {build_mode or str(active.get('build_mode') or '')}",
+        *_format_persisted_task_state(active.get("task_state") if isinstance(active.get("task_state"), dict) else None),
+        *_format_persisted_completion_report(active.get("completion_report") if isinstance(active.get("completion_report"), dict) else None),
+        *_format_persisted_failure_analysis(active.get("failure_analysis") if isinstance(active.get("failure_analysis"), dict) else None),
+        f"- {_active_work_followup_directive(active)}",
         "- Treat this short follow-up as continuing the active implementation task, not as casual chat.",
     ])
     return inherited, context
@@ -1150,6 +1332,7 @@ def prepare_agent_context(req: Any, ws_root: Path) -> PreparedAgentContext:
         trace_mcp_tools_used=[],
         trace_local_tools_used=[],
         trace_plan=[],
+        trace_task_state={},
         trace_verification=[],
         trace_warnings=list(prep_warnings),
         suggested_mcp_actions=[],
@@ -1363,16 +1546,125 @@ def _format_plan_prompt(plan: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _summarize_task_goal(user_input: str) -> str:
+    clean = re.sub(r"\s+", " ", str(user_input or "")).strip()
+    if not clean:
+        return "Handle the current agent task."
+    return clean[:220]
+
+
+def _build_task_state(ctx: PreparedAgentContext, plan: list[dict[str, Any]], user_input: str) -> dict[str, Any]:
+    nodes: list[dict[str, Any]] = []
+    for index, item in enumerate(plan, start=1):
+        stage = str(item.get("stage") or f"step-{index}")
+        nodes.append({
+            "id": f"{index:02d}-{stage}",
+            "stage": stage,
+            "title": str(item.get("title") or stage)[:120],
+            "detail": str(item.get("detail") or "")[:260],
+            "status": "current" if index == 1 else "pending",
+            "files": list(item.get("files") or [])[:8] if isinstance(item.get("files"), list) else [],
+        })
+    return {
+        "goal": _summarize_task_goal(user_input),
+        "intent": ctx.intent.kind,
+        "status": "planned",
+        "next_action": nodes[0]["title"] if nodes else "Draft response",
+        "nodes": nodes,
+    }
+
+
+def _update_task_state_after_verify(ctx: PreparedAgentContext, state: AgentRuntimeState, checks: list[dict[str, Any]]) -> dict[str, Any]:
+    task_state = dict(ctx.trace_task_state or {})
+    nodes = [dict(item) for item in list(task_state.get("nodes") or []) if isinstance(item, dict)]
+    changes = list(state.get("changes") or [])
+    actions = list(state.get("actions") or [])
+    blocking = [item for item in checks if isinstance(item, dict) and item.get("ok") is False and item.get("name") != "full-agent-coverage"]
+
+    if not nodes:
+        nodes = [{
+            "id": "01-respond",
+            "stage": "respond",
+            "title": "Respond",
+            "detail": "Handle the user request.",
+            "status": "current",
+            "files": [],
+        }]
+
+    def mark_stage(stage: str, status: str) -> None:
+        for node in nodes:
+            if node.get("stage") == stage:
+                node["status"] = status
+
+    mark_stage("scope", "done")
+    if ctx.memory_prompt:
+        mark_stage("memory", "done")
+    if ctx.resolved_skill_ids:
+        mark_stage("skills", "done")
+    if ctx.intent.should_run_tools:
+        mark_stage("inspect", "done" if ctx.trace_local_tools_used or ctx.trace_mcp_tools_used or actions else "pending")
+    if ctx.intent.should_write_files:
+        mark_stage("implement", "done" if changes or actions else "blocked")
+        mark_stage("verify", "blocked" if blocking else "done")
+    else:
+        mark_stage("answer", "done" if not changes and not actions else "blocked")
+
+    if blocking:
+        status = "blocked"
+        next_action = f"Repair verifier failure: {blocking[0].get('name')}"
+    elif ctx.intent.should_write_files and not (changes or actions):
+        status = "blocked"
+        next_action = "Produce concrete file changes or executable actions."
+    elif ctx.intent.should_write_files:
+        status = "ready_for_execution"
+        next_action = "Apply changes and run backend validation."
+    else:
+        status = "completed"
+        next_action = "No further action required."
+
+    for node in nodes:
+        if node.get("status") == "current":
+            node["status"] = "pending"
+    if status == "blocked":
+        for node in nodes:
+            if node.get("status") == "blocked":
+                break
+        else:
+            nodes.append({
+                "id": f"{len(nodes) + 1:02d}-blocked",
+                "stage": "blocked",
+                "title": "Resolve blocker",
+                "detail": next_action,
+                "status": "blocked",
+                "files": [],
+            })
+
+    task_state.update({
+        "status": status,
+        "next_action": next_action,
+        "nodes": nodes,
+        "changes": len(changes),
+        "actions": len(actions),
+        "blocking_checks": [str(item.get("name") or "") for item in blocking[:8]],
+    })
+    ctx.trace_task_state = task_state
+    return task_state
+
+
 def _plan_node(state: AgentRuntimeState) -> AgentRuntimeState:
     ctx = state["context"]
     _emit(state, "status", {"phase": "planning", "message": "Nyusun rencana kerja biar agent nggak asal nembak..."})
     plan = _build_execution_plan(ctx, state["input"])
     ctx.trace_plan = plan
+    task_state = _build_task_state(ctx, plan, state["input"])
+    ctx.trace_task_state = task_state
     plan_prompt = _format_plan_prompt(plan)
     if plan_prompt:
         ctx.extra_context = f"{ctx.extra_context}\n\n{plan_prompt}".strip()
-    _emit(state, "delta", {"message": f"Plan siap: {len(plan)} tahap.", "plan": plan})
-    return {"context": ctx, "plan": plan}
+    _emit(state, "delta", {"message": f"Plan siap: {len(plan)} tahap.", "plan": plan, "task_state": task_state})
+    return {"context": ctx, "plan": plan, "task_state": task_state}
+
+
 
 
 def _should_run_deep_preflight(ctx: PreparedAgentContext, user_input: str) -> bool:
@@ -1495,8 +1787,11 @@ def _draft_node(state: AgentRuntimeState) -> AgentRuntimeState:
     ctx = state["context"]
     _emit(state, "status", {"phase": "context_ready", "message": "Konteks siap, agent mulai mikir..."})
     is_tool_follow_up = int(state.get("tool_iterations") or 0) > 0
+    is_autonomous_follow_up = int(state.get("autonomous_iterations") or 0) > 0
     if is_tool_follow_up:
         drafting_message = "Hasil tool udah masuk, sekarang agent nyusun solusi finalnya..."
+    elif is_autonomous_follow_up:
+        drafting_message = "Verifier/task-state masih ada blocker, agent lanjut satu putaran lagi..."
     elif ctx.intent.kind == "conversation":
         drafting_message = "Lagi nyusun balasan yang nyambung..."
     elif ctx.intent.kind == "inspection":
@@ -1520,6 +1815,13 @@ def _draft_node(state: AgentRuntimeState) -> AgentRuntimeState:
             "- Prefer producing the final implementation now.\n"
             "- Ask for another MCP tool only if the current tool result is still insufficient.\n\n"
             "Your `spoken` field should briefly state what the tool result revealed and what you are doing next.\n\n"
+        )
+    elif is_autonomous_follow_up:
+        follow_up_prefix = (
+            "AUTONOMOUS CONTINUATION MODE:\n"
+            "- A previous draft was blocked by verifier/task-state checks.\n"
+            "- Use the included blocker evidence to produce a concrete corrected output now.\n"
+            "- Do not repeat the same failing shape. Prefer a minimal complete fix that clears the blocker.\n\n"
         )
 
     intent_prefix = ctx.intent.prompt_block + "\n"
@@ -1571,7 +1873,7 @@ def _draft_node(state: AgentRuntimeState) -> AgentRuntimeState:
         "log": log,
         "changes": changes,
         "actions": actions,
-        "passes": 1,
+        "passes": max(1, int(state.get("passes") or 1), int(state.get("autonomous_iterations") or 0) + 1),
         "refine_skipped": False,
         "streamed_spoken_chars": streamed_spoken_chars,
     }
@@ -1900,8 +2202,9 @@ def _verify_node(state: AgentRuntimeState) -> AgentRuntimeState:
             "Full-agent output touches multiple files or uses project tooling." if len(changes) >= 2 or actions else "Full-agent output may be too small for an app-level task.",
         )
 
+    task_state = _update_task_state_after_verify(ctx, state, checks)
     ctx.trace_verification = checks
-    return {"context": ctx}
+    return {"context": ctx, "task_state": task_state}
 
 
 def _strict_agentic_retry_node(state: AgentRuntimeState) -> AgentRuntimeState:
@@ -1982,7 +2285,90 @@ def _strict_agentic_retry_node(state: AgentRuntimeState) -> AgentRuntimeState:
 def _route_after_verify(state: AgentRuntimeState) -> str:
     if _needs_strict_agentic_retry(state):
         return "strict_retry"
+    if _needs_autonomous_continue(state):
+        return "autonomous_continue"
     return "finalize"
+
+
+def _needs_autonomous_continue(state: AgentRuntimeState) -> bool:
+    ctx = state["context"]
+    if not ctx.intent.should_write_files:
+        return False
+    if int(state.get("autonomous_iterations") or 0) >= _MAX_AUTONOMOUS_TASK_LOOPS:
+        return False
+    task_state = ctx.trace_task_state if isinstance(ctx.trace_task_state, dict) else {}
+    if str(task_state.get("status") or "") != "blocked":
+        return False
+    blockers = [
+        str(item)
+        for item in list(task_state.get("blocking_checks") or [])
+        if str(item).strip() and str(item) != "full-agent-coverage"
+    ]
+    if not blockers and (state.get("changes") or state.get("actions")):
+        return False
+    return True
+
+
+def _autonomous_continue_node(state: AgentRuntimeState) -> AgentRuntimeState:
+    ctx = state["context"]
+    iteration = int(state.get("autonomous_iterations") or 0) + 1
+    task_state = ctx.trace_task_state if isinstance(ctx.trace_task_state, dict) else {}
+    blockers = [
+        str(item)
+        for item in list(task_state.get("blocking_checks") or [])
+        if str(item).strip()
+    ]
+    checks = [
+        item
+        for item in list(ctx.trace_verification or [])
+        if isinstance(item, dict) and item.get("ok") is False
+    ]
+    evidence = {
+        "iteration": iteration,
+        "status": task_state.get("status"),
+        "next_action": task_state.get("next_action"),
+        "blocking_checks": blockers,
+        "failed_verifier_checks": checks[:8],
+        "previous_spoken": str(state.get("spoken") or "")[:1200],
+        "previous_change_paths": [
+            str(item.get("path") or "")
+            for item in list(state.get("changes") or [])
+            if isinstance(item, dict)
+        ][:12],
+    }
+    ctx.extra_context = (
+        f"{ctx.extra_context}\n\n"
+        "AUTONOMOUS TASK LOOP EVIDENCE:\n"
+        f"{json.dumps(evidence, ensure_ascii=False, indent=2)[:6000]}\n"
+        "Continue the same user task. Clear the blocker with concrete changes/actions, or explain the exact blocker if impossible."
+    ).strip()
+    ctx.trace_warnings.append({
+        "phase": "autonomous-loop",
+        "message": f"Autonomous continuation pass {iteration} after blocker: {', '.join(blockers[:4]) or 'no-work-output'}."[:240],
+    })
+    _emit(
+        state,
+        "status",
+        {
+            "phase": "autonomous_loop",
+            "message": f"Task-state masih blocked, agent lanjut autonomous pass {iteration}...",
+        },
+    )
+    _emit(
+        state,
+        "delta",
+        {
+            "message": f"Autonomous pass {iteration}: mencoba clear blocker {', '.join(blockers[:3]) or 'work-output'}.",
+            "task_state": task_state,
+        },
+    )
+    return {
+        "context": ctx,
+        "autonomous_iterations": iteration,
+        "changes": [],
+        "actions": [],
+        "passes": max(int(state.get("passes") or 1), iteration + 1),
+    }
 
 
 def _finalize_node(state: AgentRuntimeState) -> AgentRuntimeState:
@@ -2031,6 +2417,8 @@ def _finalize_node(state: AgentRuntimeState) -> AgentRuntimeState:
         log = f"{log} memory=on".strip()
     if int(state.get("mcp_call_count") or 0) > 0:
         log = f"{log} mcp_calls={int(state.get('mcp_call_count') or 0)}".strip()
+    if int(state.get("autonomous_iterations") or 0) > 0:
+        log = f"{log} autonomous_loops={int(state.get('autonomous_iterations') or 0)}".strip()
 
     passes = int(state.get("passes") or 1)
     if passes >= 2:
@@ -2074,6 +2462,7 @@ def _finalize_node(state: AgentRuntimeState) -> AgentRuntimeState:
         "mcp_tools_used": list(ctx.trace_mcp_tools_used),
         "local_tools_used": list(ctx.trace_local_tools_used),
         "plan": list(ctx.trace_plan),
+        "task_state": dict(ctx.trace_task_state or {}),
         "verification": list(ctx.trace_verification),
         "warnings": list(ctx.trace_warnings),
         "final_confidence": "high" if ctx.trace_verification and all(item.get("ok") for item in ctx.trace_verification) else "medium",
@@ -2101,6 +2490,7 @@ _AGENT_GRAPH_BUILDER.add_node("tooling", _execute_tooling_node)
 _AGENT_GRAPH_BUILDER.add_node("refine", _refine_node)
 _AGENT_GRAPH_BUILDER.add_node("verify", _verify_node)
 _AGENT_GRAPH_BUILDER.add_node("strict_retry", _strict_agentic_retry_node)
+_AGENT_GRAPH_BUILDER.add_node("autonomous_continue", _autonomous_continue_node)
 _AGENT_GRAPH_BUILDER.add_node("finalize", _finalize_node)
 _AGENT_GRAPH_BUILDER.set_entry_point("intent")
 _AGENT_GRAPH_BUILDER.add_edge("intent", "memory")
@@ -2112,8 +2502,9 @@ _AGENT_GRAPH_BUILDER.add_edge("deep_preflight", "draft")
 _AGENT_GRAPH_BUILDER.add_conditional_edges("draft", _route_after_draft, {"tooling": "tooling", "refine": "refine", "finalize": "verify"})
 _AGENT_GRAPH_BUILDER.add_edge("tooling", "draft")
 _AGENT_GRAPH_BUILDER.add_edge("refine", "verify")
-_AGENT_GRAPH_BUILDER.add_conditional_edges("verify", _route_after_verify, {"strict_retry": "strict_retry", "finalize": "finalize"})
+_AGENT_GRAPH_BUILDER.add_conditional_edges("verify", _route_after_verify, {"strict_retry": "strict_retry", "autonomous_continue": "autonomous_continue", "finalize": "finalize"})
 _AGENT_GRAPH_BUILDER.add_edge("strict_retry", "verify")
+_AGENT_GRAPH_BUILDER.add_edge("autonomous_continue", "draft")
 _AGENT_GRAPH_BUILDER.add_edge("finalize", END)
 _AGENT_GRAPH = _AGENT_GRAPH_BUILDER.compile()
 
@@ -2127,6 +2518,7 @@ def run_agent_pipeline(req: Any, *, ws_root: Path, emit: EventEmitter | None = N
             "request_preview_url": getattr(req, "preview_url", None),
             "tool_iterations": 0,
             "mcp_call_count": 0,
+            "autonomous_iterations": 0,
             "emit": emit,
         }
     )
@@ -2151,6 +2543,7 @@ def run_agent_pipeline(req: Any, *, ws_root: Path, emit: EventEmitter | None = N
             "mcp_tools_used": list(ctx.trace_mcp_tools_used),
             "local_tools_used": list(ctx.trace_local_tools_used),
             "plan": list(ctx.trace_plan),
+            "task_state": dict(ctx.trace_task_state or {}),
             "verification": list(ctx.trace_verification),
             "warnings": list(ctx.trace_warnings),
         }),
@@ -2164,6 +2557,7 @@ def run_agent_pipeline(req: Any, *, ws_root: Path, emit: EventEmitter | None = N
             changes=final_result["changes"],
             actions=final_result["actions"],
             intent=ctx.intent,
+            task_state=dict((final_result.get("trace") or {}).get("task_state") or {}) if isinstance(final_result.get("trace"), dict) else dict(ctx.trace_task_state or {}),
         )
     except Exception as exc:
         trace = final_result.get("trace")

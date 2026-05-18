@@ -49,6 +49,25 @@ export const AgentAuditTrail: React.FC<AgentAuditTrailProps> = ({ snapshots, com
             </div>
           ) : null}
 
+          {snapshot.taskState ? (
+            <div className="agentAuditSection">
+              <div className="agentAuditSectionTitle">Task state</div>
+              <div className="agentAuditList">
+                <div className={`agentAuditRow ${snapshot.taskState.status === "blocked" ? "error" : "ok"}`}>
+                  <div className="agentAuditPrimary">{snapshot.taskState.status || "unknown"}</div>
+                  <div className="agentAuditSecondary">{shortText(snapshot.taskState.goal || "", compact ? 120 : 180)}</div>
+                  {!compact && snapshot.taskState.nextAction ? <div className="agentAuditSecondary">next: {shortText(snapshot.taskState.nextAction, 180)}</div> : null}
+                </div>
+                {snapshot.taskState.nodes?.slice(0, compact ? 4 : 8).map((node) => (
+                  <div key={`${snapshot.id}-task-${node.id}`} className={`agentAuditRow ${node.status === "blocked" ? "error" : node.status === "done" ? "ok" : ""}`}>
+                    <div className="agentAuditPrimary">{node.title}</div>
+                    <div className="agentAuditSecondary">{node.status} • {node.stage} • {shortText(node.detail, compact ? 120 : 180)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
           {snapshot.contextFiles && snapshot.contextFiles.length > 0 ? (
             <div className="agentAuditSection">
               <div className="agentAuditSectionTitle">Context files</div>
@@ -98,6 +117,35 @@ export const AgentAuditTrail: React.FC<AgentAuditTrailProps> = ({ snapshots, com
                     <div className="agentAuditPrimary">{run.label}</div>
                     <div className="agentAuditSecondary">{run.ok ? "ok" : "failed"} • ran={run.ran} • failed={run.failed}</div>
                     {!compact && run.commands.length > 0 ? <div className="agentAuditSecondary">commands: {run.commands.join(" • ")}</div> : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {snapshot.executionSteps && snapshot.executionSteps.length > 0 ? (
+            <div className="agentAuditSection">
+              <div className="agentAuditSectionTitle">Execution graph</div>
+              <div className="agentAuditList">
+                {snapshot.executionSteps.map((step, index) => (
+                  <div key={`${snapshot.id}-execution-${step.id || index}`} className={`agentAuditRow ${step.ok ? "ok" : "error"}`}>
+                    <div className="agentAuditPrimary">{step.label}</div>
+                    <div className="agentAuditSecondary">{step.kind} • {step.ok ? "ok" : "failed"} • {shortText(step.detail, compact ? 120 : 180)}</div>
+                    {!compact && (step.repeatedFailure || step.failureSignature) ? (
+                      <div className="agentAuditSecondary">
+                        {step.repeatedFailure ? "repeated failure detected" : "failure signature"}{step.failureSignature ? ` • ${step.failureSignature}` : ""}
+                      </div>
+                    ) : null}
+                    {!compact && step.diagnosisSummary ? <div className="agentAuditSecondary">{shortText(step.diagnosisSummary, 220)}</div> : null}
+                    {!compact && step.suggestedNextMove ? <div className="agentAuditSecondary">next: {shortText(step.suggestedNextMove, 220)}</div> : null}
+                    {!compact && step.completionCriteria && step.completionCriteria.length > 0 ? (
+                      <div className="agentAuditSecondary">
+                        criteria: {step.completionCriteria.map((item) => `${item.label}:${item.status}`).join(" • ")}
+                      </div>
+                    ) : null}
+                    {!compact && step.residualRisks && step.residualRisks.length > 0 ? (
+                      <div className="agentAuditSecondary">risk: {shortText(step.residualRisks.join(" • "), 220)}</div>
+                    ) : null}
                   </div>
                 ))}
               </div>

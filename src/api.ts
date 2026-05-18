@@ -849,6 +849,23 @@ export type AgentRunTrace = {
     detail: string;
     files?: string[];
   }>;
+  task_state?: {
+    goal?: string;
+    intent?: string;
+    status?: string;
+    next_action?: string;
+    changes?: number;
+    actions?: number;
+    blocking_checks?: string[];
+    nodes?: Array<{
+      id: string;
+      stage: string;
+      title: string;
+      detail: string;
+      status: string;
+      files?: string[];
+    }>;
+  };
   verification?: Array<{
     name: string;
     ok: boolean;
@@ -874,9 +891,20 @@ export type AgentResult = {
     ok: boolean;
     skipped?: boolean;
     reason?: string;
+    steps?: Array<{
+      id: string;
+      kind: string;
+      label: string;
+      ok: boolean;
+      detail: string;
+      created_at?: string;
+      [key: string]: unknown;
+    }>;
     apply?: Record<string, unknown> | null;
     shell?: Record<string, unknown> | null;
     validation?: ProjectValidationRun | null;
+    preview_audit?: PreviewAuditResult | Record<string, unknown> | null;
+    repairs?: Array<Record<string, unknown>>;
   };
 };
 export type AgentJob = {

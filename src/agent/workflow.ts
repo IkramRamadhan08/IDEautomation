@@ -33,6 +33,7 @@ type ShellActionRun = TerminalRunResult & {
 
 type RunEvidence = {
   validationRuns: AgentAuditSnapshot["validationRuns"];
+  executionSteps: AgentAuditSnapshot["executionSteps"];
   appliedPatches: AgentAuditSnapshot["appliedPatches"];
   shellRuns: AgentAuditSnapshot["shellRuns"];
   previewAudits: AgentAuditSnapshot["previewAudits"];
@@ -44,9 +45,24 @@ type BackendExecutionResult = {
   auto_execute?: boolean;
   skipped?: boolean;
   reason?: unknown;
+  steps?: Array<{
+    id?: unknown;
+    kind?: unknown;
+    label?: unknown;
+    ok?: unknown;
+    detail?: unknown;
+    created_at?: unknown;
+    failure_analysis?: unknown;
+    pre_repair_failure_analysis?: unknown;
+    repeated_failure?: unknown;
+    state?: unknown;
+    criteria?: unknown;
+    residual_risks?: unknown;
+  }>;
   apply?: Record<string, unknown> | null;
   shell?: Record<string, unknown> | null;
   validation?: ProjectValidationRun | null;
+  preview_audit?: (PreviewAuditResult & { skipped?: boolean }) | Record<string, unknown> | null;
 };
 
 type ApplyPreflightConflict = {
@@ -122,6 +138,8 @@ const PHASE_LABELS: Record<string, string> = {
   executing_apply: "Backend harness menerapkan patch…",
   executing_shell: "Backend harness menjalankan command…",
   executing_validation: "Backend harness memvalidasi hasil…",
+  executing_preview_audit: "Backend harness mengaudit preview…",
+  autonomous_loop: "Agent lanjut autonomous pass…",
   diffing: "Lagi nyusun patch yang rapi…",
 };
 
@@ -370,8 +388,19 @@ function toAuditSnapshot(label: string, trace: AgentRunTrace, makeId: () => stri
       text: tool.text,
     })),
     plan: trace.plan || [],
+    taskState: trace.task_state ? {
+      goal: trace.task_state.goal,
+      intent: trace.task_state.intent,
+      status: trace.task_state.status,
+      nextAction: trace.task_state.next_action,
+      changes: trace.task_state.changes,
+      actions: trace.task_state.actions,
+      blockingChecks: trace.task_state.blocking_checks || [],
+      nodes: trace.task_state.nodes || [],
+    } : undefined,
     verification: trace.verification || [],
     validationRuns: evidence?.validationRuns || [],
+    executionSteps: evidence?.executionSteps || [],
     appliedPatches: evidence?.appliedPatches || [],
     shellRuns: evidence?.shellRuns || [],
     previewAudits: evidence?.previewAudits || [],
@@ -389,13 +418,23 @@ function pushRunTrace(pushAgentLiveItem: WorkflowArgs["pushAgentLiveItem"], trac
   const mcpSeenCount = trace.mcp_servers.length;
   const planCount = trace.plan?.length || 0;
   const verificationCount = trace.verification?.length || 0;
+  const taskStatus = trace.task_state?.status;
 
   pushAgentLiveItem({
     role: "tool",
     tone: "default",
     text: `Run trace: plan ${planCount}, verify ${verificationCount}, memory ${memoryCount}, skill ${skillCount}, MCP used ${mcpUsedCount}.`,
-    meta: [`passes=${trace.passes}`, mcpSeenCount > 0 ? `mcp available=${mcpSeenCount}` : null].filter(Boolean).join(" • ") || null,
+    meta: [`passes=${trace.passes}`, taskStatus ? `task=${taskStatus}` : null, mcpSeenCount > 0 ? `mcp available=${mcpSeenCount}` : null].filter(Boolean).join(" • ") || null,
   });
+
+  if (trace.task_state?.next_action) {
+    pushAgentLiveItem({
+      role: "tool",
+      tone: trace.task_state.status === "blocked" ? "error" : "default",
+      text: "Task state agent run ini.",
+      meta: `${trace.task_state.status || "unknown"} • next: ${trace.task_state.next_action}`,
+    });
+  }
 
   if (memoryCount > 0) {
     pushAgentLiveItem({
@@ -529,6 +568,7 @@ export async function runAgentWorkflow({
   let combinedActions: AgentAction[] = [];
   const evidence: RunEvidence = {
     validationRuns: [],
+    executionSteps: [],
     appliedPatches: [],
     shellRuns: [],
     previewAudits: [],
@@ -566,6 +606,7 @@ export async function runAgentWorkflow({
     setAgentAuditTrail((prev) => prev.map((snapshot) => ({
       ...snapshot,
       validationRuns: evidence.validationRuns,
+      executionSteps: evidence.executionSteps,
       appliedPatches: evidence.appliedPatches,
       shellRuns: evidence.shellRuns,
       previewAudits: evidence.previewAudits,
@@ -585,6 +626,50 @@ export async function runAgentWorkflow({
         meta: typeof execution.reason === "string" ? execution.reason : "execution skipped",
       });
       return { shellResults: [], validation: null };
+    }
+    if (Array.isArray(execution.steps) && execution.steps.length > 0) {
+      const existingIds = new Set((evidence.executionSteps || []).map((step) => step.id));
+      const nextSteps = execution.steps
+        .map((step, index) => {
+          const failureAnalysis = step.failure_analysis && typeof step.failure_analysis === "object"
+            ? step.failure_analysis as Record<string, unknown>
+            : step.pre_repair_failure_analysis && typeof step.pre_repair_failure_analysis === "object"
+              ? step.pre_repair_failure_analysis as Record<string, unknown>
+              : null;
+          return {
+            id: typeof step.id === "string" ? step.id : `backend-step-${index}`,
+            kind: typeof step.kind === "string" ? step.kind : "execution",
+            label: typeof step.label === "string" ? step.label : "Backend execution",
+            ok: step.ok === true,
+            detail: typeof step.detail === "string" ? step.detail : "",
+            createdAt: typeof step.created_at === "string" ? step.created_at : undefined,
+            repeatedFailure: step.repeated_failure === true || failureAnalysis?.repeated_failure === true,
+            failureSignature: typeof failureAnalysis?.current_signature === "string" ? failureAnalysis.current_signature : undefined,
+            diagnosisSummary: typeof failureAnalysis?.summary === "string" ? failureAnalysis.summary : undefined,
+            suggestedNextMove: typeof failureAnalysis?.suggested_next_move === "string" ? failureAnalysis.suggested_next_move : undefined,
+            completionState: typeof step.state === "string" ? step.state : undefined,
+            completionCriteria: Array.isArray(step.criteria)
+              ? step.criteria
+                  .filter((item): item is Record<string, unknown> => item !== null && typeof item === "object")
+                  .map((item) => ({
+                    label: String(item.label || ""),
+                    status: String(item.status || ""),
+                    detail: String(item.detail || ""),
+                  }))
+              : undefined,
+            residualRisks: Array.isArray(step.residual_risks) ? step.residual_risks.map(String) : undefined,
+          };
+        })
+        .filter((step) => !existingIds.has(step.id));
+      if (nextSteps.length > 0) {
+        evidence.executionSteps?.push(...nextSteps);
+        pushAgentLiveItem({
+          role: "tool",
+          tone: nextSteps.every((step) => step.ok) ? "success" : "error",
+          text: `Backend execution graph mencatat ${nextSteps.length} langkah.`,
+          meta: nextSteps.map((step) => `${step.kind}:${step.ok ? "ok" : "fail"}`).join(" • "),
+        });
+      }
     }
     const apply = execution.apply && typeof execution.apply === "object" ? execution.apply as Record<string, unknown> : null;
     if (apply && apply.applied === true) {
@@ -646,6 +731,27 @@ export async function runAgentWorkflow({
         tone: validation.ok ? "success" : "error",
         text: validation.ok ? "Backend validation lolos." : "Backend validation nemu problem yang perlu repair.",
         meta: validation.commands.join(" • ") || null,
+      });
+    }
+    const previewAudit = execution.preview_audit && typeof execution.preview_audit === "object"
+      ? execution.preview_audit as PreviewAuditResult & { skipped?: boolean }
+      : null;
+    if (previewAudit && !previewAudit.skipped) {
+      const blocking = previewBlockingIssueCount(previewAudit);
+      const warnings = previewWarningIssueCount(previewAudit);
+      evidence.previewAudits?.push({
+        label: "Backend preview audit",
+        ok: previewAudit.ok,
+        auditMode: previewAudit.audit_mode,
+        blocking,
+        warnings,
+        summary: previewAudit.summary,
+      });
+      pushAgentLiveItem({
+        role: "tool",
+        tone: previewAudit.ok ? "success" : "error",
+        text: previewAudit.ok ? "Backend preview audit lolos." : "Backend preview audit nemu issue visual/runtime.",
+        meta: previewAudit.summary || null,
       });
     }
     refreshAuditTrailEvidence();

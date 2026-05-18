@@ -61,6 +61,23 @@ export type AgentAuditSnapshot = {
     detail: string;
     files?: string[];
   }>;
+  taskState?: {
+    goal?: string;
+    intent?: string;
+    status?: string;
+    nextAction?: string;
+    changes?: number;
+    actions?: number;
+    blockingChecks?: string[];
+    nodes?: Array<{
+      id: string;
+      stage: string;
+      title: string;
+      detail: string;
+      status: string;
+      files?: string[];
+    }>;
+  };
   verification?: Array<{
     name: string;
     ok: boolean;
@@ -72,6 +89,21 @@ export type AgentAuditSnapshot = {
     ran: number;
     failed: number;
     commands: string[];
+  }>;
+  executionSteps?: Array<{
+    id: string;
+    kind: string;
+    label: string;
+    ok: boolean;
+    detail: string;
+    createdAt?: string;
+    repeatedFailure?: boolean;
+    failureSignature?: string;
+    diagnosisSummary?: string;
+    suggestedNextMove?: string;
+    completionState?: string;
+    completionCriteria?: Array<{ label: string; status: string; detail: string }>;
+    residualRisks?: string[];
   }>;
   appliedPatches?: Array<{
     label: string;

@@ -52,7 +52,7 @@ from api.settings_router import build_settings_router
 from api.fs import list_tree, read_text, write_text, diff_text, safe_join
 from api.agent_mcp import discover_mcp_servers, list_mcp_tools
 from api.agent_memory import get_agent_memory_overview, sync_project_docs_to_supabase
-from api.agent_runtime import run_agent_pipeline
+from api.agent_runtime import _remember_project_work_state, run_agent_pipeline
 from api.agent_skills import detect_project_stack
 from api.agent_tools import list_local_tools
 
@@ -1062,6 +1062,38 @@ def _build_preview_audit_result(
         f"blocking={blocking_count}",
         f"warnings={warning_count}",
     ]
+    viewport = snapshot.get("viewport") if isinstance(snapshot.get("viewport"), dict) else {}
+    mobile_viewport = snapshot.get("mobile_viewport") if isinstance(snapshot.get("mobile_viewport"), dict) else {}
+    visual_summary = {
+        "mode": audit_mode,
+        "title": title,
+        "primary_heading": headings[0] if headings else "",
+        "desktop_viewport": viewport,
+        "mobile_viewport": mobile_viewport,
+        "desktop_overflow_x": bool(snapshot.get("desktop_overflow_x")),
+        "mobile_overflow_x": bool(snapshot.get("mobile_overflow_x")),
+        "word_count": word_count,
+        "interactive_count": interactive_count,
+        "button_labels": buttons[:6],
+        "link_labels": links[:6],
+        "top_blockers": [item for item in issue_details if item.get("severity") == "blocking"][:6],
+        "top_warnings": [item for item in issue_details if item.get("severity") == "warning"][:6],
+        "runtime_errors": [*page_errors, *console_errors][:8],
+        "excerpt": excerpt[:600],
+    }
+    repair_brief_parts = [
+        f"Preview audit mode={audit_mode}, blocking={blocking_count}, warnings={warning_count}.",
+        f"Title: {title or '(missing)'}; H1: {headings[0] if headings else '(missing)'}.",
+    ]
+    if bool(snapshot.get("mobile_overflow_x")):
+        repair_brief_parts.append("Mobile viewport has horizontal overflow.")
+    if page_errors or console_errors:
+        repair_brief_parts.append(f"Runtime messages: {' | '.join([*page_errors, *console_errors][:3])}")
+    if issue_details:
+        repair_brief_parts.append("Top issues: " + " | ".join(
+            f"{item.get('severity')} {item.get('category')}: {item.get('detail')}"
+            for item in issue_details[:5]
+        ))
 
     return {
         "ok": blocking_count == 0,
@@ -1086,14 +1118,16 @@ def _build_preview_audit_result(
         "mobile_text_overflow_nodes": mobile_text_overflow_nodes,
         "fixed_overlays": fixed_overlays,
         "mobile_fixed_overlays": mobile_fixed_overlays,
-        "viewport": snapshot.get("viewport") if isinstance(snapshot.get("viewport"), dict) else {},
-        "mobile_viewport": snapshot.get("mobile_viewport") if isinstance(snapshot.get("mobile_viewport"), dict) else {},
+        "viewport": viewport,
+        "mobile_viewport": mobile_viewport,
         "console_errors": console_errors,
         "page_errors": page_errors,
         "runtime_warnings": runtime_warnings or [],
         "issues": issues,
         "issue_details": issue_details,
         "quality_checks": quality_checks,
+        "visual_summary": visual_summary,
+        "repair_brief": " ".join(repair_brief_parts)[:2000],
         "excerpt": excerpt,
         "summary": "; ".join(summary_parts),
     }
@@ -3138,15 +3172,352 @@ def _execution_needs_repair(execution: dict[str, object]) -> bool:
     validation = execution.get("validation")
     if isinstance(validation, dict) and validation.get("ok") is False:
         return True
+    preview_audit = execution.get("preview_audit")
+    if isinstance(preview_audit, dict) and preview_audit.get("ok") is False and not preview_audit.get("skipped"):
+        return True
     return False
 
 
+def _failure_text_marker(text: object) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    lowered = raw.lower()
+    markers = [
+        "syntaxerror",
+        "typeerror",
+        "referenceerror",
+        "modulenotfounderror",
+        "module not found",
+        "cannot find module",
+        "eslint",
+        "failed",
+        "error",
+    ]
+    for marker in markers:
+        if marker in lowered:
+            return marker.replace(" ", "-")
+    first_line = next((line.strip() for line in raw.splitlines() if line.strip()), "")
+    return first_line[:120]
+
+
+def _failure_evidence_excerpt(*values: object, max_chars: int = 700) -> str:
+    lines: list[str] = []
+    for value in values:
+        raw = str(value or "").strip()
+        if not raw:
+            continue
+        for line in raw.splitlines():
+            clean = line.strip()
+            if clean:
+                lines.append(clean)
+            if len(lines) >= 12:
+                break
+        if len(lines) >= 12:
+            break
+    return "\n".join(lines)[:max_chars]
+
+
+def _failed_command_signatures(container: object, *, kind: str) -> list[dict[str, object]]:
+    if not isinstance(container, dict):
+        return []
+    signatures: list[dict[str, object]] = []
+    for result in list(container.get("results") or []):
+        if not isinstance(result, dict) or result.get("ok") is not False:
+            continue
+        command = str(result.get("command") or "").strip()
+        stderr = result.get("stderr")
+        stdout = result.get("stdout")
+        marker = _failure_text_marker(stderr) or _failure_text_marker(stdout) or f"returncode-{result.get('returncode')}"
+        excerpt = _failure_evidence_excerpt(stderr, stdout)
+        signatures.append({
+            "kind": kind,
+            "command": command[:180],
+            "returncode": result.get("returncode"),
+            "marker": marker,
+            "excerpt": excerpt,
+            "signature": f"{kind}:{command}:{marker}",
+        })
+    return signatures
+
+
+def _failure_analysis_summary(signatures: list[dict[str, object]], *, repeated_failure: bool, repeated_count: int) -> dict[str, object]:
+    if not signatures:
+        return {
+            "primary_failure": "",
+            "summary": "No failing apply, shell, validation, or preview signal was found.",
+            "suggested_next_move": "Continue normal execution and verify with the project's validation command.",
+        }
+
+    first = signatures[0]
+    kind = str(first.get("kind") or "failure")
+    marker = str(first.get("marker") or "unknown").strip() or "unknown"
+    command = str(first.get("command") or "").strip()
+    category = str(first.get("category") or "").strip()
+    path = str(first.get("path") or "").strip()
+
+    if kind == "validation":
+        primary = f"validation failed: {marker}"
+        if command:
+            primary = f"{primary} in `{command}`"
+        next_move = "Read the failing validation output, edit the source that causes it, then rerun the same validation command."
+    elif kind == "shell":
+        primary = f"shell action failed: {marker}"
+        if command:
+            primary = f"{primary} in `{command}`"
+        next_move = "Fix the command precondition or project files before rerunning the shell action."
+    elif kind == "apply":
+        primary = f"apply failed: {marker}"
+        if path:
+            primary = f"{primary} at `{path}`"
+        next_move = "Read the latest file content and generate a fresh patch against current state."
+    elif kind == "preview_audit":
+        primary = f"preview audit failed: {category or marker}"
+        next_move = "Fix the visible UI/runtime issue, restart or refresh preview, then rerun preview audit."
+    else:
+        primary = f"{kind} failed: {marker}"
+        next_move = "Inspect the failing evidence and make the smallest concrete fix before validating again."
+
+    if repeated_failure:
+        next_move = f"Repeated failure seen {repeated_count + 1} times. Change strategy: inspect a different source of evidence before editing again. {next_move}"
+
+    return {
+        "primary_failure": primary[:240],
+        "summary": f"{primary}. failures={len(signatures)} repeated={bool(repeated_failure)}"[:500],
+        "suggested_next_move": next_move[:500],
+    }
+
+
+def _execution_failure_analysis(execution: dict[str, object]) -> dict[str, object]:
+    signatures: list[dict[str, object]] = []
+    apply_result = execution.get("apply")
+    if isinstance(apply_result, dict) and apply_result.get("ok") is False:
+        conflicts = list(apply_result.get("conflicts") or [])
+        if conflicts:
+            for conflict in conflicts[:8]:
+                if not isinstance(conflict, dict):
+                    continue
+                path = str(conflict.get("path") or "").strip()
+                reason = str(conflict.get("reason") or conflict.get("message") or "conflict").strip()
+                signatures.append({
+                    "kind": "apply",
+                    "path": path,
+                    "marker": reason[:120],
+                    "excerpt": _failure_evidence_excerpt(reason),
+                    "signature": f"apply:{path}:{reason[:120]}",
+                })
+        else:
+            signatures.append({"kind": "apply", "marker": "apply-failed", "excerpt": "Apply harness reported failure without conflict details.", "signature": "apply:failed"})
+
+    signatures.extend(_failed_command_signatures(execution.get("shell"), kind="shell"))
+    signatures.extend(_failed_command_signatures(execution.get("validation"), kind="validation"))
+
+    preview_audit = execution.get("preview_audit")
+    if isinstance(preview_audit, dict) and preview_audit.get("ok") is False and not preview_audit.get("skipped"):
+        for issue in list(preview_audit.get("issue_details") or [])[:8]:
+            if not isinstance(issue, dict):
+                continue
+            severity = str(issue.get("severity") or "issue").strip()
+            category = str(issue.get("category") or "preview").strip()
+            detail_marker = _failure_text_marker(issue.get("detail")) or str(issue.get("detail") or "")[:120]
+            excerpt = _failure_evidence_excerpt(issue.get("detail"), issue.get("suggested_fix"))
+            signatures.append({
+                "kind": "preview_audit",
+                "severity": severity,
+                "category": category,
+                "marker": detail_marker,
+                "excerpt": excerpt,
+                "signature": f"preview:{severity}:{category}:{detail_marker}",
+            })
+
+    signature_values = [str(item.get("signature") or "") for item in signatures if str(item.get("signature") or "").strip()]
+    current_signature = _sha256_text("\n".join(signature_values))[:16] if signature_values else ""
+
+    prior_signatures: list[str] = []
+    repairs = execution.get("repairs")
+    if isinstance(repairs, list):
+        for repair in repairs:
+            if not isinstance(repair, dict):
+                continue
+            repair_execution = repair.get("execution")
+            if not isinstance(repair_execution, dict):
+                continue
+            repair_analysis = repair_execution.get("failure_analysis")
+            if isinstance(repair_analysis, dict):
+                sig = str(repair_analysis.get("current_signature") or "").strip()
+            else:
+                sig = str(_execution_failure_analysis(repair_execution).get("current_signature") or "").strip()
+            if sig:
+                prior_signatures.append(sig)
+
+    repeated_count = prior_signatures.count(current_signature) if current_signature else 0
+    summary = _failure_analysis_summary(signatures, repeated_failure=bool(current_signature and repeated_count > 0), repeated_count=repeated_count)
+    return {
+        "current_signature": current_signature,
+        "failure_count": len(signatures),
+        "failures": signatures[:12],
+        "evidence_excerpt": "\n---\n".join(
+            str(item.get("excerpt") or "").strip()
+            for item in signatures[:4]
+            if str(item.get("excerpt") or "").strip()
+        )[:1800],
+        "primary_failure": summary["primary_failure"],
+        "summary": summary["summary"],
+        "suggested_next_move": summary["suggested_next_move"],
+        "prior_signatures": prior_signatures[-5:],
+        "repeated_failure": bool(current_signature and repeated_count > 0),
+        "repeated_count": repeated_count,
+    }
+
+
+def _criterion(label: str, status: str, detail: str) -> dict[str, str]:
+    return {
+        "label": label,
+        "status": status,
+        "detail": str(detail or "")[:500],
+    }
+
+
+def _execution_completion_report(execution: dict[str, object]) -> dict[str, object]:
+    criteria: list[dict[str, str]] = []
+    residual_risks: list[str] = []
+    ok = bool(execution.get("ok"))
+
+    apply_result = execution.get("apply")
+    if isinstance(apply_result, dict):
+        criteria.append(_criterion(
+            "apply",
+            "passed" if apply_result.get("ok") else "failed",
+            f"applied={apply_result.get('applied')} count={apply_result.get('count')}",
+        ))
+    else:
+        criteria.append(_criterion("apply", "skipped", "No file changes were produced for backend apply."))
+
+    shell_result = execution.get("shell")
+    if isinstance(shell_result, dict):
+        failed = sum(1 for item in list(shell_result.get("results") or []) if isinstance(item, dict) and not item.get("ok"))
+        criteria.append(_criterion(
+            "shell",
+            "passed" if shell_result.get("ok") else "failed",
+            f"ran={shell_result.get('ran')} failed={failed}",
+        ))
+    else:
+        criteria.append(_criterion("shell", "skipped", "No shell actions were requested."))
+
+    validation = execution.get("validation")
+    if isinstance(validation, dict):
+        criteria.append(_criterion(
+            "validation",
+            "passed" if validation.get("ok") else "failed",
+            f"ran={validation.get('ran')} failed={validation.get('failed')} commands={', '.join(str(item) for item in list(validation.get('commands') or [])[:4])}",
+        ))
+    else:
+        criteria.append(_criterion("validation", "skipped", "No validation command was inferred for this project/run."))
+        if execution.get("apply") is not None:
+            residual_risks.append("No validation command was inferred after file changes.")
+
+    preview_audit = execution.get("preview_audit")
+    if isinstance(preview_audit, dict):
+        if preview_audit.get("skipped"):
+            criteria.append(_criterion("preview", "skipped", str(preview_audit.get("reason") or preview_audit.get("summary") or "Preview audit skipped.")))
+            residual_risks.append("Preview audit was skipped.")
+        else:
+            issue_details = list(preview_audit.get("issue_details") or [])
+            blocking = sum(1 for item in issue_details if isinstance(item, dict) and item.get("severity") == "blocking")
+            warnings = sum(1 for item in issue_details if isinstance(item, dict) and item.get("severity") == "warning")
+            criteria.append(_criterion(
+                "preview",
+                "passed" if preview_audit.get("ok") else "failed",
+                f"mode={preview_audit.get('audit_mode')} blocking={blocking} warnings={warnings}",
+            ))
+            if warnings and preview_audit.get("ok"):
+                residual_risks.append(f"Preview audit still has {warnings} warning(s).")
+    else:
+        criteria.append(_criterion("preview", "skipped", "No preview surface or preview URL was available for this run."))
+
+    repairs = execution.get("repairs")
+    repaired_success = False
+    if isinstance(repairs, list) and repairs:
+        last_execution = repairs[-1].get("execution") if isinstance(repairs[-1], dict) else None
+        repaired_success = bool(isinstance(last_execution, dict) and last_execution.get("ok"))
+        criteria.append(_criterion(
+            "repair-loop",
+            "passed" if repaired_success else "failed",
+            f"attempts={len(repairs)}",
+        ))
+    else:
+        criteria.append(_criterion("repair-loop", "skipped", "No backend repair pass was needed."))
+
+    if ok and repaired_success:
+        for item in criteria:
+            if item.get("status") == "failed" and item.get("label") != "repair-loop":
+                item["status"] = "superseded"
+                item["detail"] = f"{item.get('detail', '')} (superseded by successful repair pass)"[:500]
+
+    failure_analysis = execution.get("failure_analysis")
+    if not ok and isinstance(failure_analysis, dict):
+        summary = str(failure_analysis.get("summary") or "").strip()
+        next_move = str(failure_analysis.get("suggested_next_move") or "").strip()
+        if summary:
+            residual_risks.append(summary)
+        if next_move:
+            residual_risks.append(f"Next move: {next_move}")
+
+    failed_labels = [item["label"] for item in criteria if item.get("status") == "failed"]
+    completion_state = "complete" if ok else "blocked"
+    if completion_state == "complete":
+        summary = "Complete: backend execution criteria passed or were intentionally skipped."
+    else:
+        summary = f"Blocked: {', '.join(failed_labels) or 'execution'} still failing."
+
+    return {
+        "ok": ok,
+        "state": completion_state,
+        "summary": summary,
+        "criteria": criteria,
+        "residual_risks": residual_risks[:8],
+    }
+
+
 def _execution_repair_report(execution: dict[str, object], max_chars: int = 9000) -> str:
+    repairs = execution.get("repairs")
+    repair_summaries = []
+    if isinstance(repairs, list):
+        for index, repair in enumerate(repairs[-3:], start=max(1, len(repairs) - 2)):
+            if not isinstance(repair, dict):
+                continue
+            repair_execution = repair.get("execution")
+            repair_summaries.append({
+                "index": index,
+                "changes": len(list(repair.get("changes") or [])),
+                "actions": len(list(repair.get("actions") or [])),
+                "execution_ok": repair_execution.get("ok") if isinstance(repair_execution, dict) else None,
+                "validation": repair_execution.get("validation") if isinstance(repair_execution, dict) else None,
+                "shell": repair_execution.get("shell") if isinstance(repair_execution, dict) else None,
+                "preview_audit": repair_execution.get("preview_audit") if isinstance(repair_execution, dict) else None,
+                "failure_analysis": repair_execution.get("failure_analysis") if isinstance(repair_execution, dict) else None,
+            })
+    preview_audit = execution.get("preview_audit")
+    preview_repair = None
+    if isinstance(preview_audit, dict):
+        preview_repair = {
+            "ok": preview_audit.get("ok"),
+            "skipped": preview_audit.get("skipped"),
+            "summary": preview_audit.get("summary"),
+            "repair_brief": preview_audit.get("repair_brief"),
+            "visual_summary": preview_audit.get("visual_summary"),
+            "issue_details": list(preview_audit.get("issue_details") or [])[:8],
+        }
     report = json.dumps(
         {
             "apply": execution.get("apply"),
             "shell": execution.get("shell"),
             "validation": execution.get("validation"),
+            "preview_audit": preview_repair,
+            "failure_analysis": execution.get("failure_analysis") or _execution_failure_analysis(execution),
+            "completion_report": execution.get("completion_report"),
+            "previous_repairs": repair_summaries,
+            "last_repair_execution": execution.get("last_repair_execution"),
         },
         ensure_ascii=False,
         indent=2,
@@ -3154,15 +3525,315 @@ def _execution_repair_report(execution: dict[str, object], max_chars: int = 9000
     return report[:max_chars]
 
 
-def _run_backend_repair_pass(req: AgentReq, execution: dict[str, object], emit) -> dict[str, object]:
+def _execution_changed_paths(execution: dict[str, object]) -> list[str]:
+    paths: list[str] = []
+    apply_result = execution.get("apply")
+    if isinstance(apply_result, dict):
+        paths.extend(str(item or "").strip() for item in list(apply_result.get("paths") or []))
+        for conflict in list(apply_result.get("conflicts") or []):
+            if isinstance(conflict, dict):
+                paths.append(str(conflict.get("path") or "").strip())
+    repairs = execution.get("repairs")
+    if isinstance(repairs, list):
+        for repair in repairs[-3:]:
+            if not isinstance(repair, dict):
+                continue
+            for change in list(repair.get("changes") or []):
+                if isinstance(change, dict):
+                    paths.append(str(change.get("path") or "").strip())
+            repair_execution = repair.get("execution")
+            if isinstance(repair_execution, dict):
+                paths.extend(_execution_changed_paths(repair_execution))
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for path in paths:
+        clean = path.strip().lstrip("/")
+        if not clean or clean in seen:
+            continue
+        seen.add(clean)
+        deduped.append(clean)
+    return deduped[:8]
+
+
+_FAILURE_PATH_RE = re.compile(r"(?P<path>(?:[A-Za-z]:)?/?[\w@./:+-]+\.(?:py|tsx|ts|jsx|js|css|scss|sass|html|json|md|vue|svelte))")
+
+
+def _normalize_failure_path(candidate: str, ws_root: Path, project_root: str) -> str | None:
+    raw = str(candidate or "").strip().strip("\"'`:,;()[]{}")
+    if not raw or raw.startswith(("http://", "https://")):
+        return None
+    raw = raw.replace("\\", "/")
+    try:
+        candidate_path = Path(raw)
+        if candidate_path.is_absolute():
+            try:
+                return candidate_path.resolve().relative_to(ws_root.resolve()).as_posix()
+            except Exception:
+                return None
+        rel = PurePosixPath(raw.lstrip("./"))
+        if str(rel).startswith("../"):
+            return None
+        project_prefix = str(project_root or ".").strip().strip("/")
+        if project_prefix and project_prefix != "." and not str(rel).startswith(f"{project_prefix}/"):
+            rel = PurePosixPath(project_prefix) / rel
+        return rel.as_posix()
+    except Exception:
+        return None
+
+
+def _failure_referenced_paths(execution: dict[str, object], project_root: str, ws_root: Path) -> list[str]:
+    texts: list[str] = []
+    for container_name in ("shell", "validation"):
+        container = execution.get(container_name)
+        if not isinstance(container, dict):
+            continue
+        for result in list(container.get("results") or []):
+            if not isinstance(result, dict) or result.get("ok") is not False:
+                continue
+            texts.append(str(result.get("stderr") or ""))
+            texts.append(str(result.get("stdout") or ""))
+    preview_audit = execution.get("preview_audit")
+    if isinstance(preview_audit, dict):
+        for issue in list(preview_audit.get("issue_details") or []):
+            if isinstance(issue, dict):
+                texts.append(str(issue.get("detail") or ""))
+                texts.append(str(issue.get("suggested_fix") or ""))
+    repairs = execution.get("repairs")
+    if isinstance(repairs, list):
+        for repair in repairs[-3:]:
+            if not isinstance(repair, dict):
+                continue
+            repair_execution = repair.get("execution")
+            if isinstance(repair_execution, dict):
+                texts.extend(_failure_referenced_paths(repair_execution, project_root, ws_root))
+
+    paths: list[str] = []
+    seen: set[str] = set()
+    for text in texts:
+        for match in _FAILURE_PATH_RE.finditer(text):
+            normalized = _normalize_failure_path(match.group("path"), ws_root, project_root)
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            paths.append(normalized)
+    return paths[:8]
+
+
+def _repair_file_context(project_root: str, execution: dict[str, object], *, max_files: int = 5, max_chars_per_file: int = 2200) -> str:
+    snippets: list[dict[str, object]] = []
+    ws_root = _ws()
+    candidate_paths = [*_execution_changed_paths(execution), *_failure_referenced_paths(execution, project_root, ws_root)]
+    deduped_paths: list[str] = []
+    seen_paths: set[str] = set()
+    for candidate in candidate_paths:
+        clean = str(candidate or "").strip().lstrip("/")
+        if not clean or clean in seen_paths:
+            continue
+        seen_paths.add(clean)
+        deduped_paths.append(clean)
+    for path in deduped_paths[:max_files]:
+        try:
+            target = safe_join(ws_root, path)
+        except Exception:
+            continue
+        if not target.exists() or not target.is_file():
+            continue
+        try:
+            content = target.read_text(encoding="utf-8")
+        except Exception as exc:
+            snippets.append({"path": path, "error": str(exc)[:180]})
+            continue
+        snippets.append({
+            "path": path,
+            "sha256": _sha256_text(content),
+            "excerpt": content[:max_chars_per_file],
+            "truncated": len(content) > max_chars_per_file,
+        })
+    if not snippets:
+        return "No current file snippets available for changed paths."
+    return json.dumps({
+        "project_root": project_root,
+        "files": snippets,
+    }, ensure_ascii=False, indent=2)[:9000]
+
+
+def _repair_replay_plan(execution: dict[str, object]) -> str:
+    commands: list[dict[str, object]] = []
+    for kind in ("shell", "validation"):
+        container = execution.get(kind)
+        if not isinstance(container, dict):
+            continue
+        project_root = str(container.get("project_root") or ".").strip() or "."
+        for result in list(container.get("results") or []):
+            if not isinstance(result, dict) or result.get("ok") is not False:
+                continue
+            command = str(result.get("command") or "").strip()
+            if not command:
+                continue
+            commands.append({
+                "kind": kind,
+                "command": command,
+                "cwd": project_root,
+                "returncode": result.get("returncode"),
+                "reason": f"Replay failing {kind} command after repair.",
+            })
+    repairs = execution.get("repairs")
+    if isinstance(repairs, list):
+        for repair in repairs[-2:]:
+            if not isinstance(repair, dict):
+                continue
+            repair_execution = repair.get("execution")
+            if isinstance(repair_execution, dict):
+                try:
+                    replay = json.loads(_repair_replay_plan(repair_execution))
+                except Exception:
+                    replay = {}
+                for item in list(replay.get("commands") or []):
+                    if isinstance(item, dict):
+                        commands.append(item)
+    deduped: list[dict[str, object]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in commands:
+        key = (str(item.get("kind") or ""), str(item.get("command") or ""))
+        if not key[1] or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return json.dumps({
+        "commands": deduped[:8],
+        "instruction": "After making repair changes, include shell actions for non-validation replay commands that still need explicit rerun. Backend validation commands are rerun automatically after file changes.",
+    }, ensure_ascii=False, indent=2)[:5000]
+
+
+def _execution_step(kind: str, label: str, ok: bool, detail: str, **extra: object) -> dict[str, object]:
+    step = {
+        "id": f"{kind}-{uuid.uuid4().hex[:8]}",
+        "kind": kind,
+        "label": label,
+        "ok": bool(ok),
+        "detail": str(detail or "")[:500],
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    step.update(extra)
+    return step
+
+
+def _auto_execute_preview_audit(req: AgentReq, project_root: str) -> dict[str, object] | None:
+    preview_url = str(getattr(req, "preview_url", None) or "").strip()
+    started_preview: dict[str, object] | None = None
+    if not preview_url:
+        try:
+            started = run_start(
+                RunStartReq(project_root=project_root),
+                Request({
+                    "type": "http",
+                    "method": "POST",
+                    "path": "/api/run/start",
+                    "headers": [],
+                    "scheme": "http",
+                    "server": ("localhost", 80),
+                    "client": ("127.0.0.1", 0),
+                    "root_path": "",
+                    "app": app,
+                }),
+            )
+            if isinstance(started, dict):
+                started_preview = started
+                preview_url = str(started.get("direct_url") or started.get("url") or "").strip()
+        except HTTPException as exc:
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": f"preview start skipped: {exc.detail}",
+                "preview_url": "",
+                "audit_mode": "unavailable",
+                "issues": [],
+                "issue_details": [],
+                "summary": f"preview audit skipped: {exc.detail}",
+            }
+        except Exception as exc:
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": f"preview start failed: {str(exc)[:300]}",
+                "preview_url": "",
+                "audit_mode": "unavailable",
+                "issues": [],
+                "issue_details": [],
+                "summary": f"preview audit skipped: {str(exc)[:240]}",
+            }
+    if not preview_url:
+        return None
+    try:
+        audit = preview_audit(
+            PreviewAuditReq(
+                preview_url=preview_url,
+                project_root=project_root,
+                attempts=2,
+                max_excerpt_chars=1200,
+                mode="auto",
+            )
+        )
+        if started_preview and isinstance(audit, dict):
+            audit["started_preview"] = {
+                "id": started_preview.get("id"),
+                "url": started_preview.get("url"),
+                "direct_url": started_preview.get("direct_url"),
+            }
+        return audit
+    except HTTPException as exc:
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": str(exc.detail),
+            "preview_url": preview_url,
+            "audit_mode": "unavailable",
+            "issues": [],
+            "issue_details": [],
+            "summary": f"preview audit skipped: {exc.detail}",
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": str(exc)[:500],
+            "preview_url": preview_url,
+            "audit_mode": "error",
+            "issues": [f"Preview audit failed: {exc}"],
+            "issue_details": [{"severity": "blocking", "category": "preview-audit", "detail": str(exc)[:300], "suggested_fix": "Pastikan preview URL aktif dan bisa diakses backend."}],
+            "summary": f"preview audit failed: {str(exc)[:240]}",
+        }
+
+
+def _project_has_preview_surface(project_dir: Path, out_changes: list[dict[str, object]]) -> bool:
+    if (project_dir / "package.json").exists() or (project_dir / "index.html").exists():
+        return True
+    frontend_suffixes = {".html", ".tsx", ".jsx", ".ts", ".js", ".css", ".scss", ".sass", ".vue", ".svelte"}
+    for change in out_changes:
+        if not isinstance(change, dict):
+            continue
+        rel = str(change.get("path") or "").strip()
+        suffix = PurePosixPath(rel).suffix.lower()
+        if suffix in frontend_suffixes:
+            return True
+    return False
+
+
+def _run_backend_repair_pass(req: AgentReq, execution: dict[str, object], emit, *, repair_index: int) -> dict[str, object]:
     project_root = str(req.project_root or ".").strip().strip("/") or "."
-    emit("status", {"phase": "executing_repair", "message": "Backend harness running one repair pass from execution evidence..."})
+    failure_analysis = _execution_failure_analysis(execution)
+    emit("status", {"phase": "executing_repair", "message": f"Backend harness running repair pass {repair_index} from execution evidence..."})
     repair_prompt = "\n\n".join([
-        "BACKEND AUTO-EXECUTE REPAIR:",
+        f"BACKEND AUTO-EXECUTE REPAIR PASS {repair_index}:",
         "The previous backend execution produced failing apply/shell/validation evidence.",
         "Repair the project now with concrete file changes and only safe project-scoped shell actions if needed.",
+        "If earlier repair passes failed, use their evidence and choose a different concrete fix.",
+        "Use the failure_analysis signature to detect repeated failures. If repeated_failure is true, change strategy instead of making the same local edit again.",
+        "Use failure_analysis.summary and failure_analysis.suggested_next_move as the repair objective.",
         "Do not repeat the same failing command blindly unless your changes address the failure.",
         f"Original user request:\n{req.input}",
+        f"Failure analysis:\n{json.dumps(failure_analysis, ensure_ascii=False, indent=2)}",
+        f"Current file context after failed execution:\n{_repair_file_context(project_root, execution)}",
+        f"Repair replay plan:\n{_repair_replay_plan(execution)}",
         f"Execution evidence:\n{_execution_repair_report(execution)}",
     ])
     repair_req = AgentReq(
@@ -3186,6 +3857,8 @@ def _run_backend_repair_pass(req: AgentReq, execution: dict[str, object], emit) 
     repair_changes = _prepare_agent_out_changes(_ws(), list(repair_pipeline.get("changes") or []))
     repair_actions = list(repair_pipeline.get("actions") or [])
     repair_execution = _auto_execute_agent_result(repair_req, repair_changes, repair_actions, emit, allow_repair=False)
+    if isinstance(repair_execution, dict):
+        repair_execution["failure_analysis"] = _execution_failure_analysis(repair_execution)
     return {
         "spoken": repair_pipeline.get("spoken") or "",
         "log": repair_pipeline.get("log") or "",
@@ -3193,19 +3866,26 @@ def _run_backend_repair_pass(req: AgentReq, execution: dict[str, object], emit) 
         "actions": repair_actions,
         "intent": dict(repair_pipeline.get("intent") or {}),
         "trace": dict(repair_pipeline.get("trace") or {}),
+        "pre_repair_failure_analysis": failure_analysis,
         "execution": repair_execution,
     }
 
 
-def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object]], actions: list[dict], emit, *, allow_repair: bool = True) -> dict:
+def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object]], actions: list[dict], emit, *, allow_repair: bool = True, max_repair_passes: int = 3) -> dict:
     project_root = str(req.project_root or ".").strip().strip("/") or "."
+    max_repair_passes = max(0, min(int(max_repair_passes or 0), 5))
     execution: dict[str, object] = {
         "auto_execute": True,
         "project_root": project_root,
+        "max_repair_passes": max_repair_passes if allow_repair else 0,
+        "steps": [],
         "apply": None,
         "shell": None,
         "validation": None,
+        "preview_audit": None,
         "repairs": [],
+        "failure_analysis": None,
+        "completion_report": None,
         "ok": True,
     }
 
@@ -3231,6 +3911,18 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
         apply_result = agent_harness_apply(apply_req)
         execution["apply"] = apply_result
         execution["ok"] = bool(execution["ok"]) and bool(apply_result.get("ok"))
+        steps = execution.setdefault("steps", [])
+        if isinstance(steps, list):
+            steps.append(_execution_step(
+                "apply",
+                "Backend apply harness",
+                bool(apply_result.get("ok")),
+                f"applied={apply_result.get('applied')} count={apply_result.get('count')}",
+                paths=apply_result.get("paths") or [],
+                checkpoint_path=apply_result.get("checkpoint_path"),
+                conflicts=apply_result.get("conflicts") or [],
+                warnings=apply_result.get("warnings") or [],
+            ))
         emit(
             "tool_output",
             {
@@ -3248,6 +3940,20 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
         shell_result = agent_harness_run_shell(AgentHarnessRunShellReq(project_root=project_root, actions=shell_actions))
         execution["shell"] = shell_result
         execution["ok"] = bool(execution["ok"]) and bool(shell_result.get("ok"))
+        steps = execution.setdefault("steps", [])
+        if isinstance(steps, list):
+            steps.append(_execution_step(
+                "shell",
+                "Backend shell harness",
+                bool(shell_result.get("ok")),
+                f"ran={shell_result.get('ran')}",
+                commands=[action.command for action in shell_actions],
+                failed=sum(
+                    1
+                    for item in list(shell_result.get("results") or [])
+                    if isinstance(item, dict) and not item.get("ok")
+                ),
+            ))
         emit(
             "tool_output",
             {
@@ -3278,15 +3984,26 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
             )
             validation_results = list(validation_shell.get("results") or [])
             validation = {
-                "ok": all(bool(item.get("ok")) for item in validation_results) if validation_results else True,
+                "ok": all(bool(item.get("ok")) for item in validation_results if isinstance(item, dict)) if validation_results else True,
                 "project_root": project_root,
                 "commands": validation_commands,
                 "results": validation_results,
                 "ran": len(validation_results),
-                "passed": sum(1 for item in validation_results if item.get("ok")),
-                "failed": sum(1 for item in validation_results if not item.get("ok")),
+                "passed": sum(1 for item in validation_results if isinstance(item, dict) and item.get("ok")),
+                "failed": sum(1 for item in validation_results if isinstance(item, dict) and not item.get("ok")),
             }
             execution["validation"] = validation
+            execution["ok"] = bool(execution["ok"]) and bool(validation.get("ok"))
+            steps = execution.setdefault("steps", [])
+            if isinstance(steps, list):
+                steps.append(_execution_step(
+                    "validation",
+                    "Backend validation",
+                    bool(validation.get("ok")),
+                    f"ran={validation.get('ran')} failed={validation.get('failed')}",
+                    commands=validation.get("commands") or [],
+                    failed=validation.get("failed"),
+                ))
             emit(
                 "tool_output",
                 {
@@ -3298,14 +4015,94 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
                 },
             )
 
-    if allow_repair and _execution_needs_repair(execution):
-        repair = _run_backend_repair_pass(req, execution, emit)
-        repairs = execution.setdefault("repairs", [])
-        if isinstance(repairs, list):
-            repairs.append(repair)
-        repair_execution = repair.get("execution") if isinstance(repair, dict) else None
-        if isinstance(repair_execution, dict):
-            execution["ok"] = bool(repair_execution.get("ok"))
+    try:
+        preview_project_dir = safe_join(_ws(), project_root)
+    except Exception:
+        preview_project_dir = _ws()
+    if out_changes and (str(getattr(req, "preview_url", None) or "").strip() or _project_has_preview_surface(preview_project_dir, out_changes)):
+        emit("status", {"phase": "executing_preview_audit", "message": "Backend harness auditing live preview..."})
+        preview_result = _auto_execute_preview_audit(req, project_root)
+        if isinstance(preview_result, dict):
+            execution["preview_audit"] = preview_result
+            if not preview_result.get("skipped"):
+                execution["ok"] = bool(execution["ok"]) and bool(preview_result.get("ok"))
+            issue_details = list(preview_result.get("issue_details") or [])
+            blocking = sum(1 for item in issue_details if isinstance(item, dict) and item.get("severity") == "blocking")
+            warnings = sum(1 for item in issue_details if isinstance(item, dict) and item.get("severity") == "warning")
+            steps = execution.setdefault("steps", [])
+            if isinstance(steps, list):
+                steps.append(_execution_step(
+                    "preview_audit",
+                    "Backend preview audit",
+                    bool(preview_result.get("ok")) or bool(preview_result.get("skipped")),
+                    str(preview_result.get("repair_brief") or preview_result.get("summary") or ""),
+                    audit_mode=preview_result.get("audit_mode"),
+                    skipped=bool(preview_result.get("skipped")),
+                    blocking=blocking,
+                    warnings=warnings,
+                    visual_summary=preview_result.get("visual_summary") or {},
+                    repair_brief=preview_result.get("repair_brief"),
+                ))
+            emit(
+                "tool_output",
+                {
+                    "kind": "agent_harness",
+                    "tool": "preview-audit",
+                    "ok": bool(preview_result.get("ok")) or bool(preview_result.get("skipped")),
+                    "phase": "executing_preview_audit",
+                    "text": json.dumps({
+                        "ok": preview_result.get("ok"),
+                        "skipped": preview_result.get("skipped"),
+                        "audit_mode": preview_result.get("audit_mode"),
+                        "summary": preview_result.get("summary"),
+                    }, ensure_ascii=False)[:1200],
+                },
+            )
+
+    execution["failure_analysis"] = _execution_failure_analysis(execution)
+    if allow_repair:
+        for repair_index in range(1, max_repair_passes + 1):
+            if not _execution_needs_repair(execution) or bool(execution.get("ok")):
+                break
+            repair = _run_backend_repair_pass(req, execution, emit, repair_index=repair_index)
+            repairs = execution.setdefault("repairs", [])
+            if isinstance(repairs, list):
+                repairs.append(repair)
+            repair_execution = repair.get("execution") if isinstance(repair, dict) else None
+            execution["last_repair_execution"] = repair_execution
+            steps = execution.setdefault("steps", [])
+            if isinstance(steps, list):
+                repair_failure_analysis = repair_execution.get("failure_analysis") if isinstance(repair_execution, dict) else None
+                pre_repair_failure_analysis = repair.get("pre_repair_failure_analysis") if isinstance(repair, dict) else None
+                steps.append(_execution_step(
+                    "repair",
+                    "Backend repair pass",
+                    bool(repair_execution.get("ok")) if isinstance(repair_execution, dict) else False,
+                    f"changes={len(list(repair.get('changes') or [])) if isinstance(repair, dict) else 0}",
+                    repair_index=repair_index,
+                    pre_repair_failure_analysis=pre_repair_failure_analysis or {},
+                    failure_analysis=repair_failure_analysis or {},
+                    repeated_failure=bool(pre_repair_failure_analysis.get("repeated_failure")) if isinstance(pre_repair_failure_analysis, dict) else False,
+                ))
+            if isinstance(repair_execution, dict):
+                execution["ok"] = bool(repair_execution.get("ok"))
+                execution["failure_analysis"] = _execution_failure_analysis(execution)
+            if bool(execution.get("ok")):
+                break
+
+    completion_report = _execution_completion_report(execution)
+    execution["completion_report"] = completion_report
+    steps = execution.setdefault("steps", [])
+    if isinstance(steps, list):
+        steps.append(_execution_step(
+            "completion",
+            "Backend completion report",
+            bool(completion_report.get("ok")),
+            str(completion_report.get("summary") or ""),
+            criteria=completion_report.get("criteria") or [],
+            residual_risks=completion_report.get("residual_risks") or [],
+            state=completion_report.get("state"),
+        ))
 
     return execution
 
@@ -3320,6 +4117,38 @@ def _trace_has_blocking_verifier_failures(trace: dict) -> bool:
         if check.get("ok") is False and str(check.get("name") or "") != "full-agent-coverage":
             return True
     return False
+
+
+def _remember_backend_execution_state(req: AgentReq, result: dict) -> None:
+    execution = result.get("execution")
+    if not isinstance(execution, dict) or execution.get("auto_execute") is not True:
+        return
+    intent_payload = result.get("intent") if isinstance(result.get("intent"), dict) else {}
+    should_write = bool(intent_payload.get("should_write_files")) or bool(result.get("changes")) or bool(result.get("actions"))
+    if not should_write:
+        return
+
+    class _IntentSnapshot:
+        kind = str(intent_payload.get("kind") or "command")
+        confidence = float(intent_payload.get("confidence") or 0.86)
+        rationale = str(intent_payload.get("rationale") or "backend execution state")
+        should_write_files = True
+        should_run_tools = True
+        wants_app_builder = True
+
+    trace = result.get("trace") if isinstance(result.get("trace"), dict) else {}
+    _remember_project_work_state(
+        project_root=str(req.project_root or ".").strip().strip("/") or ".",
+        build_mode=str(req.build_mode or "full-agent"),
+        user_input=str(req.input or ""),
+        spoken=str(result.get("spoken") or ""),
+        changes=list(result.get("changes") or []),
+        actions=list(result.get("actions") or []),
+        intent=_IntentSnapshot(),  # type: ignore[arg-type]
+        task_state=dict(trace.get("task_state") or {}) if isinstance(trace.get("task_state"), dict) else {},
+        completion_report=dict(execution.get("completion_report") or {}) if isinstance(execution.get("completion_report"), dict) else {},
+        failure_analysis=dict(execution.get("failure_analysis") or {}) if isinstance(execution.get("failure_analysis"), dict) else {},
+    )
 
 
 @app.post("/api/agent/worker/run")
@@ -3380,6 +4209,7 @@ def _run_agent_impl(req: AgentReq, event_cb=None, job_id: str | None = None):
         }
         if req.auto_execute and (out_changes or normalized_actions) and not _trace_has_blocking_verifier_failures(result["trace"]):
             result["execution"] = _auto_execute_agent_result(req, out_changes, normalized_actions, emit)
+            _remember_backend_execution_state(req, result)
         elif req.auto_execute and _trace_has_blocking_verifier_failures(result["trace"]):
             result["execution"] = {
                 "auto_execute": True,

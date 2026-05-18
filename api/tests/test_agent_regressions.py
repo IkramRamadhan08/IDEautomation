@@ -16,7 +16,7 @@ from api import agent as agent_mod
 from api import main as main_mod
 from api.agent_mcp import MCPServerInfo, MCPToolCallResult, MCPToolInfo, discover_mcp_servers, execute_mcp_tool, suggest_mcp_actions
 from api.agent_memory import get_agent_memory_overview, remember_agent_run, retrieve_agent_memory
-from api.agent_runtime import _intent_with_active_work_context, _looks_like_plan_only_reply, _max_tool_loops_for_run, _remember_project_work_state, _route_after_verify, _should_run_deep_preflight, _should_run_refinement, _strict_agentic_retry_node, _verify_node, prepare_agent_context
+from api.agent_runtime import _autonomous_continue_node, _intent_with_active_work_context, _looks_like_plan_only_reply, _max_tool_loops_for_run, _plan_node, _remember_project_work_state, _route_after_verify, _should_run_deep_preflight, _should_run_refinement, _strict_agentic_retry_node, _verify_node, prepare_agent_context
 from api.agent_skills import detect_project_stack, resolve_agent_skills
 from api.agent_tools import execute_local_tool
 from api.app_state import CURRENT_SESSION_ID, CURRENT_USER_ID, STATE
@@ -118,6 +118,16 @@ class AgentIntentRegressionTests(unittest.TestCase):
                 changes=[{"path": "demo/src/App.tsx", "new_content": "export default function App() { return null }"}],
                 actions=[{"type": "shell", "command": "npm run build"}],
                 intent=write_intent,
+                task_state={
+                    "goal": "buat UI settings 9Router",
+                    "status": "blocked",
+                    "next_action": "Repair verifier failure: relative-imports-resolve",
+                    "blocking_checks": ["relative-imports-resolve"],
+                    "nodes": [
+                        {"id": "01-scope", "stage": "scope", "title": "Define task boundary", "status": "done", "detail": "Scope task."},
+                        {"id": "02-verify", "stage": "verify", "title": "Plan validation", "status": "blocked", "detail": "Import masih missing."},
+                    ],
+                },
             )
 
             inherited, context = _intent_with_active_work_context(base, text="lanjut", project_root="demo", build_mode="full-agent")
@@ -127,6 +137,64 @@ class AgentIntentRegressionTests(unittest.TestCase):
             self.assertIn("ACTIVE WORK CONTINUATION", context or "")
             self.assertIn("buat UI settings 9Router", context or "")
             self.assertIn("demo/src/App.tsx", context or "")
+            self.assertIn("Task status: blocked", context or "")
+            self.assertIn("Next action: Repair verifier failure: relative-imports-resolve", context or "")
+            self.assertIn("verify=blocked", context or "")
+
+            _remember_project_work_state(
+                project_root="demo",
+                build_mode="full-agent",
+                user_input="buat UI settings 9Router",
+                spoken="Backend sudah apply dan validasi selesai.",
+                changes=[{"path": "demo/src/App.tsx", "new_content": "export default function App() { return null }"}],
+                actions=[{"type": "shell", "command": "npm run build"}],
+                intent=write_intent,
+                task_state={
+                    "goal": "buat UI settings 9Router",
+                    "status": "blocked",
+                    "next_action": "Fix preview warning",
+                    "blocking_checks": ["preview-warning"],
+                },
+                completion_report={
+                    "ok": False,
+                    "state": "blocked",
+                    "summary": "Blocked: preview still failing.",
+                    "criteria": [
+                        {"label": "apply", "status": "passed", "detail": "applied=true count=1"},
+                        {"label": "preview", "status": "failed", "detail": "blocking=1 warnings=0"},
+                    ],
+                    "residual_risks": ["Preview audit masih blocking."],
+                },
+                failure_analysis={
+                    "current_signature": "abc123",
+                    "primary_failure": "preview audit failed: mobile-overflow",
+                    "suggested_next_move": "Fix responsive overflow then rerun preview audit.",
+                    "evidence_excerpt": "Element .toolbar overflows mobile viewport by 96px.",
+                    "failures": [
+                        {
+                            "kind": "preview_audit",
+                            "category": "mobile-overflow",
+                            "marker": "toolbar overflow",
+                            "excerpt": "Element .toolbar overflows mobile viewport by 96px.",
+                        },
+                    ],
+                    "repeated_failure": False,
+                },
+            )
+
+            inherited, context = _intent_with_active_work_context(base, text="next", project_root="demo", build_mode="full-agent")
+            self.assertEqual(inherited.kind, "command")
+            self.assertIn("Last execution state: blocked", context or "")
+            self.assertIn("Last execution summary: Blocked: preview still failing.", context or "")
+            self.assertIn("Completion criteria: apply=passed, preview=failed", context or "")
+            self.assertIn("Residual risks: Preview audit masih blocking.", context or "")
+            self.assertIn("Last failure: preview audit failed: mobile-overflow", context or "")
+            self.assertIn("Suggested next move: Fix responsive overflow then rerun preview audit.", context or "")
+            self.assertIn("Failure evidence excerpt: Element .toolbar overflows mobile viewport by 96px.", context or "")
+            self.assertIn("Failure evidence pack: preview_audit:toolbar overflow", context or "")
+            self.assertIn("Continuation directive: first inspect or rerun the evidence", context or "")
+            self.assertIn("last failing criterion (preview)", context or "")
+            self.assertIn("Objective: Fix responsive overflow then rerun preview audit.", context or "")
         finally:
             CURRENT_USER_ID.reset(user_token)
             CURRENT_SESSION_ID.reset(session_token)
@@ -134,6 +202,44 @@ class AgentIntentRegressionTests(unittest.TestCase):
 
 
 class AgentRuntimeContextRegressionTests(unittest.TestCase):
+    def test_task_state_tracks_plan_and_verify_outcome(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            project_dir.mkdir()
+            req = SimpleNamespace(
+                input="fix route preview",
+                project_root="demo",
+                build_mode="full-agent",
+                active_file=None,
+                open_files=[],
+                current_content=None,
+                asset_paths=[],
+            )
+            ctx = prepare_agent_context(req, ws_root)
+            planned = _plan_node({"context": ctx, "input": req.input, "emit": lambda *_args: None})
+            task_state = planned["context"].trace_task_state
+
+            self.assertEqual(task_state["status"], "planned")
+            self.assertEqual(task_state["goal"], "fix route preview")
+            self.assertTrue(task_state["nodes"])
+            self.assertEqual(task_state["nodes"][0]["status"], "current")
+
+            verified = _verify_node({
+                "context": planned["context"],
+                "input": req.input,
+                "spoken": "Patch sudah siap.",
+                "changes": [{"path": "src/App.tsx", "new_content": "export default function App() { return null; }\n"}],
+                "actions": [],
+                "emit": lambda *_args: None,
+            })
+            verified_state = verified["context"].trace_task_state
+
+            self.assertEqual(verified_state["status"], "ready_for_execution")
+            self.assertEqual(verified_state["changes"], 1)
+            self.assertEqual(verified_state["next_action"], "Apply changes and run backend validation.")
+            self.assertIn("done", [node["status"] for node in verified_state["nodes"]])
+
     def test_strict_agentic_guard_flags_plan_only_build_reply(self) -> None:
         self.assertTrue(_looks_like_plan_only_reply("Aku cek dulu struktur routing lalu baru patch."))
         self.assertFalse(_looks_like_plan_only_reply("Masalahnya import route salah dan patch sudah disiapkan."))
@@ -192,6 +298,49 @@ class AgentRuntimeContextRegressionTests(unittest.TestCase):
 
             self.assertEqual(_route_after_verify(state), "strict_retry")
             state["strict_agentic_retried"] = True
+            self.assertEqual(_route_after_verify(state), "finalize")
+
+    def test_blocked_task_state_routes_to_autonomous_continue(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            project_dir.mkdir()
+            req = SimpleNamespace(
+                input="fix missing import",
+                project_root="demo",
+                build_mode="full-agent",
+                active_file=None,
+                open_files=[],
+                current_content=None,
+                asset_paths=[],
+            )
+            ctx = prepare_agent_context(req, ws_root)
+            ctx.trace_task_state = {
+                "status": "blocked",
+                "next_action": "Repair verifier failure: relative-imports-resolve",
+                "blocking_checks": ["relative-imports-resolve"],
+            }
+            ctx.trace_verification = [
+                {"name": "relative-imports-resolve", "ok": False, "detail": "Missing relative imports: src/App.tsx imports ./Missing"}
+            ]
+            state = {
+                "context": ctx,
+                "input": req.input,
+                "spoken": "Aku sudah buat patch tapi import masih salah.",
+                "changes": [{"path": "src/App.tsx", "new_content": "import Missing from './Missing';\n"}],
+                "actions": [],
+                "autonomous_iterations": 0,
+                "strict_agentic_retried": True,
+                "emit": lambda *_args: None,
+            }
+
+            self.assertEqual(_route_after_verify(state), "autonomous_continue")
+            continued = _autonomous_continue_node(state)
+            self.assertEqual(continued["autonomous_iterations"], 1)
+            self.assertEqual(continued["changes"], [])
+            self.assertIn("AUTONOMOUS TASK LOOP EVIDENCE", continued["context"].extra_context)
+
+            state["autonomous_iterations"] = 2
             self.assertEqual(_route_after_verify(state), "finalize")
 
     def test_strict_agentic_retry_can_replace_plan_with_action(self) -> None:
@@ -794,6 +943,11 @@ class PreviewAuditRegressionTests(unittest.TestCase):
         severities = {item["severity"] for item in audit["issue_details"]}
         self.assertIn("blocking", severities)
         self.assertTrue(any(item["category"] == "assets" for item in audit["issue_details"]))
+        self.assertIn("repair_brief", audit)
+        self.assertIn("visual_summary", audit)
+        self.assertEqual(audit["visual_summary"]["mode"], "browser")
+        self.assertTrue(audit["visual_summary"]["top_blockers"])
+        self.assertIn("Top issues:", audit["repair_brief"])
 
     def test_browser_audit_is_runtime_capability_not_project_dependency(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1597,13 +1751,243 @@ class AgentAutoExecuteRegressionTests(unittest.TestCase):
                 self.assertTrue(result["execution"]["shell"]["results"][0]["ok"])
                 self.assertTrue(result["execution"]["validation"]["ok"])
                 self.assertGreaterEqual(result["execution"]["validation"]["ran"], 1)
+                step_kinds = [step["kind"] for step in result["execution"]["steps"]]
+                self.assertIn("apply", step_kinds)
+                self.assertIn("shell", step_kinds)
+                self.assertIn("validation", step_kinds)
                 self.assertEqual((project / "src" / "App.tsx").read_text(encoding="utf-8"), "agent edit\n")
+        finally:
+            CURRENT_SESSION_ID.reset(session_token)
+            STATE.get("sessions", {}).pop(session_id, None)
+
+    def test_backend_auto_execute_records_preview_audit_step_when_preview_url_is_available(self) -> None:
+        session_id = "auto-execute-preview-audit-test"
+        STATE.get("sessions", {}).pop(session_id, None)
+        session_token = CURRENT_SESSION_ID.set(session_id)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                project = root / "demo"
+                project.mkdir()
+                (project / "src").mkdir()
+                (project / "src" / "App.tsx").write_text("old\n", encoding="utf-8")
+                STATE["sessions"][session_id] = {
+                    "workspace": str(root),
+                    "runners": {},
+                    "agent_jobs": {},
+                    "oauth_pending": {},
+                    "google_user": None,
+                }
+                pipeline = {
+                    "spoken": "Aku apply patch dan audit preview.",
+                    "log": "fake",
+                    "changes": [{"path": "demo/src/App.tsx", "new_content": "agent edit\n"}],
+                    "actions": [],
+                    "intent": {"kind": "command"},
+                    "trace": {"passes": 1, "memory_hits": [], "skills": [], "mcp_servers": [], "mcp_tools_used": [], "verification": [], "warnings": []},
+                }
+                audit_result = {
+                    "ok": True,
+                    "preview_url": "http://127.0.0.1:4173",
+                    "audit_mode": "html",
+                    "issue_details": [],
+                    "issues": [],
+                    "summary": "mode=html; blocking=0; warnings=0",
+                }
+
+                with patch("api.main.run_agent_pipeline", return_value=pipeline), \
+                    patch("api.main.preview_audit", return_value=audit_result), \
+                    patch("api.main.has_supabase", return_value=False), \
+                    patch("api.main._persist_hosted_file", return_value=None):
+                    result = main_mod._run_agent_impl(
+                        main_mod.AgentReq(input="patch and audit", project_root="demo", preview_url="http://127.0.0.1:4173", auto_execute=True),
+                        event_cb=lambda *_args: None,
+                    )
+
+                self.assertTrue(result["execution"]["ok"])
+                self.assertEqual(result["execution"]["preview_audit"]["summary"], "mode=html; blocking=0; warnings=0")
+                self.assertIn("preview_audit", [step["kind"] for step in result["execution"]["steps"]])
+        finally:
+            CURRENT_SESSION_ID.reset(session_token)
+            STATE.get("sessions", {}).pop(session_id, None)
+
+    def test_backend_auto_execute_can_start_preview_before_preview_audit(self) -> None:
+        session_id = "auto-execute-start-preview-test"
+        STATE.get("sessions", {}).pop(session_id, None)
+        session_token = CURRENT_SESSION_ID.set(session_id)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                project = root / "demo"
+                project.mkdir()
+                (project / "index.html").write_text("<h1>Old</h1>", encoding="utf-8")
+                STATE["sessions"][session_id] = {
+                    "workspace": str(root),
+                    "runners": {},
+                    "agent_jobs": {},
+                    "oauth_pending": {},
+                    "google_user": None,
+                }
+                pipeline = {
+                    "spoken": "Aku apply patch, start preview, dan audit.",
+                    "log": "fake",
+                    "changes": [{"path": "demo/index.html", "new_content": "<title>Smoke</title><h1>Smoke</h1><p>Appora preview smoke has enough words for the audit check.</p>"}],
+                    "actions": [],
+                    "intent": {"kind": "command"},
+                    "trace": {"passes": 1, "memory_hits": [], "skills": [], "mcp_servers": [], "mcp_tools_used": [], "verification": [], "warnings": []},
+                }
+                audit_calls: list[str] = []
+
+                def fake_preview_audit(req):
+                    audit_calls.append(req.preview_url)
+                    return {
+                        "ok": True,
+                        "preview_url": req.preview_url,
+                        "audit_mode": "html",
+                        "issue_details": [],
+                        "issues": [],
+                        "summary": "mode=html; blocking=0; warnings=0",
+                    }
+
+                with patch("api.main.run_agent_pipeline", return_value=pipeline), \
+                    patch("api.main.run_start", return_value={"ok": True, "id": "run-1", "url": "http://localhost:4321", "direct_url": "http://localhost:4321", "project_root": "demo"}) as mocked_start, \
+                    patch("api.main.preview_audit", side_effect=fake_preview_audit), \
+                    patch("api.main.has_supabase", return_value=False), \
+                    patch("api.main._persist_hosted_file", return_value=None):
+                    result = main_mod._run_agent_impl(
+                        main_mod.AgentReq(input="patch and auto preview audit", project_root="demo", auto_execute=True),
+                        event_cb=lambda *_args: None,
+                    )
+
+                mocked_start.assert_called_once()
+                self.assertEqual(audit_calls, ["http://localhost:4321"])
+                self.assertTrue(result["execution"]["ok"])
+                self.assertEqual(result["execution"]["preview_audit"]["started_preview"]["id"], "run-1")
+                self.assertIn("preview_audit", [step["kind"] for step in result["execution"]["steps"]])
+        finally:
+            CURRENT_SESSION_ID.reset(session_token)
+            STATE.get("sessions", {}).pop(session_id, None)
+
+    def test_backend_auto_execute_skips_preview_start_for_non_frontend_change(self) -> None:
+        session_id = "auto-execute-skip-preview-test"
+        STATE.get("sessions", {}).pop(session_id, None)
+        session_token = CURRENT_SESSION_ID.set(session_id)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                project = root / "demo"
+                project.mkdir()
+                STATE["sessions"][session_id] = {
+                    "workspace": str(root),
+                    "runners": {},
+                    "agent_jobs": {},
+                    "oauth_pending": {},
+                    "google_user": None,
+                }
+                pipeline = {
+                    "spoken": "Aku buat markdown.",
+                    "log": "fake",
+                    "changes": [{"path": "demo/NOTE.md", "new_content": "hello\n"}],
+                    "actions": [],
+                    "intent": {"kind": "command"},
+                    "trace": {"passes": 1, "memory_hits": [], "skills": [], "mcp_servers": [], "mcp_tools_used": [], "verification": [], "warnings": []},
+                }
+
+                with patch("api.main.run_agent_pipeline", return_value=pipeline), \
+                    patch("api.main.run_start") as mocked_start, \
+                    patch("api.main.preview_audit") as mocked_audit, \
+                    patch("api.main.has_supabase", return_value=False), \
+                    patch("api.main._persist_hosted_file", return_value=None):
+                    result = main_mod._run_agent_impl(
+                        main_mod.AgentReq(input="buat markdown", project_root="demo", auto_execute=True),
+                        event_cb=lambda *_args: None,
+                    )
+
+                mocked_start.assert_not_called()
+                mocked_audit.assert_not_called()
+                self.assertTrue(result["execution"]["ok"])
+                self.assertIsNone(result["execution"]["preview_audit"])
         finally:
             CURRENT_SESSION_ID.reset(session_token)
             STATE.get("sessions", {}).pop(session_id, None)
 
     def test_backend_auto_execute_runs_one_repair_pass_after_validation_failure(self) -> None:
         session_id = "auto-execute-repair-test"
+        STATE.get("sessions", {}).pop(session_id, None)
+        session_token = CURRENT_SESSION_ID.set(session_id)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                project = root / "demo"
+                project.mkdir()
+                (project / "bad.py").write_text("print(\n", encoding="utf-8")
+                (project / "helper.py").write_text("value =\n", encoding="utf-8")
+                STATE["sessions"][session_id] = {
+                    "workspace": str(root),
+                    "runners": {},
+                    "agent_jobs": {},
+                    "oauth_pending": {},
+                    "google_user": None,
+                }
+                first = {
+                    "spoken": "Aku coba apply tapi validasi gagal.",
+                    "log": "first",
+                    "changes": [{"path": "demo/bad.py", "new_content": "print(\n"}],
+                    "actions": [{"type": "shell", "command": "python3 helper.py", "cwd": "demo", "reason": "reproduce helper syntax"}],
+                    "intent": {"kind": "command"},
+                    "trace": {"passes": 1, "memory_hits": [], "skills": [], "mcp_servers": [], "mcp_tools_used": [], "verification": [], "warnings": []},
+                }
+                repair = {
+                    "spoken": "Aku perbaiki syntax error.",
+                    "log": "repair",
+                    "changes": [
+                        {"path": "demo/bad.py", "new_content": "print('ok')\n"},
+                        {"path": "demo/helper.py", "new_content": "value = 1\n"},
+                    ],
+                    "actions": [],
+                    "intent": {"kind": "command"},
+                    "trace": {"passes": 1, "memory_hits": [], "skills": [], "mcp_servers": [], "mcp_tools_used": [], "verification": [], "warnings": []},
+                }
+
+                with patch("api.main.run_agent_pipeline", side_effect=[first, repair]) as mocked_pipeline, \
+                    patch("api.main.has_supabase", return_value=False), \
+                    patch("api.main._persist_hosted_file", return_value=None):
+                    result = main_mod._run_agent_impl(
+                        main_mod.AgentReq(input="fix python syntax", project_root="demo", auto_execute=True),
+                        event_cb=lambda *_args: None,
+                    )
+
+                self.assertEqual(mocked_pipeline.call_count, 2)
+                repair_req = mocked_pipeline.call_args_list[1].args[0]
+                self.assertIn("Current file context after failed execution", repair_req.input)
+                self.assertIn('"path": "demo/bad.py"', repair_req.input)
+                self.assertIn('"path": "demo/helper.py"', repair_req.input)
+                self.assertIn("print(", repair_req.input)
+                self.assertIn("value =", repair_req.input)
+                self.assertIn("Repair replay plan", repair_req.input)
+                self.assertIn('"command": "python3 helper.py"', repair_req.input)
+                self.assertIn("include shell actions for non-validation replay commands", repair_req.input)
+                self.assertFalse(result["execution"]["validation"]["ok"])
+                self.assertEqual(len(result["execution"]["repairs"]), 1)
+                repair_execution = result["execution"]["repairs"][0]["execution"]
+                self.assertTrue(repair_execution["ok"])
+                self.assertTrue(repair_execution["validation"]["ok"])
+                self.assertIn("repair", [step["kind"] for step in result["execution"]["steps"]])
+                self.assertEqual(result["execution"]["completion_report"]["state"], "complete")
+                self.assertIn("completion", [step["kind"] for step in result["execution"]["steps"]])
+                validation_criteria = [
+                    item for item in result["execution"]["completion_report"]["criteria"]
+                    if item["label"] == "validation"
+                ]
+                self.assertEqual(validation_criteria[0]["status"], "superseded")
+                self.assertEqual((project / "bad.py").read_text(encoding="utf-8"), "print('ok')\n")
+                self.assertEqual((project / "helper.py").read_text(encoding="utf-8"), "value = 1\n")
+        finally:
+            CURRENT_SESSION_ID.reset(session_token)
+            STATE.get("sessions", {}).pop(session_id, None)
+
+    def test_backend_auto_execute_can_run_multiple_repair_passes_until_valid(self) -> None:
+        session_id = "auto-execute-multi-repair-test"
         STATE.get("sessions", {}).pop(session_id, None)
         session_token = CURRENT_SESSION_ID.set(session_id)
         try:
@@ -1627,29 +2011,121 @@ class AgentAutoExecuteRegressionTests(unittest.TestCase):
                     "intent": {"kind": "command"},
                     "trace": {"passes": 1, "memory_hits": [], "skills": [], "mcp_servers": [], "mcp_tools_used": [], "verification": [], "warnings": []},
                 }
-                repair = {
-                    "spoken": "Aku perbaiki syntax error.",
-                    "log": "repair",
+                bad_repair = {
+                    "spoken": "Aku coba repair pertama.",
+                    "log": "repair-one",
+                    "changes": [{"path": "demo/bad.py", "new_content": "print('still bad'\n"}],
+                    "actions": [],
+                    "intent": {"kind": "command"},
+                    "trace": {"passes": 1, "memory_hits": [], "skills": [], "mcp_servers": [], "mcp_tools_used": [], "verification": [], "warnings": []},
+                }
+                good_repair = {
+                    "spoken": "Aku repair lagi sampai valid.",
+                    "log": "repair-two",
                     "changes": [{"path": "demo/bad.py", "new_content": "print('ok')\n"}],
                     "actions": [],
                     "intent": {"kind": "command"},
                     "trace": {"passes": 1, "memory_hits": [], "skills": [], "mcp_servers": [], "mcp_tools_used": [], "verification": [], "warnings": []},
                 }
 
-                with patch("api.main.run_agent_pipeline", side_effect=[first, repair]) as mocked_pipeline, \
+                with patch("api.main.run_agent_pipeline", side_effect=[first, bad_repair, good_repair]) as mocked_pipeline, \
                     patch("api.main.has_supabase", return_value=False), \
                     patch("api.main._persist_hosted_file", return_value=None):
                     result = main_mod._run_agent_impl(
-                        main_mod.AgentReq(input="fix python syntax", project_root="demo", auto_execute=True),
+                        main_mod.AgentReq(input="fix python syntax fully", project_root="demo", auto_execute=True),
                         event_cb=lambda *_args: None,
                     )
 
-                self.assertEqual(mocked_pipeline.call_count, 2)
-                self.assertFalse(result["execution"]["validation"]["ok"])
-                self.assertEqual(len(result["execution"]["repairs"]), 1)
-                repair_execution = result["execution"]["repairs"][0]["execution"]
-                self.assertTrue(repair_execution["ok"])
-                self.assertTrue(repair_execution["validation"]["ok"])
+                self.assertEqual(mocked_pipeline.call_count, 3)
+                self.assertEqual(len(result["execution"]["repairs"]), 2)
+                self.assertFalse(result["execution"]["repairs"][0]["execution"]["ok"])
+                self.assertTrue(result["execution"]["repairs"][1]["execution"]["ok"])
+                self.assertTrue(result["execution"]["ok"])
+                self.assertEqual(result["execution"]["completion_report"]["state"], "complete")
+                self.assertTrue(result["execution"]["completion_report"]["criteria"])
+                repair_steps = [step for step in result["execution"]["steps"] if step["kind"] == "repair"]
+                self.assertEqual([step["repair_index"] for step in repair_steps], [1, 2])
+                completion_steps = [step for step in result["execution"]["steps"] if step["kind"] == "completion"]
+                self.assertTrue(completion_steps)
+                self.assertEqual(completion_steps[-1]["state"], "complete")
+                self.assertEqual((project / "bad.py").read_text(encoding="utf-8"), "print('ok')\n")
+        finally:
+            CURRENT_SESSION_ID.reset(session_token)
+            STATE.get("sessions", {}).pop(session_id, None)
+
+    def test_backend_repair_prompt_marks_repeated_failure_signature(self) -> None:
+        session_id = "auto-execute-repeated-repair-test"
+        STATE.get("sessions", {}).pop(session_id, None)
+        session_token = CURRENT_SESSION_ID.set(session_id)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                project = root / "demo"
+                project.mkdir()
+                (project / "bad.py").write_text("print(\n", encoding="utf-8")
+                STATE["sessions"][session_id] = {
+                    "workspace": str(root),
+                    "runners": {},
+                    "agent_jobs": {},
+                    "oauth_pending": {},
+                    "google_user": None,
+                }
+                first = {
+                    "spoken": "Aku coba apply tapi validasi gagal.",
+                    "log": "first",
+                    "changes": [{"path": "demo/bad.py", "new_content": "print(\n"}],
+                    "actions": [],
+                    "intent": {"kind": "command"},
+                    "trace": {"passes": 1, "memory_hits": [], "skills": [], "mcp_servers": [], "mcp_tools_used": [], "verification": [], "warnings": []},
+                }
+                bad_repair_one = {
+                    "spoken": "Aku coba repair pertama.",
+                    "log": "repair-one",
+                    "changes": [{"path": "demo/bad.py", "new_content": "print('still bad'\n"}],
+                    "actions": [],
+                    "intent": {"kind": "command"},
+                    "trace": {"passes": 1, "memory_hits": [], "skills": [], "mcp_servers": [], "mcp_tools_used": [], "verification": [], "warnings": []},
+                }
+                bad_repair_two = {
+                    "spoken": "Aku coba repair kedua.",
+                    "log": "repair-two",
+                    "changes": [{"path": "demo/bad.py", "new_content": "print('still bad again'\n"}],
+                    "actions": [],
+                    "intent": {"kind": "command"},
+                    "trace": {"passes": 1, "memory_hits": [], "skills": [], "mcp_servers": [], "mcp_tools_used": [], "verification": [], "warnings": []},
+                }
+                good_repair = {
+                    "spoken": "Aku ganti strategi dan valid.",
+                    "log": "repair-three",
+                    "changes": [{"path": "demo/bad.py", "new_content": "print('ok')\n"}],
+                    "actions": [],
+                    "intent": {"kind": "command"},
+                    "trace": {"passes": 1, "memory_hits": [], "skills": [], "mcp_servers": [], "mcp_tools_used": [], "verification": [], "warnings": []},
+                }
+
+                with patch("api.main.run_agent_pipeline", side_effect=[first, bad_repair_one, bad_repair_two, good_repair]) as mocked_pipeline, \
+                    patch("api.main.has_supabase", return_value=False), \
+                    patch("api.main._persist_hosted_file", return_value=None):
+                    result = main_mod._run_agent_impl(
+                        main_mod.AgentReq(input="fix python syntax without looping", project_root="demo", auto_execute=True),
+                        event_cb=lambda *_args: None,
+                    )
+
+                self.assertEqual(mocked_pipeline.call_count, 4)
+                second_repair_req = mocked_pipeline.call_args_list[2].args[0]
+                self.assertIn('"repeated_failure": true', second_repair_req.input)
+                self.assertIn('"suggested_next_move"', second_repair_req.input)
+                self.assertEqual(len(result["execution"]["repairs"]), 3)
+                self.assertTrue(result["execution"]["repairs"][0]["execution"]["failure_analysis"]["current_signature"])
+                self.assertTrue(result["execution"]["repairs"][1]["execution"]["failure_analysis"]["current_signature"])
+                self.assertIn("validation failed", result["execution"]["repairs"][1]["execution"]["failure_analysis"]["summary"])
+                self.assertIn("Change strategy", result["execution"]["repairs"][1]["pre_repair_failure_analysis"]["suggested_next_move"])
+                repair_steps = [step for step in result["execution"]["steps"] if step["kind"] == "repair"]
+                self.assertTrue(any(step.get("repeated_failure") for step in repair_steps))
+                completion_steps = [step for step in result["execution"]["steps"] if step["kind"] == "completion"]
+                self.assertTrue(completion_steps)
+                self.assertEqual(completion_steps[-1]["state"], "complete")
+                self.assertTrue(result["execution"]["ok"])
                 self.assertEqual((project / "bad.py").read_text(encoding="utf-8"), "print('ok')\n")
         finally:
             CURRENT_SESSION_ID.reset(session_token)
