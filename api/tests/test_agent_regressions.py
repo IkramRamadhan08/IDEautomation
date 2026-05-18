@@ -16,10 +16,10 @@ from api import agent as agent_mod
 from api import main as main_mod
 from api.agent_mcp import MCPServerInfo, MCPToolCallResult, MCPToolInfo, discover_mcp_servers, execute_mcp_tool, suggest_mcp_actions
 from api.agent_memory import get_agent_memory_overview, remember_agent_run, retrieve_agent_memory
-from api.agent_runtime import _max_tool_loops_for_run, _should_run_deep_preflight, _should_run_refinement, _verify_node, prepare_agent_context
+from api.agent_runtime import _intent_with_active_work_context, _looks_like_plan_only_reply, _max_tool_loops_for_run, _remember_project_work_state, _route_after_verify, _should_run_deep_preflight, _should_run_refinement, _strict_agentic_retry_node, _verify_node, prepare_agent_context
 from api.agent_skills import detect_project_stack, resolve_agent_skills
 from api.agent_tools import execute_local_tool
-from api.app_state import CURRENT_SESSION_ID, CURRENT_USER_ID
+from api.app_state import CURRENT_SESSION_ID, CURRENT_USER_ID, STATE
 from api.auth_identity import AuthenticatedUser
 from api.fs import safe_join
 from api.hybrid import build_hybrid_seed
@@ -81,8 +81,157 @@ class AgentIntentRegressionTests(unittest.TestCase):
         self.assertEqual(vague.kind, "conversation")
         self.assertFalse(vague.should_write_files)
 
+    def test_elongated_continuation_followup_can_continue_build_work(self) -> None:
+        for prompt in ["lanjuttt", "terusss", "next"]:
+            with self.subTest(prompt=prompt):
+                intent = classify_agent_intent(prompt, build_mode="full-agent", active_file="src/App.tsx", open_files=["src/App.tsx"])
+                self.assertIn(intent.kind, {"command", "mixed"})
+                self.assertTrue(intent.should_write_files)
+
+    def test_active_work_state_promotes_short_continuation(self) -> None:
+        session_id = "test-session-active-continuation"
+        user_id = "test-user-active-continuation"
+        STATE.get("sessions", {}).pop(session_id, None)
+        session_token = CURRENT_SESSION_ID.set(session_id)
+        user_token = CURRENT_USER_ID.set(user_id)
+        try:
+            base = classify_agent_intent("lanjut", build_mode="full-agent", active_file="src/App.tsx", open_files=["src/App.tsx"])
+            self.assertEqual(base.kind, "conversation")
+            self.assertFalse(base.should_write_files)
+
+            inherited, context = _intent_with_active_work_context(base, text="lanjut", project_root="demo", build_mode="full-agent")
+            self.assertEqual(inherited.kind, "conversation")
+            self.assertFalse(inherited.should_write_files)
+            self.assertIsNone(context)
+
+            write_intent = classify_agent_intent(
+                "buat UI settings 9Router",
+                build_mode="full-agent",
+                active_file="src/App.tsx",
+                open_files=["src/App.tsx"],
+            )
+            _remember_project_work_state(
+                project_root="demo",
+                build_mode="full-agent",
+                user_input="buat UI settings 9Router",
+                spoken="Saya sudah mulai ubah settings.",
+                changes=[{"path": "demo/src/App.tsx", "new_content": "export default function App() { return null }"}],
+                actions=[{"type": "shell", "command": "npm run build"}],
+                intent=write_intent,
+            )
+
+            inherited, context = _intent_with_active_work_context(base, text="lanjut", project_root="demo", build_mode="full-agent")
+            self.assertEqual(inherited.kind, "command")
+            self.assertTrue(inherited.should_write_files)
+            self.assertTrue(inherited.should_run_tools)
+            self.assertIn("ACTIVE WORK CONTINUATION", context or "")
+            self.assertIn("buat UI settings 9Router", context or "")
+            self.assertIn("demo/src/App.tsx", context or "")
+        finally:
+            CURRENT_USER_ID.reset(user_token)
+            CURRENT_SESSION_ID.reset(session_token)
+            STATE.get("sessions", {}).pop(session_id, None)
+
 
 class AgentRuntimeContextRegressionTests(unittest.TestCase):
+    def test_strict_agentic_guard_flags_plan_only_build_reply(self) -> None:
+        self.assertTrue(_looks_like_plan_only_reply("Aku cek dulu struktur routing lalu baru patch."))
+        self.assertFalse(_looks_like_plan_only_reply("Masalahnya import route salah dan patch sudah disiapkan."))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            project_dir.mkdir()
+            req = SimpleNamespace(
+                input="fix route preview",
+                project_root="demo",
+                build_mode="full-agent",
+                active_file=None,
+                open_files=[],
+                current_content=None,
+                asset_paths=[],
+            )
+            ctx = prepare_agent_context(req, ws_root)
+            state = {
+                "context": ctx,
+                "input": req.input,
+                "spoken": "Aku cek dulu struktur routing lalu baru patch.",
+                "changes": [],
+                "actions": [],
+            }
+
+            next_state = _verify_node(state)
+            checks = next_state["context"].trace_verification
+
+        strict_check = next(item for item in checks if item["name"] == "strict-agentic-progress")
+        self.assertFalse(strict_check["ok"])
+        self.assertIn("plan-only", strict_check["detail"])
+
+    def test_strict_agentic_retry_routes_plan_only_build_reply(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            project_dir.mkdir()
+            req = SimpleNamespace(
+                input="fix route preview",
+                project_root="demo",
+                build_mode="full-agent",
+                active_file=None,
+                open_files=[],
+                current_content=None,
+                asset_paths=[],
+            )
+            ctx = prepare_agent_context(req, ws_root)
+            state = {
+                "context": ctx,
+                "input": req.input,
+                "spoken": "Aku cek dulu struktur routing lalu baru patch.",
+                "changes": [],
+                "actions": [],
+            }
+
+            self.assertEqual(_route_after_verify(state), "strict_retry")
+            state["strict_agentic_retried"] = True
+            self.assertEqual(_route_after_verify(state), "finalize")
+
+    def test_strict_agentic_retry_can_replace_plan_with_action(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            project_dir.mkdir()
+            req = SimpleNamespace(
+                input="fix route preview",
+                project_root="demo",
+                build_mode="full-agent",
+                active_file=None,
+                open_files=[],
+                current_content=None,
+                asset_paths=[],
+            )
+            ctx = prepare_agent_context(req, ws_root)
+            state = {
+                "context": ctx,
+                "input": req.input,
+                "spoken": "Aku cek dulu struktur routing lalu baru patch.",
+                "changes": [],
+                "actions": [],
+                "emit": lambda _event, _data: None,
+            }
+            suggestion = SimpleNamespace(
+                spoken="Masalahnya route preview salah dan patch sudah disiapkan.",
+                log="retry-ok",
+                changes=[{"path": "src/App.tsx", "new_content": "export default function App() { return null; }\n"}],
+                actions=[],
+            )
+
+            with patch("api.agent_runtime.suggest", return_value=suggestion) as mocked_suggest:
+                next_state = _strict_agentic_retry_node(state)
+
+            self.assertTrue(next_state["strict_agentic_retried"])
+            self.assertEqual(next_state["changes"], suggestion.changes)
+            self.assertIn("strict_agentic_retry=1", next_state["log"])
+            mocked_suggest.assert_called_once()
+
     def test_project_instruction_stack_is_loaded_into_agent_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ws_root = Path(tmp)
@@ -685,6 +834,41 @@ class CommandPolicyRegressionTests(unittest.TestCase):
                 decision = _command_policy_decision(command)
                 self.assertFalse(decision.ok)
                 self.assertIn(decision.risk_level, {"approval_required", "blocked"})
+
+    def test_agent_harness_runs_shell_actions_with_policy_evidence(self) -> None:
+        session_id = "harness-shell-test"
+        STATE.get("sessions", {}).pop(session_id, None)
+        session_token = CURRENT_SESSION_ID.set(session_id)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                STATE["sessions"][session_id] = {
+                    "workspace": str(root),
+                    "runners": {},
+                    "agent_jobs": {},
+                    "oauth_pending": {},
+                    "google_user": None,
+                }
+                (root / "ok.py").write_text("print('ok')\n", encoding="utf-8")
+                req = main_mod.AgentHarnessRunShellReq(
+                    project_root=".",
+                    actions=[
+                        main_mod.AgentHarnessShellAction(command="python3 -m compileall .", reason="validate python files"),
+                        main_mod.AgentHarnessShellAction(command="rm -rf src", reason="unsafe destructive command"),
+                    ],
+                )
+
+                result = main_mod.agent_harness_run_shell(req)
+        finally:
+            CURRENT_SESSION_ID.reset(session_token)
+            STATE.get("sessions", {}).pop(session_id, None)
+
+        self.assertEqual(result["ran"], 2)
+        self.assertTrue(result["results"][0]["ok"])
+        self.assertEqual(result["results"][0]["policy"]["risk_level"], "safe")
+        self.assertFalse(result["results"][1]["ok"])
+        self.assertEqual(result["results"][1]["returncode"], 126)
+        self.assertIn(result["results"][1]["policy"]["risk_level"], {"blocked", "approval_required"})
 
 
 class MCPHintRegressionTests(unittest.TestCase):
@@ -1368,6 +1552,108 @@ class HostedProfileIdRegressionTests(unittest.TestCase):
 
         self.assertEqual(resp.preferences.profile_id, "sb-user-123")
         self.assertEqual(seen_profile_ids, ["sb-user-123"])
+
+
+class AgentAutoExecuteRegressionTests(unittest.TestCase):
+    def test_run_agent_impl_can_auto_execute_apply_and_shell_harness(self) -> None:
+        session_id = "auto-execute-test"
+        STATE.get("sessions", {}).pop(session_id, None)
+        session_token = CURRENT_SESSION_ID.set(session_id)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                project = root / "demo"
+                project.mkdir()
+                (project / "src").mkdir()
+                (project / "src" / "App.tsx").write_text("old\n", encoding="utf-8")
+                (project / "ok.py").write_text("print('ok')\n", encoding="utf-8")
+                STATE["sessions"][session_id] = {
+                    "workspace": str(root),
+                    "runners": {},
+                    "agent_jobs": {},
+                    "oauth_pending": {},
+                    "google_user": None,
+                }
+                pipeline = {
+                    "spoken": "Aku apply patch dan validasi dari backend harness.",
+                    "log": "fake",
+                    "changes": [{"path": "demo/src/App.tsx", "new_content": "agent edit\n"}],
+                    "actions": [{"type": "shell", "command": "python3 -m compileall .", "reason": "validate"}],
+                    "intent": {"kind": "command"},
+                    "trace": {"passes": 1, "memory_hits": [], "skills": [], "mcp_servers": [], "mcp_tools_used": [], "verification": [], "warnings": []},
+                }
+
+                with patch("api.main.run_agent_pipeline", return_value=pipeline), \
+                    patch("api.main.has_supabase", return_value=False), \
+                    patch("api.main._persist_hosted_file", return_value=None):
+                    result = main_mod._run_agent_impl(
+                        main_mod.AgentReq(input="patch and validate", project_root="demo", auto_execute=True),
+                        event_cb=lambda *_args: None,
+                    )
+
+                self.assertTrue(result["execution"]["ok"])
+                self.assertTrue(result["execution"]["apply"]["applied"])
+                self.assertEqual(result["execution"]["shell"]["ran"], 1)
+                self.assertTrue(result["execution"]["shell"]["results"][0]["ok"])
+                self.assertTrue(result["execution"]["validation"]["ok"])
+                self.assertGreaterEqual(result["execution"]["validation"]["ran"], 1)
+                self.assertEqual((project / "src" / "App.tsx").read_text(encoding="utf-8"), "agent edit\n")
+        finally:
+            CURRENT_SESSION_ID.reset(session_token)
+            STATE.get("sessions", {}).pop(session_id, None)
+
+    def test_backend_auto_execute_runs_one_repair_pass_after_validation_failure(self) -> None:
+        session_id = "auto-execute-repair-test"
+        STATE.get("sessions", {}).pop(session_id, None)
+        session_token = CURRENT_SESSION_ID.set(session_id)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                project = root / "demo"
+                project.mkdir()
+                (project / "bad.py").write_text("print(\n", encoding="utf-8")
+                STATE["sessions"][session_id] = {
+                    "workspace": str(root),
+                    "runners": {},
+                    "agent_jobs": {},
+                    "oauth_pending": {},
+                    "google_user": None,
+                }
+                first = {
+                    "spoken": "Aku coba apply tapi validasi gagal.",
+                    "log": "first",
+                    "changes": [{"path": "demo/bad.py", "new_content": "print(\n"}],
+                    "actions": [],
+                    "intent": {"kind": "command"},
+                    "trace": {"passes": 1, "memory_hits": [], "skills": [], "mcp_servers": [], "mcp_tools_used": [], "verification": [], "warnings": []},
+                }
+                repair = {
+                    "spoken": "Aku perbaiki syntax error.",
+                    "log": "repair",
+                    "changes": [{"path": "demo/bad.py", "new_content": "print('ok')\n"}],
+                    "actions": [],
+                    "intent": {"kind": "command"},
+                    "trace": {"passes": 1, "memory_hits": [], "skills": [], "mcp_servers": [], "mcp_tools_used": [], "verification": [], "warnings": []},
+                }
+
+                with patch("api.main.run_agent_pipeline", side_effect=[first, repair]) as mocked_pipeline, \
+                    patch("api.main.has_supabase", return_value=False), \
+                    patch("api.main._persist_hosted_file", return_value=None):
+                    result = main_mod._run_agent_impl(
+                        main_mod.AgentReq(input="fix python syntax", project_root="demo", auto_execute=True),
+                        event_cb=lambda *_args: None,
+                    )
+
+                self.assertEqual(mocked_pipeline.call_count, 2)
+                self.assertFalse(result["execution"]["validation"]["ok"])
+                self.assertEqual(len(result["execution"]["repairs"]), 1)
+                repair_execution = result["execution"]["repairs"][0]["execution"]
+                self.assertTrue(repair_execution["ok"])
+                self.assertTrue(repair_execution["validation"]["ok"])
+                self.assertEqual((project / "bad.py").read_text(encoding="utf-8"), "print('ok')\n")
+        finally:
+            CURRENT_SESSION_ID.reset(session_token)
+            STATE.get("sessions", {}).pop(session_id, None)
 
 
 class CapabilityHonestyRegressionTests(unittest.TestCase):
@@ -2072,6 +2358,54 @@ class PatchApplyRegressionTests(unittest.TestCase):
             self.assertEqual(result["count"], 1)
             self.assertEqual(target.read_text(encoding="utf-8"), "agent edit\n")
 
+    def test_agent_harness_apply_creates_checkpoint_and_rejects_stale_patch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "demo" / "src" / "App.tsx"
+            target.parent.mkdir(parents=True)
+            target.write_text("old\n", encoding="utf-8")
+
+            with patch("api.main._ws", return_value=root), patch("api.main._persist_hosted_file", return_value=None):
+                applied = main_mod.agent_harness_apply(
+                    main_mod.AgentHarnessApplyReq(
+                        project_root="demo",
+                        label="Applying",
+                        changes=[
+                            main_mod.AgentHarnessApplyChange(
+                                path="demo/src/App.tsx",
+                                content="agent edit\n",
+                                expected_sha256=_sha256_text("old\n"),
+                                expected_exists=True,
+                            )
+                        ],
+                    )
+                )
+
+                target.write_text("user edit\n", encoding="utf-8")
+                stale = main_mod.agent_harness_apply(
+                    main_mod.AgentHarnessApplyReq(
+                        project_root="demo",
+                        label="Applying",
+                        changes=[
+                            main_mod.AgentHarnessApplyChange(
+                                path="demo/src/App.tsx",
+                                content="second agent edit\n",
+                                expected_sha256=_sha256_text("agent edit\n"),
+                                expected_exists=True,
+                            )
+                        ],
+                    )
+                )
+
+            self.assertTrue(applied["ok"])
+            self.assertTrue(applied["applied"])
+            self.assertEqual(applied["count"], 1)
+            self.assertTrue((root / applied["checkpoint_path"]).exists())
+            self.assertFalse(stale["ok"])
+            self.assertFalse(stale["applied"])
+            self.assertEqual(stale["conflicts"][0]["reason"], "stale_hash")
+            self.assertEqual(target.read_text(encoding="utf-8"), "user edit\n")
+
 
 class TranscriptPurityRegressionTests(unittest.TestCase):
     def test_workflow_only_appends_spoken_chunks_to_assistant_bubbles(self) -> None:
@@ -2084,7 +2418,25 @@ class TranscriptPurityRegressionTests(unittest.TestCase):
             if "appendAssistantLiveText(" in line and "appendAssistantLiveText:" not in line
         ]
 
-        self.assertEqual(live_append_lines, ["appendAssistantLiveText(spokenChunk);"])
+        self.assertEqual(live_append_lines, ['appendAssistantLiveText(spokenChunk, "default", nativeStream);'])
+
+    def test_workflow_has_no_hardcoded_assistant_milestones(self) -> None:
+        repo_root = Path(__file__).resolve().parents[2]
+        workflow_text = (repo_root / "src" / "agent" / "workflow.ts").read_text(encoding="utf-8")
+
+        self.assertNotIn("pushAssistantMilestone", workflow_text)
+        self.assertNotIn("Konteksnya sudah kebaca", workflow_text)
+        self.assertIn('event.event === "tool_call"', workflow_text)
+        self.assertIn('event.event === "tool_output"', workflow_text)
+
+    def test_agent_contract_requires_model_native_progress(self) -> None:
+        repo_root = Path(__file__).resolve().parents[2]
+        runtime_text = (repo_root / "api" / "agent_runtime.py").read_text(encoding="utf-8")
+        agent_text = (repo_root / "api" / "agent.py").read_text(encoding="utf-8")
+
+        self.assertIn("CODEX-STYLE PROGRESS", runtime_text)
+        self.assertIn("If you return `tool` or `mcp` actions", runtime_text)
+        self.assertIn("If you need to call tools or run project actions", agent_text)
 
 
 if __name__ == "__main__":

@@ -38,6 +38,12 @@ function pickRandom<T>(items: T[]): T {
   return items[Math.floor(Math.random() * items.length)];
 }
 
+function compactBubbleText(text: string, max = 220) {
+  const clean = text.replace(/\s+/g, " ").trim();
+  if (clean.length <= max) return clean;
+  return `${clean.slice(0, max - 1).trimEnd()}…`;
+}
+
 export const AgentOrb: React.FC<AgentOrbProps> = ({
   ws,
   buildMode,
@@ -87,6 +93,10 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
   const showRunExperience = agentRunViewPinned || agentStatus === "thinking";
   const personaClass = buildMode === "full-agent" ? "clara" : "raka";
   const visibleConversationItems = agentLiveItems.filter((item) => item.role === "user" || item.role === "assistant");
+  const latestAssistantText = [...agentLiveItems].reverse().find((item) => item.role === "assistant")?.text || agentReply;
+  const collapsedBubbleText = agentStatus === "thinking"
+    ? compactBubbleText(latestAssistantText)
+    : bubbleText;
   const contextChips = [
     `${modeProfile.personaName} • ${modeProfile.personaRole}`,
     activeFileName ? `File: ${activeFileName}` : null,
@@ -140,7 +150,6 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
   React.useEffect(() => {
     if (agentStatus === "thinking") {
       setOrbMode("working");
-      setBubbleText(workingMsg || "Lagi kerja. Jangan kaget kalau aku melotot ke terminal.");
       return;
     }
     if (agentStatus === "error") {
@@ -237,13 +246,9 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
     if (prevAgentReplyRef.current === agentReply) return;
     prevAgentReplyRef.current = agentReply;
     if (agentReply.trim()) {
-      triggerReaction("playful", pickRandom([
-        `${modeProfile.personaName} udah jawab. Coba cek hasilnya ya.`,
-        "Sudah kuberesin sebagian. Review bentar, terus lanjut gas.",
-        `Respons keluar. ${modeProfile.personaName} balik sok sibuk sekarang.`,
-      ]), 6000);
+      triggerReaction("playful", compactBubbleText(agentReply), 6000);
     }
-  }, [agentReply, agentWidgetOpen, modeProfile, triggerReaction]);
+  }, [agentReply, agentWidgetOpen, triggerReaction]);
 
   React.useEffect(() => {
     const query = window.matchMedia("(max-width: 720px), (pointer: coarse)");
@@ -302,15 +307,15 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
     >
       <div ref={nodeRef} className={`agentOrb ${personaClass} ${agentWidgetOpen ? "open" : "collapsed"}`}>
         <AnimatePresence>
-          {!agentWidgetOpen && bubbleText ? (
+          {!agentWidgetOpen && collapsedBubbleText ? (
             <motion.div
-              key={`${orbMode}:${bubbleText}`}
+              key={`${orbMode}:${collapsedBubbleText}`}
               initial={{ opacity: 0, y: 10, scale: 0.96 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 8, scale: 0.96 }}
               className={`agentOrbBubble ${orbMode}`}
             >
-              {bubbleText}
+              {collapsedBubbleText}
             </motion.div>
           ) : null}
         </AnimatePresence>
@@ -372,13 +377,14 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
                     </div>
 
                     <AgentLiveStage
-                      items={agentStatus === "thinking" ? agentLiveItems : (agentLiveItems.length > 0 ? agentLiveItems : visibleConversationItems)}
+                      items={agentLiveItems.length > 0 ? agentLiveItems : visibleConversationItems}
                       agentStatus={agentStatus}
                       personaName={modeProfile.personaName}
                       workingMsg={workingMsg}
                       emptyText={agentReply || `Begitu kamu run, jawaban ${modeProfile.personaName} bakal muncul live di sini.`}
-                      includeTools
-                      conversationOnly={false}
+                      includeTools={false}
+                      conversationOnly
+                      showTyping={false}
                     />
                     {agentStatus !== "thinking" ? (
                       <>

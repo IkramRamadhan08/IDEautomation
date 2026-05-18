@@ -73,6 +73,20 @@ export type AgentAuditSnapshot = {
     failed: number;
     commands: string[];
   }>;
+  appliedPatches?: Array<{
+    label: string;
+    count: number;
+    paths: string[];
+    checkpointPath?: string | null;
+  }>;
+  shellRuns?: Array<{
+    command: string;
+    ok: boolean;
+    returncode?: number | null;
+    stdoutPreview?: string;
+    stderrPreview?: string;
+    error?: string | null;
+  }>;
   previewAudits?: Array<{
     label: string;
     ok: boolean;

@@ -15,6 +15,7 @@ from .agent_mcp import discover_mcp_servers, execute_mcp_tool, format_mcp_prompt
 from .agent_tools import execute_local_tool, format_local_tool_results_prompt, format_local_tools_prompt
 from .agent_memory import remember_agent_run, retrieve_agent_memory
 from .agent_skills import format_skill_prompt, resolve_agent_skills
+from .app_state import CURRENT_SESSION_ID, CURRENT_USER_ID, STATE
 from .fs import read_text, safe_join
 from .hybrid import build_hybrid_seed, merge_hybrid_seed, should_seed_hybrid
 
@@ -85,6 +86,12 @@ INTERACTION SEPARATION:
 - `spoken` is the conversational answer streamed in the orb.
 - `actions` and tool traces are operational activity for the interaction module.
 - Do not put conversational filler in shell/tool actions.
+
+CODEX-STYLE PROGRESS:
+- If you return `tool` or `mcp` actions, `spoken` must be a short user-facing progress update explaining what you are checking and why. Example shape: "Aku cek struktur routing dulu karena gejalanya mengarah ke preview/runtime, lalu aku lanjut patch dari hasilnya."
+- After tool results are included in context, `spoken` must summarize the concrete finding from those results and the next implementation/verification step.
+- Do not save all narration for the end. Each model pass should have a useful `spoken` update when work is still in progress.
+- Keep progress updates concise and evidence-based. Do not claim a command, browser audit, deploy, MCP call, or database operation happened unless it appears in actions/tool trace or supplied context.
 """
 
 _FRONTEND_EXTS = {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".css", ".scss", ".sass", ".less", ".html"}
@@ -112,6 +119,17 @@ _NODE_BUILTIN_MODULES = {
     "net", "os", "path", "perf_hooks", "process", "querystring", "readline", "stream", "string_decoder",
     "timers", "tls", "tty", "url", "util", "vm", "worker_threads", "zlib",
 }
+_CONTINUATION_ONLY_RE = re.compile(r"^\s*(lanju+t+|lanjutin|terus+|next|continue|go+|oke lanjut|yaudah lanjut)\s*[!.?]*\s*$", re.IGNORECASE)
+_PLAN_ONLY_REPLY_RE = re.compile(
+    r"\b("
+    r"akan|bakal|perlu|rencana|plan|planning|cek dulu|lihat dulu|inspect|review dulu|"
+    r"i(?:'|’)ll|i will|i need to|let me|going to|next i"
+    r")\b",
+    re.IGNORECASE,
+)
+_STRICT_AGENTIC_BLOCKED_TEXT = (
+    "Agent stopped after repeated plan-only turns without taking a concrete action."
+)
 
 
 @dataclass(frozen=True)
@@ -296,6 +314,8 @@ class AgentRuntimeState(TypedDict, total=False):
     plan: list[dict[str, Any]]
     deep_preflight: bool
     emit: EventEmitter | None
+    strict_agentic_retried: bool
+    streamed_spoken_chars: int
 
 
 class AgentRuntimeResult(TypedDict):
@@ -305,6 +325,93 @@ class AgentRuntimeResult(TypedDict):
     actions: list[dict[str, Any]]
     intent: dict[str, Any]
     trace: dict[str, Any]
+
+
+def _agent_work_state() -> dict[str, Any]:
+    session_id = CURRENT_SESSION_ID.get()
+    user_id = CURRENT_USER_ID.get()
+    sessions = STATE.setdefault("sessions", {})
+    session = sessions.setdefault(session_id, {"workspace": None, "runners": {}, "oauth_pending": {}, "google_user": None})
+    agent_state = session.setdefault("agent_work_state", {})
+    return agent_state.setdefault(user_id, {})
+
+
+def _project_work_state_key(project_root: str) -> str:
+    return str(project_root or ".").strip() or "."
+
+
+def _get_project_work_state(project_root: str) -> dict[str, Any] | None:
+    state = _agent_work_state().get(_project_work_state_key(project_root))
+    return state if isinstance(state, dict) else None
+
+
+def _remember_project_work_state(
+    *,
+    project_root: str,
+    build_mode: str,
+    user_input: str,
+    spoken: str,
+    changes: list[dict[str, Any]],
+    actions: list[dict[str, Any]],
+    intent: AgentIntent,
+) -> None:
+    if not (changes or actions or intent.should_write_files):
+        return
+    _agent_work_state()[_project_work_state_key(project_root)] = {
+        "kind": "command",
+        "build_mode": build_mode,
+        "last_input": str(user_input or "")[:500],
+        "last_spoken": str(spoken or "")[:500],
+        "change_paths": [str(item.get("path") or "") for item in changes if isinstance(item, dict)][:12],
+        "action_commands": [str(item.get("command") or "") for item in actions if isinstance(item, dict) and str(item.get("command") or "").strip()][:8],
+    }
+
+
+def _intent_with_active_work_context(intent: AgentIntent, *, text: str, project_root: str, build_mode: str | None) -> tuple[AgentIntent, str | None]:
+    raw = str(text or "").strip()
+    if not _CONTINUATION_ONLY_RE.match(raw):
+        return intent, None
+    active = _get_project_work_state(project_root)
+    if not active or str(active.get("kind") or "") != "command":
+        return intent, None
+    inherited = AgentIntent(
+        kind="command",
+        confidence=max(intent.confidence, 0.86),
+        rationale=f"{intent.rationale}, active work continuation",
+        should_write_files=True,
+        should_run_tools=True,
+        wants_app_builder=True,
+    )
+    context = "\n".join([
+        "ACTIVE WORK CONTINUATION:",
+        f"- Previous task: {str(active.get('last_input') or '').strip()}",
+        f"- Last agent result: {str(active.get('last_spoken') or '').strip()}",
+        f"- Files touched: {', '.join(active.get('change_paths') or []) or '(none)'}",
+        f"- Commands/actions: {', '.join(active.get('action_commands') or []) or '(none)'}",
+        f"- Current mode: {build_mode or str(active.get('build_mode') or '')}",
+        "- Treat this short follow-up as continuing the active implementation task, not as casual chat.",
+    ])
+    return inherited, context
+
+
+def _looks_like_plan_only_reply(spoken: str) -> bool:
+    text = re.sub(r"\s+", " ", str(spoken or "")).strip()
+    if not text:
+        return False
+    if len(text) > 900:
+        return False
+    return bool(_PLAN_ONLY_REPLY_RE.search(text))
+
+
+def _needs_strict_agentic_retry(state: AgentRuntimeState) -> bool:
+    ctx = state["context"]
+    if not ctx.intent.should_write_files:
+        return False
+    if bool(state.get("strict_agentic_retried")):
+        return False
+    if state.get("changes") or state.get("actions"):
+        return False
+    return _looks_like_plan_only_reply(str(state.get("spoken") or ""))
 
 
 def get_agent_mode_profile(build_mode: str | None) -> AgentModeProfile:
@@ -898,6 +1005,14 @@ def prepare_agent_context(req: Any, ws_root: Path) -> PreparedAgentContext:
         active_file=active_rel,
         open_files=open_files,
     )
+    intent, active_work_context = _intent_with_active_work_context(
+        intent,
+        text=getattr(req, "input", "") or "",
+        project_root=project_root,
+        build_mode=mode_profile.build_mode,
+    )
+    if active_work_context:
+        prep_warnings.append({"phase": "intent", "message": "Short follow-up inherited active implementation context."})
 
     try:
         current = req.current_content if current_from_buffer else (read_text(project_dir, active_rel) if active_rel else "")
@@ -1039,7 +1154,10 @@ def prepare_agent_context(req: Any, ws_root: Path) -> PreparedAgentContext:
         trace_warnings=list(prep_warnings),
         suggested_mcp_actions=[],
     )
-    extra_context = "\n\n".join([*_build_context_parts(ctx_stub, req), intent.prompt_block])
+    context_parts = [*_build_context_parts(ctx_stub, req), intent.prompt_block]
+    if active_work_context:
+        context_parts.append(active_work_context)
+    extra_context = "\n\n".join(context_parts)
     asset_prompt = _build_asset_prompt(ctx_stub)
     project_instruction_prompt = _read_project_instructions(project_dir, warnings=ctx_stub.trace_warnings)
     if project_instruction_prompt:
@@ -1324,9 +1442,23 @@ def _deep_preflight_node(state: AgentRuntimeState) -> AgentRuntimeState:
     for spec in tool_specs:
         tool_name = str(spec.get("tool") or "")
         arguments = spec.get("arguments") if isinstance(spec.get("arguments"), dict) else {}
+        _emit(state, "tool_call", {"kind": "local_tool", "tool": tool_name, "arguments": arguments, "phase": "deep_preflight"})
         _emit(state, "delta", {"message": f"Function call: {tool_name}..."})
         result = execute_local_tool(ctx.ws_root, ctx.project_dir, tool_name=tool_name, arguments=arguments)
         results.append(result)
+        _emit(
+            state,
+            "tool_output",
+            {
+                "kind": "local_tool",
+                "tool": result.tool,
+                "ok": result.ok,
+                "duration_ms": result.duration_ms,
+                "error": result.error,
+                "text": (result.text or "")[:1200],
+                "phase": "deep_preflight",
+            },
+        )
         ctx.trace_local_tools_used.append(
             {
                 "tool": result.tool,
@@ -1387,6 +1519,7 @@ def _draft_node(state: AgentRuntimeState) -> AgentRuntimeState:
             "- Tool results are already included in context.\n"
             "- Prefer producing the final implementation now.\n"
             "- Ask for another MCP tool only if the current tool result is still insufficient.\n\n"
+            "Your `spoken` field should briefly state what the tool result revealed and what you are doing next.\n\n"
         )
 
     intent_prefix = ctx.intent.prompt_block + "\n"
@@ -1492,6 +1625,7 @@ def _execute_tooling_node(state: AgentRuntimeState) -> AgentRuntimeState:
     for action in tool_actions[:_MAX_MCP_ACTIONS_PER_LOOP]:
         tool = str(action.get("tool") or "").strip()
         arguments = action.get("arguments") if isinstance(action.get("arguments"), dict) else {}
+        _emit(state, "tool_call", {"kind": "local_tool", "tool": tool, "arguments": arguments, "phase": "tooling"})
         _emit(state, "delta", {"message": f"Tool {tool} lagi dipanggil..."})
         result = execute_local_tool(
             ctx.ws_root,
@@ -1500,6 +1634,19 @@ def _execute_tooling_node(state: AgentRuntimeState) -> AgentRuntimeState:
             arguments=arguments,
         )
         local_results.append(result)
+        _emit(
+            state,
+            "tool_output",
+            {
+                "kind": "local_tool",
+                "tool": result.tool,
+                "ok": result.ok,
+                "duration_ms": result.duration_ms,
+                "error": result.error,
+                "text": (result.text or "")[:1200],
+                "phase": "tooling",
+            },
+        )
         ctx.trace_local_tools_used.append(
             {
                 "tool": result.tool,
@@ -1529,6 +1676,7 @@ def _execute_tooling_node(state: AgentRuntimeState) -> AgentRuntimeState:
         server = str(action.get("server") or "").strip()
         tool = str(action.get("tool") or "").strip()
         arguments = action.get("arguments") if isinstance(action.get("arguments"), dict) else {}
+        _emit(state, "tool_call", {"kind": "mcp", "server": server, "tool": tool, "arguments": arguments, "phase": "tooling"})
         _emit(state, "delta", {"message": f"MCP {server}.{tool} lagi dipanggil..."})
         result = execute_mcp_tool(
             ctx.ws_root,
@@ -1538,6 +1686,20 @@ def _execute_tooling_node(state: AgentRuntimeState) -> AgentRuntimeState:
             arguments=arguments,
         )
         mcp_results.append(result)
+        _emit(
+            state,
+            "tool_output",
+            {
+                "kind": "mcp",
+                "server": result.server,
+                "tool": result.tool,
+                "ok": result.ok,
+                "duration_ms": result.duration_ms,
+                "error": result.error,
+                "text": (result.text or "")[:1200],
+                "phase": "tooling",
+            },
+        )
         ctx.trace_mcp_tools_used.append(
             {
                 "server": result.server,
@@ -1625,6 +1787,7 @@ def _verify_node(state: AgentRuntimeState) -> AgentRuntimeState:
     _emit(state, "status", {"phase": "verifying", "message": "Ngecek hasil draft sebelum final..."})
     changes = list(state.get("changes") or [])
     actions = list(state.get("actions") or [])
+    spoken = str(state.get("spoken") or "")
     checks: list[dict[str, Any]] = []
 
     def add(name: str, ok: bool, detail: str) -> None:
@@ -1637,6 +1800,15 @@ def _verify_node(state: AgentRuntimeState) -> AgentRuntimeState:
             "has-work-output",
             bool(changes or actions),
             "Build request produced file changes or runtime actions." if changes or actions else "Build request produced no file changes/actions.",
+        )
+        add(
+            "strict-agentic-progress",
+            bool(changes or actions) or not _looks_like_plan_only_reply(spoken),
+            (
+                "Build request either acted or did not stop at a plan-only reply."
+                if (changes or actions) or not _looks_like_plan_only_reply(spoken)
+                else "Strict-agentic guard: build request stopped after a plan-only reply without concrete tool/action/file progress."
+            ),
         )
     else:
         add(
@@ -1730,6 +1902,87 @@ def _verify_node(state: AgentRuntimeState) -> AgentRuntimeState:
 
     ctx.trace_verification = checks
     return {"context": ctx}
+
+
+def _strict_agentic_retry_node(state: AgentRuntimeState) -> AgentRuntimeState:
+    ctx = state["context"]
+    _emit(
+        state,
+        "status",
+        {
+            "phase": "strict_agentic",
+            "message": "Output masih rencana doang, agent diminta bertindak sekarang...",
+        },
+    )
+    previous_spoken = str(state.get("spoken") or "")
+    retry_instruction = "\n\n".join(
+        [
+            ctx.mode_profile.instruction_prefix + ctx.intent.prompt_block + ctx.asset_prompt + state["input"],
+            "STRICT-AGENTIC RETRY:",
+            "Your previous response only described a plan and produced no concrete file changes or executable actions.",
+            "Act now. Return valid JSON with concrete file patches/changes or shell/tool actions that advance the task.",
+            "Do not answer with another plan. If you are truly blocked, set `spoken` to the concrete blocker and keep changes/actions empty.",
+            f"Previous spoken:\n{previous_spoken}",
+        ]
+    )
+    streamed_spoken_chars = 0
+
+    def emit_spoken_delta(delta: str) -> None:
+        nonlocal streamed_spoken_chars
+        text = str(delta or "")
+        if text == "":
+            return
+        streamed_spoken_chars += len(text)
+        _emit(state, "delta", {"spoken_chunk": text, "native_stream": True})
+
+    try:
+        retried = suggest(
+            instruction=retry_instruction,
+            path=ctx.active_rel or "(no-active-file)",
+            content=ctx.current,
+            file_tree=ctx.all_files,
+            relevant_files=ctx.relevant_files,
+            extra_context=ctx.extra_context,
+            workspace_root=ctx.project_dir,
+            system=ctx.mode_profile.system_prompt,
+            on_spoken_delta=emit_spoken_delta,
+        )
+        _emit(
+            state,
+            "delta",
+            {
+                "message": "Strict-agentic retry selesai, hasilnya diverifikasi ulang...",
+                "changes_so_far": len(list(retried.changes or [])),
+            },
+        )
+        return {
+            "spoken": retried.spoken or previous_spoken,
+            "log": f"{str(state.get('log') or '').strip()} strict_agentic_retry=1 {str(retried.log or '').strip()}".strip(),
+            "changes": list(retried.changes or []),
+            "actions": list(retried.actions or []),
+            "passes": max(int(state.get("passes") or 1), 2),
+            "strict_agentic_retried": True,
+            "streamed_spoken_chars": int(state.get("streamed_spoken_chars") or 0) + streamed_spoken_chars,
+        }
+    except Exception as exc:
+        message = f"{_STRICT_AGENTIC_BLOCKED_TEXT} ({exc})"[:240]
+        ctx.trace_warnings.append({"phase": "strict-agentic", "message": message})
+        _emit(state, "delta", {"message": message})
+        return {
+            "context": ctx,
+            "spoken": previous_spoken,
+            "changes": [],
+            "actions": [],
+            "log": f"{str(state.get('log') or '').strip()} strict_agentic_retry=failed".strip(),
+            "passes": max(int(state.get("passes") or 1), 2),
+            "strict_agentic_retried": True,
+        }
+
+
+def _route_after_verify(state: AgentRuntimeState) -> str:
+    if _needs_strict_agentic_retry(state):
+        return "strict_retry"
+    return "finalize"
 
 
 def _finalize_node(state: AgentRuntimeState) -> AgentRuntimeState:
@@ -1847,6 +2100,7 @@ _AGENT_GRAPH_BUILDER.add_node("draft", _draft_node)
 _AGENT_GRAPH_BUILDER.add_node("tooling", _execute_tooling_node)
 _AGENT_GRAPH_BUILDER.add_node("refine", _refine_node)
 _AGENT_GRAPH_BUILDER.add_node("verify", _verify_node)
+_AGENT_GRAPH_BUILDER.add_node("strict_retry", _strict_agentic_retry_node)
 _AGENT_GRAPH_BUILDER.add_node("finalize", _finalize_node)
 _AGENT_GRAPH_BUILDER.set_entry_point("intent")
 _AGENT_GRAPH_BUILDER.add_edge("intent", "memory")
@@ -1858,7 +2112,8 @@ _AGENT_GRAPH_BUILDER.add_edge("deep_preflight", "draft")
 _AGENT_GRAPH_BUILDER.add_conditional_edges("draft", _route_after_draft, {"tooling": "tooling", "refine": "refine", "finalize": "verify"})
 _AGENT_GRAPH_BUILDER.add_edge("tooling", "draft")
 _AGENT_GRAPH_BUILDER.add_edge("refine", "verify")
-_AGENT_GRAPH_BUILDER.add_edge("verify", "finalize")
+_AGENT_GRAPH_BUILDER.add_conditional_edges("verify", _route_after_verify, {"strict_retry": "strict_retry", "finalize": "finalize"})
+_AGENT_GRAPH_BUILDER.add_edge("strict_retry", "verify")
 _AGENT_GRAPH_BUILDER.add_edge("finalize", END)
 _AGENT_GRAPH = _AGENT_GRAPH_BUILDER.compile()
 
@@ -1900,6 +2155,22 @@ def run_agent_pipeline(req: Any, *, ws_root: Path, emit: EventEmitter | None = N
             "warnings": list(ctx.trace_warnings),
         }),
     }
+    try:
+        _remember_project_work_state(
+            project_root=ctx.project_root,
+            build_mode=ctx.mode_profile.build_mode,
+            user_input=str(getattr(req, "input", "") or ""),
+            spoken=final_result["spoken"],
+            changes=final_result["changes"],
+            actions=final_result["actions"],
+            intent=ctx.intent,
+        )
+    except Exception as exc:
+        trace = final_result.get("trace")
+        if isinstance(trace, dict):
+            warnings = trace.get("warnings")
+            if isinstance(warnings, list):
+                warnings.append({"phase": "active-work-state", "message": f"Active work state nggak bisa disimpan ({exc})."[:240]})
     try:
         remember_agent_run(
             ws_root,

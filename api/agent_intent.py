@@ -38,7 +38,8 @@ _READONLY_AUDIT_RE = re.compile(
 )
 _QUESTION_RE = re.compile(r"\?|^(apa|apaan|gimana|gmn|kenapa|mengapa|why|what|how|can|could|would|is|are|do|does|did)\b", re.IGNORECASE)
 _SHORT_CHAT_RE = re.compile(r"^(p+|hi+|hello+|hey+|hai+|halo+|hei+|yo+|ok|oke|sip|siap|bro|bang|thanks|makasih|mantap)[!.?\\s]*$", re.IGNORECASE)
-_BARE_FOLLOWUP_RE = re.compile(r"^(gas|lanjut|lanjutin|next|continue|go|oke lanjut|yaudah lanjut)[!.?\\s]*$", re.IGNORECASE)
+_BARE_FOLLOWUP_RE = re.compile(r"^(gas+|lanju+t+|lanjutin|terus+|next|continue|go+|oke lanjut|yaudah lanjut)[!.?\\s]*$", re.IGNORECASE)
+_CONTINUATION_WRITE_RE = re.compile(r"^\s*(gas+|lanju+t+|lanjutin|terus+|next|continue|go+|oke lanjut|yaudah lanjut)\b", re.IGNORECASE)
 _WRITE_OBJECT_RE = re.compile(
     r"\b(file|page|screen|ui|ux|component|button|modal|form|layout|style|css|tsx|react|vite|route|api|endpoint|database|schema|table|auth|login|project|app|landing|navbar|sidebar|terminal|agent|memory|provider|model)\b",
     re.IGNORECASE,
@@ -93,6 +94,7 @@ def classify_agent_intent(
     has_question = bool(_QUESTION_RE.search(raw))
     is_short_chat = bool(_SHORT_CHAT_RE.match(raw))
     is_bare_followup = bool(_BARE_FOLLOWUP_RE.match(raw))
+    is_continuation_followup = bool(_CONTINUATION_WRITE_RE.search(raw))
     has_write_object = bool(_WRITE_OBJECT_RE.search(raw))
 
     if not raw or is_short_chat:
@@ -158,7 +160,12 @@ def classify_agent_intent(
         inspection_score += 0.2
         signals.append("agentic builder framing")
 
-    explicit_write_request = bool(_EXPLICIT_WRITE_REQUEST_RE.search(raw)) or bool(_FOLLOWUP_WRITE_RE.search(raw) and has_write_object)
+    continuation_can_write = bool(is_continuation_followup and not re.match(r"^(gas|lanjut|terus)[!.?\s]*$", raw, re.IGNORECASE))
+    explicit_write_request = (
+        bool(_EXPLICIT_WRITE_REQUEST_RE.search(raw))
+        or bool(_FOLLOWUP_WRITE_RE.search(raw) and has_write_object)
+        or bool(continuation_can_write and (active_file or open_files or build_mode == "full-agent") and not has_question)
+    )
     readonly_audit_request = bool(_READONLY_AUDIT_RE.search(raw))
     wants_app_builder = bool(re.search(r"\b(app|builder|ui|ux|feature|project|repo|mcp|memory|agentic|agent|graph|rag)\b", lowered))
 
@@ -169,9 +176,12 @@ def classify_agent_intent(
         write_score *= 0.55
     if raw and len(raw.split()) <= 4 and conversation_score > 0 and write_score < 1.4 and inspection_score < 1.35:
         conversation_score += 0.45
-    if is_bare_followup and not has_write_object:
+    if is_bare_followup and not explicit_write_request and not has_write_object:
         conversation_score += 0.7
         write_score = min(write_score, 0.8)
+    if is_continuation_followup and explicit_write_request:
+        write_score += 1.35
+        signals.append("continuation build follow-up")
 
     kind: InteractionKind
     if has_question and not explicit_write_request and inspection_score < 1.1:

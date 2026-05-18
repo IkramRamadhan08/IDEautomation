@@ -568,6 +568,36 @@ export async function applyMany(ops: ApplyManyOp[], overwrite = false): Promise<
   return r.json();
 }
 
+export async function agentHarnessApply(
+  changes: Array<{
+    path: string;
+    content: string;
+    diff?: string | null;
+    expected_sha256?: string | null;
+    expected_exists?: boolean | null;
+    old_sha256?: string | null;
+    old_exists?: boolean | null;
+  }>,
+  project_root = ".",
+  label = "Applying",
+): Promise<{
+  ok: boolean;
+  applied: boolean;
+  count: number;
+  paths: string[];
+  checkpoint_path: string;
+  conflicts?: Array<{ path: string; reason: string; detail: string }>;
+  warnings?: Array<{ path: string; reason: string; detail: string }>;
+}> {
+  const r = await apiFetch(`/api/agent/harness/apply`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_root, label, changes }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
 export type CheckpointItem = { path: string; name: string; updated_at: number };
 
 export async function listCheckpoints(projectRoot = "."): Promise<{ ok: boolean; items: CheckpointItem[] }> {
@@ -707,6 +737,8 @@ export type TerminalRunResult = {
   stdout: string;
   stderr: string;
   returncode: number;
+  command?: string;
+  reason?: string | null;
   synced_files?: number;
   policy?: CommandPolicyDecision;
 };
@@ -734,6 +766,19 @@ export async function terminalRun(command: string, cwd?: string, reason?: string
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ command, cwd, reason }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function agentHarnessRunShell(
+  actions: Array<{ command: string; cwd?: string | null; reason?: string | null }>,
+  project_root = ".",
+): Promise<{ ok: boolean; project_root: string; ran: number; results: TerminalRunResult[] }> {
+  const r = await apiFetch(`/api/agent/harness/run-shell`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_root, actions }),
   });
   if (!r.ok) throw new Error(await r.text());
   return r.json();
@@ -823,6 +868,16 @@ export type AgentResult = {
   actions: Array<{ type: string; [key: string]: unknown }>;
   intent?: AgentIntent;
   trace?: AgentRunTrace;
+  execution?: {
+    auto_execute: boolean;
+    project_root: string;
+    ok: boolean;
+    skipped?: boolean;
+    reason?: string;
+    apply?: Record<string, unknown> | null;
+    shell?: Record<string, unknown> | null;
+    validation?: ProjectValidationRun | null;
+  };
 };
 export type AgentJob = {
   id: string;
@@ -926,7 +981,7 @@ export type AgentCapabilities = {
   }>;
 };
 export type AgentStreamEvent = {
-  event: "status" | "delta" | "done" | "error";
+  event: "status" | "delta" | "tool_call" | "tool_output" | "done" | "error";
   data: Record<string, unknown>;
 };
 
@@ -988,6 +1043,7 @@ export async function streamAgent(
   open_files?: string[],
   preview_url?: string | null,
   editor_status?: string | null,
+  auto_execute = false,
 ): Promise<AgentResult> {
   const r = await apiFetch(`/api/agent`, {
     method: "POST",
@@ -1005,6 +1061,7 @@ export async function streamAgent(
       editor_status,
       asset_paths,
       stream: true,
+      auto_execute,
     }),
   });
   if (!r.ok) throw new Error(await r.text());

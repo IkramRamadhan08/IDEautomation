@@ -104,6 +104,38 @@ export const AgentAuditTrail: React.FC<AgentAuditTrailProps> = ({ snapshots, com
             </div>
           ) : null}
 
+          {snapshot.appliedPatches && snapshot.appliedPatches.length > 0 ? (
+            <div className="agentAuditSection">
+              <div className="agentAuditSectionTitle">Applied patches</div>
+              <div className="agentAuditList">
+                {snapshot.appliedPatches.map((patch, index) => (
+                  <div key={`${snapshot.id}-applied-${index}`} className="agentAuditRow ok">
+                    <div className="agentAuditPrimary">{patch.label}</div>
+                    <div className="agentAuditSecondary">{patch.count} file(s) • {patch.paths.slice(0, compact ? 3 : 8).join(" • ")}</div>
+                    {!compact && patch.checkpointPath ? <div className="agentAuditSecondary">checkpoint: {patch.checkpointPath}</div> : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {snapshot.shellRuns && snapshot.shellRuns.length > 0 ? (
+            <div className="agentAuditSection">
+              <div className="agentAuditSectionTitle">Shell runs</div>
+              <div className="agentAuditList">
+                {snapshot.shellRuns.map((run, index) => (
+                  <div key={`${snapshot.id}-shell-${index}`} className={`agentAuditRow ${run.ok ? "ok" : "error"}`}>
+                    <div className="agentAuditPrimary">{run.command}</div>
+                    <div className="agentAuditSecondary">{run.ok ? "ok" : "failed"} • exit={run.returncode ?? "unknown"}</div>
+                    {!compact && run.stderrPreview ? <div className="agentAuditSecondary">{shortText(run.stderrPreview, 180)}</div> : null}
+                    {!compact && !run.stderrPreview && run.stdoutPreview ? <div className="agentAuditSecondary">{shortText(run.stdoutPreview, 180)}</div> : null}
+                    {!compact && run.error ? <div className="agentAuditSecondary">{shortText(run.error, 180)}</div> : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
           {snapshot.previewAudits && snapshot.previewAudits.length > 0 ? (
             <div className="agentAuditSection">
               <div className="agentAuditSectionTitle">Preview audits</div>

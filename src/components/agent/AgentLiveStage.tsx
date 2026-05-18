@@ -11,6 +11,7 @@ interface AgentLiveStageProps {
   compact?: boolean;
   includeTools?: boolean;
   conversationOnly?: boolean;
+  showTyping?: boolean;
 }
 
 function roleLabel(item: AgentLiveItem, personaName: string) {
@@ -34,6 +35,7 @@ export const AgentLiveStage: React.FC<AgentLiveStageProps> = ({
   compact = false,
   includeTools = true,
   conversationOnly = false,
+  showTyping = true,
 }) => {
   const visibleItems = items.filter((item) => {
     if (!includeTools && item.role === "tool") return false;
@@ -57,7 +59,7 @@ export const AgentLiveStage: React.FC<AgentLiveStageProps> = ({
         </div>
       ))}
 
-      {agentStatus === "thinking" ? (
+      {showTyping && agentStatus === "thinking" ? (
         <div className="agentLiveTyping">
           <span className="spinner" />
           <span>{workingMsg || `${personaName} lagi jalan...`}</span>

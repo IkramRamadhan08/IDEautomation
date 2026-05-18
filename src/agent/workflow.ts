@@ -1,20 +1,15 @@
 import type { Dispatch, SetStateAction } from "react";
 import {
-  applyMany,
+  agentHarnessRunShell,
+  agentHarnessApply,
   auditPreview,
-  checkCommandPolicy,
   fetchAgentCapabilities,
-  preflightApplyMany,
-  readFile,
   streamAgent,
-  terminalRun,
   validateProject,
   type AgentIntent,
   type AgentRunTrace,
-  type ApplyManyOp,
   type PreviewAuditResult,
   type ProjectValidationRun,
-  type CommandPolicyDecision,
   type TerminalRunResult,
 } from "../api";
 import type { AgentAction, AgentAuditSnapshot, AgentChange, AgentLiveItem, BuildMode, FileBuffer } from "../types";
@@ -38,9 +33,20 @@ type ShellActionRun = TerminalRunResult & {
 
 type RunEvidence = {
   validationRuns: AgentAuditSnapshot["validationRuns"];
+  appliedPatches: AgentAuditSnapshot["appliedPatches"];
+  shellRuns: AgentAuditSnapshot["shellRuns"];
   previewAudits: AgentAuditSnapshot["previewAudits"];
   repairPasses: AgentAuditSnapshot["repairPasses"];
   commandPolicyDecisions: AgentAuditSnapshot["commandPolicyDecisions"];
+};
+
+type BackendExecutionResult = {
+  auto_execute?: boolean;
+  skipped?: boolean;
+  reason?: unknown;
+  apply?: Record<string, unknown> | null;
+  shell?: Record<string, unknown> | null;
+  validation?: ProjectValidationRun | null;
 };
 
 type ApplyPreflightConflict = {
@@ -113,6 +119,9 @@ const PHASE_LABELS: Record<string, string> = {
   tooling: "Lagi jalanin tool agent…",
   refining: "Lagi merapikan hasil…",
   verifying: "Ngecek hasil agent…",
+  executing_apply: "Backend harness menerapkan patch…",
+  executing_shell: "Backend harness menjalankan command…",
+  executing_validation: "Backend harness memvalidasi hasil…",
   diffing: "Lagi nyusun patch yang rapi…",
 };
 
@@ -128,11 +137,6 @@ function mergeBuffersWithChanges(currentBuffers: Record<string, FileBuffer>, cha
   }
 
   return mutated ? next : currentBuffers;
-}
-
-function checkpointPathForRun(selectedProject: string) {
-  const suffix = `.voiceide/checkpoints/${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
-  return selectedProject !== "." ? `${selectedProject}/${suffix}` : suffix;
 }
 
 function formatValidationReport(validation: ProjectValidationRun, maxChars = 8000) {
@@ -269,6 +273,14 @@ function isApplyPreflightError(error: unknown): error is ApplyPreflightError {
   return error instanceof ApplyPreflightError;
 }
 
+function toolEventName(data: Record<string, unknown>) {
+  const kind = typeof data.kind === "string" ? data.kind : "tool";
+  const server = typeof data.server === "string" ? data.server : "";
+  const tool = typeof data.tool === "string" ? data.tool : "";
+  if (kind === "mcp" && server && tool) return `${server}.${tool}`;
+  return tool || kind;
+}
+
 function formatPreviewAuditReport(audit: PreviewAuditResult, maxChars = 4000) {
   const issueDetails = audit.issue_details && audit.issue_details.length > 0
     ? `issue_details:\n- ${audit.issue_details.map((issue) => `${issue.severity}: ${issue.category} - ${issue.detail}${issue.suggested_fix ? ` (fix: ${issue.suggested_fix})` : ""}`).join("\n- ")}`
@@ -360,6 +372,8 @@ function toAuditSnapshot(label: string, trace: AgentRunTrace, makeId: () => stri
     plan: trace.plan || [],
     verification: trace.verification || [],
     validationRuns: evidence?.validationRuns || [],
+    appliedPatches: evidence?.appliedPatches || [],
+    shellRuns: evidence?.shellRuns || [],
     previewAudits: evidence?.previewAudits || [],
     repairPasses: evidence?.repairPasses || [],
     commandPolicyDecisions: evidence?.commandPolicyDecisions || [],
@@ -515,6 +529,8 @@ export async function runAgentWorkflow({
   let combinedActions: AgentAction[] = [];
   const evidence: RunEvidence = {
     validationRuns: [],
+    appliedPatches: [],
+    shellRuns: [],
     previewAudits: [],
     repairPasses: [],
     commandPolicyDecisions: [],
@@ -550,13 +566,93 @@ export async function runAgentWorkflow({
     setAgentAuditTrail((prev) => prev.map((snapshot) => ({
       ...snapshot,
       validationRuns: evidence.validationRuns,
+      appliedPatches: evidence.appliedPatches,
+      shellRuns: evidence.shellRuns,
       previewAudits: evidence.previewAudits,
       repairPasses: evidence.repairPasses,
       commandPolicyDecisions: evidence.commandPolicyDecisions,
     })));
   };
 
-  const runAgentPass = async (prompt: string, passEditorStatus: string, resetReply = true) => {
+  const recordBackendExecutionEvidence = (res: { execution?: BackendExecutionResult }, sourceChanges: AgentChange[]): { shellResults: ShellActionRun[]; validation: ProjectValidationRun | null } => {
+    const execution = res.execution;
+    if (!execution || execution.auto_execute !== true) return { shellResults: [], validation: null };
+    if (execution.skipped) {
+      pushAgentLiveItem({
+        role: "tool",
+        tone: "error",
+        text: "Backend auto-execute dilewati karena verifier belum aman.",
+        meta: typeof execution.reason === "string" ? execution.reason : "execution skipped",
+      });
+      return { shellResults: [], validation: null };
+    }
+    const apply = execution.apply && typeof execution.apply === "object" ? execution.apply as Record<string, unknown> : null;
+    if (apply && apply.applied === true) {
+      const paths = Array.isArray(apply.paths) ? apply.paths.map(String) : sourceChanges.map((change) => change.path);
+      const checkpointPath = typeof apply.checkpoint_path === "string" ? apply.checkpoint_path : null;
+      evidence.appliedPatches?.push({
+        label: "Backend auto execute",
+        count: typeof apply.count === "number" ? apply.count : paths.length,
+        paths,
+        checkpointPath,
+      });
+      pushAgentLiveItem({
+        role: "tool",
+        tone: "success",
+        text: `Backend auto-execute sudah apply ${paths.length} file.`,
+        meta: checkpointPath ? `checkpoint ${checkpointPath}` : null,
+      });
+    }
+    const shell = execution.shell && typeof execution.shell === "object" ? execution.shell as Record<string, unknown> : null;
+    const shellResults = Array.isArray(shell?.results) ? shell.results as ShellActionRun[] : [];
+    for (const run of shellResults) {
+      evidence.shellRuns?.push({
+        command: String(run.command || ""),
+        ok: run.ok === true,
+        returncode: typeof run.returncode === "number" ? run.returncode : null,
+        stdoutPreview: String(run.stdout || "").slice(0, 500),
+        stderrPreview: String(run.stderr || "").slice(0, 500),
+        error: run.error || null,
+      });
+      const policy = run.policy;
+      if (policy) {
+        evidence.commandPolicyDecisions?.push({
+          command: policy.command,
+          riskLevel: policy.risk_level,
+          ok: policy.ok,
+          reason: policy.reason,
+        });
+      }
+    }
+    if (shellResults.length > 0) {
+      pushAgentLiveItem({
+        role: "tool",
+        tone: shellResults.every((run) => run.ok) ? "success" : "error",
+        text: `Backend auto-execute menjalankan ${shellResults.length} command.`,
+        meta: shellResults.map((run) => String(run.command || "")).join(" • "),
+      });
+    }
+    const validation = execution.validation && typeof execution.validation === "object" ? execution.validation as ProjectValidationRun : null;
+    if (validation) {
+      evidence.validationRuns?.push({
+        label: "Backend validation",
+        ok: validation.ok,
+        ran: validation.ran,
+        failed: validation.failed,
+        commands: validation.commands,
+      });
+      pushAgentLiveItem({
+        role: "tool",
+        tone: validation.ok ? "success" : "error",
+        text: validation.ok ? "Backend validation lolos." : "Backend validation nemu problem yang perlu repair.",
+        meta: validation.commands.join(" • ") || null,
+      });
+    }
+    refreshAuditTrailEvidence();
+    return { shellResults, validation };
+  };
+
+  const runAgentPass = async (prompt: string, passEditorStatus: string, resetReply = true, autoExecute = false) => {
     const seenPhases = new Set<string>();
     if (resetReply) setAgentReply("");
 
@@ -583,6 +679,32 @@ export async function runAgentWorkflow({
           return;
         }
 
+        if (event.event === "tool_call") {
+          const name = toolEventName(event.data);
+          const phase = typeof event.data.phase === "string" ? event.data.phase : "tooling";
+          pushAgentLiveItem({
+            role: "tool",
+            tone: "working",
+            text: `Tool call: ${name}`,
+            meta: phase,
+          });
+          return;
+        }
+
+        if (event.event === "tool_output") {
+          const name = toolEventName(event.data);
+          const ok = event.data.ok === true;
+          const duration = typeof event.data.duration_ms === "number" ? `${Math.round(event.data.duration_ms)}ms` : "";
+          const error = typeof event.data.error === "string" ? event.data.error : "";
+          pushAgentLiveItem({
+            role: "tool",
+            tone: ok ? "success" : "error",
+            text: ok ? `Tool output: ${name} selesai.` : `Tool output: ${name} gagal.`,
+            meta: [duration, error].filter(Boolean).join(" • ") || null,
+          });
+          return;
+        }
+
         if (event.event === "delta") {
           const spokenChunk = typeof event.data.spoken_chunk === "string" ? event.data.spoken_chunk : "";
           const nativeStream = event.data.native_stream === true;
@@ -596,13 +718,6 @@ export async function runAgentWorkflow({
           }
           if (message) {
             setWorkingMsg(message);
-            if (/^(Function call:|Function .* selesai\.|Function .* gagal:|Tool |MCP )/i.test(message)) {
-              pushAgentLiveItem({
-                role: "tool",
-                tone: /gagal|failed/i.test(message) ? "error" : /selesai|finished/i.test(message) ? "success" : "working",
-                text: message,
-              });
-            }
           }
         }
       },
@@ -615,6 +730,7 @@ export async function runAgentWorkflow({
       openFiles,
       currentPreviewUrl || null,
       passEditorStatus,
+      autoExecute,
     );
   };
 
@@ -622,69 +738,56 @@ export async function runAgentWorkflow({
     if (changes.length === 0) return;
     setWorkingMsg(`Menerapkan ${changes.length} perubahan…`);
     setEditorStatus(`${statusLabel} ${changes.length} file changes...`);
-    const checkpointFiles = await Promise.all(changes.map(async (change) => {
-      const openBuffer = workingBuffers[change.path]?.content;
-      if (typeof openBuffer === "string") {
-        return { path: change.path, previous_content: openBuffer };
-      }
-      try {
-        const current = await readFile(change.path);
-        return { path: change.path, previous_content: current.content };
-      } catch {
-        return { path: change.path, previous_content: null };
-      }
-    }));
-    const checkpoint = {
-      created_at: new Date().toISOString(),
-      project_root: selectedProject,
-      apply_mode: "patch",
-      files: checkpointFiles.map((file) => {
-        const change = changes.find((item) => item.path === file.path);
-        return {
-          ...file,
-          patch: change?.diff || "",
-          old_sha256: change?.old_sha256 || null,
-          new_sha256: change?.new_sha256 || null,
-          old_exists: typeof change?.old_exists === "boolean" ? change.old_exists : file.previous_content !== null,
-        };
-      }),
-    };
-    const checkpointPath = checkpointPathForRun(selectedProject);
     pushAgentLiveItem({
       role: "tool",
-      tone: "success",
-      text: `Aku terapin ${changes.length} file ke project dulu.`,
-      meta: `checkpoint ${checkpointPath}`,
+      tone: "working",
+      text: `Aku kirim ${changes.length} file ke backend apply harness.`,
+      meta: statusLabel,
     });
-    const ops: ApplyManyOp[] = [
-      { path: checkpointPath, content: JSON.stringify(checkpoint, null, 2) + "\n" },
-      ...changes.map((change) => ({
+    const applyRes = await agentHarnessApply(
+      changes.map((change) => ({
         path: change.path,
         content: change.new_content,
+        diff: change.diff || null,
         expected_sha256: change.old_sha256 || null,
         expected_exists: typeof change.old_exists === "boolean" ? change.old_exists : null,
       })),
-    ];
-    const preflight = await preflightApplyMany(ops, true);
-    if (!preflight.ok) {
-      const conflictText = formatApplyPreflightConflicts(preflight.conflicts);
+      selectedProject,
+      statusLabel,
+    );
+    if (!applyRes.ok || !applyRes.applied) {
+      const conflicts = applyRes.conflicts || [];
+      const warnings = applyRes.warnings || [];
+      const conflictText = formatApplyPreflightConflicts(conflicts);
       pushAgentLiveItem({
         role: "tool",
         tone: "error",
-        text: "Patch dibatalkan karena file berubah sebelum apply.",
+        text: "Backend apply harness membatalkan patch karena file berubah sebelum apply.",
         meta: conflictText || "conflict",
       });
-      throw new ApplyPreflightError(preflight.conflicts, preflight.warnings);
+      throw new ApplyPreflightError(conflicts, warnings);
     }
-    if (preflight.warnings.length > 0) {
+    if ((applyRes.warnings || []).length > 0) {
       pushAgentLiveItem({
         role: "tool",
         tone: "working",
-        text: "Preflight patch lolos dengan catatan.",
-        meta: preflight.warnings.map((item) => item.detail || item.reason).slice(0, 4).join("; "),
+        text: "Backend apply harness lolos dengan catatan.",
+        meta: (applyRes.warnings || []).map((item) => item.detail || item.reason).slice(0, 4).join("; "),
       });
     }
-    await applyMany(ops, true);
+    evidence.appliedPatches?.push({
+      label: statusLabel,
+      count: applyRes.count,
+      paths: applyRes.paths || changes.map((change) => change.path),
+      checkpointPath: applyRes.checkpoint_path,
+    });
+    refreshAuditTrailEvidence();
+    pushAgentLiveItem({
+      role: "tool",
+      tone: "success",
+      text: `Backend apply harness menerapkan ${applyRes.count} file.`,
+      meta: `checkpoint ${applyRes.checkpoint_path}`,
+    });
     syncBuffers(changes);
     await refreshExplorer();
   };
@@ -791,41 +894,57 @@ export async function runAgentWorkflow({
       }
       setWorkingMsg(`Menjalankan: ${action.command}`);
       const reason = typeof action.reason === "string" ? action.reason : "Agent requested project command.";
-      let policy: CommandPolicyDecision | null = null;
       try {
-        policy = await checkCommandPolicy(action.command, selectedProject !== "." ? selectedProject : undefined, reason);
+        pushAgentLiveItem({ role: "tool", tone: "working", text: "Aku serahin command ke backend harness biar policy, cwd, dan sync file ditangani satu tempat.", meta: action.command });
+        const harness = await agentHarnessRunShell(
+          [{ command: action.command, cwd: selectedProject !== "." ? selectedProject : undefined, reason }],
+          selectedProject,
+        );
+        const runRes = harness.results[0];
+        if (!runRes) {
+          throw new Error("Backend harness did not return a shell result.");
+        }
+        const policy = runRes.policy;
+        results.push({ command: action.command, ...runRes });
         evidence.commandPolicyDecisions?.push({
-          command: policy.command,
-          riskLevel: policy.risk_level,
-          ok: policy.ok,
-          reason: policy.reason,
+          command: policy?.command || action.command,
+          riskLevel: policy?.risk_level || (runRes.ok ? "safe" : "blocked"),
+          ok: runRes.ok,
+          reason: policy?.reason || (runRes.ok ? "Backend harness allowed command." : runRes.stderr || "Backend harness blocked command."),
         });
         refreshAuditTrailEvidence();
-        if (!policy.ok) {
-          results.push({
+        if (!runRes.ok && runRes.returncode === 126) {
+          evidence.shellRuns?.push({
             command: action.command,
             ok: false,
-            stdout: "",
-            stderr: policy.reason,
-            returncode: 126,
-            policy,
+            returncode: runRes.returncode,
+            stdoutPreview: "",
+            stderrPreview: runRes.stderr || policy?.reason || "",
+            error: policy && !policy.ok ? "Blocked by command policy" : "Blocked by backend harness",
           });
+          refreshAuditTrailEvidence();
           pushAgentLiveItem({
             role: "tool",
             tone: "error",
             text: "Command ditahan guarded autonomy.",
-            meta: `${policy.risk_level}: ${policy.reason}`,
+            meta: `${policy?.risk_level || "blocked"}: ${policy?.reason || runRes.stderr}`,
           });
           continue;
         }
-        pushAgentLiveItem({ role: "tool", tone: "working", text: "Aku jalanin command tambahan buat ngeberesin flow.", meta: `${action.command} • ${policy.reason}` });
-        const runRes = await terminalRun(action.command, selectedProject !== "." ? selectedProject : undefined, reason);
-        results.push({ command: action.command, ...runRes });
+        evidence.shellRuns?.push({
+          command: action.command,
+          ok: runRes.ok,
+          returncode: runRes.returncode,
+          stdoutPreview: (runRes.stdout || "").slice(0, 500),
+          stderrPreview: (runRes.stderr || "").slice(0, 500),
+          error: null,
+        });
+        refreshAuditTrailEvidence();
         appendLogSection(runRes.ok ? "TERMINAL STDOUT" : "TERMINAL STDERR", runRes.ok ? runRes.stdout : runRes.stderr);
         pushAgentLiveItem({
           role: "tool",
           tone: runRes.ok ? "success" : "error",
-          text: runRes.ok ? "Command-nya selesai tanpa masalah." : "Command-nya jalan, tapi keluar sinyal error yang perlu dicek.",
+          text: runRes.ok ? "Backend harness selesai jalanin command." : "Backend harness jalanin command, tapi hasilnya error.",
           meta: action.command,
         });
         if (typeof runRes.synced_files === "number" && runRes.synced_files > 0) {
@@ -840,8 +959,16 @@ export async function runAgentWorkflow({
           stderr: "",
           returncode: 1,
           error: message,
-          ...(policy ? { policy } : {}),
         });
+        evidence.shellRuns?.push({
+          command: action.command,
+          ok: false,
+          returncode: 1,
+          stdoutPreview: "",
+          stderrPreview: "",
+          error: message,
+        });
+        refreshAuditTrailEvidence();
         appendLogSection("TERMINAL ERROR", message);
         pushAgentLiveItem({ role: "tool", tone: "error", text: "Ada command yang gagal dieksekusi.", meta: message });
       }
@@ -989,12 +1116,18 @@ export async function runAgentWorkflow({
     });
 
   try {
-    const res = await runAgentPass(agentInput, requestEditorStatus);
+    const res = await runAgentPass(
+      agentInput,
+      requestEditorStatus,
+      true,
+      inputIntent.kind === "command" || inputIntent.kind === "mixed",
+    );
     setAgentReply(res.spoken);
     setAgentLog(res.log);
 
     let changes: AgentChange[] = res.changes || [];
     let actions: AgentAction[] = res.actions || [];
+    const backendAutoExecuted = res.execution?.auto_execute === true && res.execution?.ok !== false && !res.execution?.skipped;
     const resolvedIntent = res.intent || inputIntent;
 
     pushAgentLiveItem({
@@ -1064,7 +1197,17 @@ export async function runAgentWorkflow({
       });
     }
 
-    if (outputSafeToApply && changes.length > 0) {
+    let shellResults: ShellActionRun[] = [];
+    let backendValidation: ProjectValidationRun | null = null;
+    if (backendAutoExecuted) {
+      const backendEvidence = recordBackendExecutionEvidence(res, changes);
+      shellResults = backendEvidence.shellResults;
+      backendValidation = backendEvidence.validation;
+      if (changes.length > 0) {
+        syncBuffers(changes);
+        await refreshExplorer();
+      }
+    } else if (outputSafeToApply && changes.length > 0) {
       const applied = await applyChangesWithConflictRepair(changes, actions);
       changes = applied.changes;
       actions = applied.actions;
@@ -1072,13 +1215,15 @@ export async function runAgentWorkflow({
       setAgentActions(combinedActions);
     }
 
-    const shellResults = outputSafeToApply && actions.length > 0
+    if (!backendAutoExecuted) {
+      shellResults = outputSafeToApply && actions.length > 0
       ? await runShellActionsForPass(actions)
       : [];
+    }
 
     const auditedPreviewUrl = outputSafeToApply && changes.length > 0 ? await refreshPreviewSurface() : currentPreviewUrl;
 
-    let validation: ProjectValidationRun | null = null;
+    let validation: ProjectValidationRun | null = backendValidation;
     let previewAudit: PreviewAuditResult | null = null;
 
     if ((resolvedIntent.kind === "conversation" || resolvedIntent.kind === "inspection") && changes.length === 0 && actions.length === 0) {
@@ -1088,7 +1233,7 @@ export async function runAgentWorkflow({
       finalToast = { kind: "success", message: "Jawaban siap, tidak ada perubahan file" };
     }
 
-    if (outputSafeToApply && (changes.length > 0 || actions.length > 0) && shouldRunValidation) {
+    if (!validation && outputSafeToApply && (changes.length > 0 || actions.length > 0) && shouldRunValidation) {
       validation = await runValidationPass("VALIDATION PASS 1");
     }
     if (outputSafeToApply && validation && !validation.ok) {

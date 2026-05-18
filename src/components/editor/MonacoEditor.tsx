@@ -3,6 +3,7 @@ import { type OnMount } from "@monaco-editor/react";
 import { type AgentAction, type AgentLiveItem, type FileBuffer } from "../../types";
 import { PanelBottomClose, PanelBottomOpen, RotateCcw, Save, Sparkles, TerminalSquare, Trash2 } from "lucide-react";
 import { terminalRun } from "../../api";
+import { isOperationalLiveItem } from "../../agent/liveActions";
 
 interface MonacoEditorProps {
   activeFile: string;
@@ -74,7 +75,7 @@ export const MonacoEditor: React.FC<MonacoEditorProps> = ({
 
   const activeBuffer = activeFile ? buffers[activeFile] : undefined;
   const visibleActions = recentActions.slice(-5);
-  const visibleTools = agentLiveItems.filter((item) => item.role === "tool").slice(-4);
+  const visibleTools = agentLiveItems.filter(isOperationalLiveItem).slice(-4);
   const hasActivity = terminalHistory.length > 0 || visibleActions.length > 0 || visibleTools.length > 0;
 
   const handleEditorMount: OnMount = (editor) => {

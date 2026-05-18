@@ -51,8 +51,8 @@ const BUILDER_RE = /\b(app|builder|feature|ui|ux|preview|project|repo|component|
 const CONVERSATION_RE = /\b(hi|hello|hey|hai|halo|hei|thanks|thank you|status|update|udah|sudah|gimana|gmn|bro|bang|sip|mantap|jelasin|jelaskan|kenapa|apa|apaan|why|what|how|brainstorm|ngobrol|chat)\b/i;
 const QUESTION_RE = /\?|^(apa|apaan|gimana|gmn|kenapa|mengapa|why|what|how|can|could|would|is|are|do|does|did)\b/i;
 const SHORT_CHAT_RE = /^(p+|hi+|hello+|hey+|hai+|halo+|hei+|yo+|ok|oke|sip|siap|bro|bang|thanks|makasih|mantap)[!.?\s]*$/i;
-const BARE_FOLLOWUP_RE = /^(gas|lanjut|lanjutin|next|continue|go|oke lanjut|yaudah lanjut)[!.?\s]*$/i;
-const FOLLOWUP_WRITE_RE = /^\s*(gas|lanjut|lanjutin|go|execute|eksekusi|oke lanjut|yaudah lanjut)\b/i;
+const BARE_FOLLOWUP_RE = /^(gas+|lanju+t+|lanjutin|terus+|next|continue|go+|oke lanjut|yaudah lanjut)[!.?\s]*$/i;
+const FOLLOWUP_WRITE_RE = /^\s*(gas+|lanju+t+|lanjutin|terus+|go+|execute|eksekusi|oke lanjut|yaudah lanjut)\b/i;
 const WRITE_OBJECT_RE = /\b(file|page|screen|ui|ux|component|button|modal|form|layout|style|css|tsx|react|vite|route|api|endpoint|database|schema|table|auth|login|project|app|landing|navbar|sidebar|terminal|agent|memory|provider|model)\b/i;
 
 const PROFILES: Record<BuildMode, BuildModeProfile> = {
@@ -192,6 +192,7 @@ export function classifyAgentInputIntent(input: string, buildMode: BuildMode): A
   const isShortChat = SHORT_CHAT_RE.test(normalizedInput);
   const isBareFollowup = BARE_FOLLOWUP_RE.test(normalizedInput);
   const hasWriteObject = WRITE_OBJECT_RE.test(normalizedInput);
+  const continuationFollowup = FOLLOWUP_WRITE_RE.test(normalizedInput) && !/^(gas|lanjut|terus)[!.?\s]*$/i.test(normalizedInput) && !hasQuestion;
   if (!normalizedInput || isShortChat) {
     return {
       kind: "conversation",
@@ -236,7 +237,8 @@ export function classifyAgentInputIntent(input: string, buildMode: BuildMode): A
   }
 
   const explicitWrite = /\b(can you|please|tolong|implement|build|fix|bikin|buat|tambahin|ubah|rapihin|perbaiki|implementasiin|kerjain|garap|eksekusi)\b/i.test(normalizedInput)
-    || (FOLLOWUP_WRITE_RE.test(normalizedInput) && hasWriteObject);
+    || (FOLLOWUP_WRITE_RE.test(normalizedInput) && hasWriteObject)
+    || continuationFollowup;
   const readonlyAudit = READONLY_AUDIT_RE.test(normalizedInput);
   if (explicitWrite) writeScore += 0.75;
   if (hasQuestion && !explicitWrite) {
@@ -244,8 +246,13 @@ export function classifyAgentInputIntent(input: string, buildMode: BuildMode): A
     writeScore *= 0.55;
   }
   if (isBareFollowup && !hasWriteObject) {
-    conversationScore += 0.7;
-    writeScore = Math.min(writeScore, 0.8);
+    if (explicitWrite) {
+      writeScore += 1.35;
+      signals.push("continuation build follow-up");
+    } else {
+      conversationScore += 0.7;
+      writeScore = Math.min(writeScore, 0.8);
+    }
   }
 
   let kind: AgentInputIntent["kind"] = "conversation";

@@ -1464,6 +1464,17 @@ class TerminalRunReq(BaseModel):
     reason: str | None = None
 
 
+class AgentHarnessShellAction(BaseModel):
+    command: str
+    cwd: str | None = None
+    reason: str | None = None
+
+
+class AgentHarnessRunShellReq(BaseModel):
+    project_root: str = "."
+    actions: list[AgentHarnessShellAction]
+
+
 class CommandPolicyReq(BaseModel):
     command: str
     cwd: str | None = None
@@ -1497,6 +1508,64 @@ def terminal_run(req: TerminalRunReq):
         raise
     except Exception as e:
         raise HTTPException(500, str(e))
+
+
+@app.post("/api/agent/harness/run-shell")
+def agent_harness_run_shell(req: AgentHarnessRunShellReq):
+    ws_root = _session_state().get("workspace")
+    if not ws_root:
+        raise HTTPException(400, "No workspace selected")
+
+    ws_root_path = Path(ws_root)
+    project_root = str(req.project_root or ".").strip().strip("/") or "."
+    _hydrate_hosted_project(ws_root_path, project_root)
+
+    results: list[dict] = []
+    for action in req.actions[:8]:
+        command = str(action.command or "").strip()
+        cwd_label = str(action.cwd or project_root or ".").strip().strip("/") or "."
+        policy = _command_policy_decision(command)
+        if not policy.ok:
+            results.append({
+                "command": command,
+                "ok": False,
+                "stdout": "",
+                "stderr": policy.reason,
+                "returncode": 126,
+                "policy": policy.model_dump(),
+                "synced_files": 0,
+                "reason": action.reason,
+            })
+            continue
+
+        try:
+            cwd = safe_join(ws_root_path, cwd_label)
+        except ValueError as exc:
+            results.append({
+                "command": command,
+                "ok": False,
+                "stdout": "",
+                "stderr": str(exc),
+                "returncode": 126,
+                "policy": policy.model_dump(),
+                "synced_files": 0,
+                "reason": action.reason,
+            })
+            continue
+
+        result = _run_shell_command(command, cwd)
+        result["command"] = command
+        result["policy"] = policy.model_dump()
+        result["synced_files"] = _sync_hosted_project_text_files_after_shell(ws_root_path, cwd)
+        result["reason"] = action.reason
+        results.append(result)
+
+    return {
+        "ok": all(bool(item.get("ok")) for item in results),
+        "project_root": project_root,
+        "ran": len(results),
+        "results": results,
+    }
 
 
 class WorkspaceSetReq(BaseModel):
@@ -1820,7 +1889,7 @@ app.include_router(build_settings_router(session_state=_session_state, env_set=_
 
 
 def _ws() -> Path:
-    p: Path | None = _session_state()["workspace"]
+    p: Path | str | None = _session_state()["workspace"]
     if p is None:
         try:
             p, _created = _provision_managed_workspace()
@@ -1829,6 +1898,9 @@ def _ws() -> Path:
             p = None
     if p is None:
         raise HTTPException(400, "Workspace not set")
+    if isinstance(p, str):
+        p = Path(p)
+        _session_state()["workspace"] = p
     _hydrate_hosted_projects(p)
     return p
 
@@ -2273,6 +2345,22 @@ class ApplyManyReq(BaseModel):
     overwrite: bool = False
 
 
+class AgentHarnessApplyChange(BaseModel):
+    path: str
+    content: str
+    diff: str | None = None
+    expected_sha256: str | None = None
+    expected_exists: bool | None = None
+    old_sha256: str | None = None
+    old_exists: bool | None = None
+
+
+class AgentHarnessApplyReq(BaseModel):
+    project_root: str = "."
+    label: str = "Applying"
+    changes: list[AgentHarnessApplyChange]
+
+
 def _preflight_apply_many(root: Path, req: ApplyManyReq) -> dict:
     conflicts: list[dict[str, str]] = []
     warnings: list[dict[str, str]] = []
@@ -2336,6 +2424,73 @@ def fs_apply_many(req: ApplyManyReq):
         _persist_hosted_file(op.path, op.content)
 
     return {"ok": True, "count": len(req.ops)}
+
+
+def _agent_checkpoint_path(project_root: str) -> str:
+    stamp = time.strftime("%Y-%m-%dT%H-%M-%S", time.gmtime())
+    suffix = f".voiceide/checkpoints/{stamp}-{uuid.uuid4().hex[:8]}.json"
+    return f"{project_root}/{suffix}" if project_root and project_root != "." else suffix
+
+
+@app.post("/api/agent/harness/apply")
+def agent_harness_apply(req: AgentHarnessApplyReq):
+    root = _ws()
+    project_root = str(req.project_root or ".").strip().strip("/") or "."
+    _hydrate_hosted_project(root, project_root)
+
+    checkpoint_files: list[dict[str, object]] = []
+    ops: list[WriteOp] = []
+    for change in req.changes:
+        path = str(change.path or "").strip().lstrip("/")
+        content = change.content
+        if not path:
+            continue
+        try:
+            target = safe_join(root, path)
+            old_exists = target.exists()
+            previous_content = target.read_text(encoding="utf-8") if old_exists else None
+        except UnicodeDecodeError:
+            previous_content = None
+            old_exists = True
+        old_sha = _sha256_text(previous_content or "")
+        expected_sha = change.expected_sha256 or change.old_sha256
+        expected_exists = change.expected_exists if change.expected_exists is not None else change.old_exists
+        checkpoint_files.append({
+            "path": path,
+            "previous_content": previous_content,
+            "patch": change.diff or "",
+            "old_sha256": expected_sha or old_sha,
+            "new_sha256": _sha256_text(content),
+            "old_exists": old_exists if expected_exists is None else expected_exists,
+        })
+        ops.append(WriteOp(path=path, content=content, expected_sha256=expected_sha, expected_exists=expected_exists))
+
+    checkpoint_path = _agent_checkpoint_path(project_root)
+    checkpoint = {
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "project_root": project_root,
+        "apply_mode": "backend-harness",
+        "label": req.label,
+        "files": checkpoint_files,
+    }
+    all_ops = [WriteOp(path=checkpoint_path, content=json.dumps(checkpoint, ensure_ascii=False, indent=2) + "\n"), *ops]
+    preflight = _preflight_apply_many(root, ApplyManyReq(ops=all_ops, overwrite=True))
+    conflicts = list(preflight.get("conflicts") or [])
+    if conflicts:
+        return {"ok": False, "applied": False, "checkpoint_path": checkpoint_path, **preflight}
+
+    for op in all_ops:
+        write_text(root, op.path, op.content)
+        _persist_hosted_file(op.path, op.content)
+
+    return {
+        "ok": True,
+        "applied": True,
+        "count": len(ops),
+        "paths": [op.path for op in ops],
+        "checkpoint_path": checkpoint_path,
+        "warnings": list(preflight.get("warnings") or []),
+    }
 
 
 class RestoreCheckpointReq(BaseModel):
@@ -2565,6 +2720,7 @@ class AgentReq(BaseModel):
     asset_paths: list[str] | None = None
     stream: bool = False
     background: bool = False
+    auto_execute: bool = False
 
 
 class AgentWorkerRunReq(BaseModel):
@@ -2925,6 +3081,247 @@ def _run_agent_worker_jobs(*, job_id: str | None, limit: int) -> dict:
     return {"ok": True, "processed": len(results), "results": results}
 
 
+def _agent_shell_actions(actions: list[dict]) -> list[AgentHarnessShellAction]:
+    shell_actions: list[AgentHarnessShellAction] = []
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        if str(action.get("type") or "").strip().lower() != "shell":
+            continue
+        command = str(action.get("command") or "").strip()
+        if not command:
+            continue
+        shell_actions.append(
+            AgentHarnessShellAction(
+                command=command,
+                cwd=str(action.get("cwd") or "").strip() or None,
+                reason=str(action.get("reason") or "").strip() or "Agent requested project command.",
+            )
+        )
+    return shell_actions
+
+
+def _prepare_agent_out_changes(ws_root: Path, normalized_changes: list) -> list[dict[str, object]]:
+    out_changes: list[dict[str, object]] = []
+    for ch in normalized_changes:
+        if not isinstance(ch, dict):
+            continue
+        p = str(ch.get("path") or "").strip()
+        nc = ch.get("new_content")
+        if not p or not isinstance(nc, str):
+            continue
+
+        target = safe_join(ws_root, p)
+        old_exists = target.exists()
+        old = target.read_text(encoding="utf-8") if old_exists else ""
+
+        out_changes.append({
+            "path": p,
+            "new_content": nc,
+            "diff": diff_text(old, nc, filename=p),
+            "old_sha256": _sha256_text(old),
+            "new_sha256": _sha256_text(nc),
+            "old_exists": old_exists,
+        })
+    return out_changes
+
+
+def _execution_needs_repair(execution: dict[str, object]) -> bool:
+    if not execution:
+        return False
+    apply = execution.get("apply")
+    if isinstance(apply, dict) and apply.get("ok") is False:
+        return True
+    shell = execution.get("shell")
+    if isinstance(shell, dict) and shell.get("ok") is False:
+        return True
+    validation = execution.get("validation")
+    if isinstance(validation, dict) and validation.get("ok") is False:
+        return True
+    return False
+
+
+def _execution_repair_report(execution: dict[str, object], max_chars: int = 9000) -> str:
+    report = json.dumps(
+        {
+            "apply": execution.get("apply"),
+            "shell": execution.get("shell"),
+            "validation": execution.get("validation"),
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    return report[:max_chars]
+
+
+def _run_backend_repair_pass(req: AgentReq, execution: dict[str, object], emit) -> dict[str, object]:
+    project_root = str(req.project_root or ".").strip().strip("/") or "."
+    emit("status", {"phase": "executing_repair", "message": "Backend harness running one repair pass from execution evidence..."})
+    repair_prompt = "\n\n".join([
+        "BACKEND AUTO-EXECUTE REPAIR:",
+        "The previous backend execution produced failing apply/shell/validation evidence.",
+        "Repair the project now with concrete file changes and only safe project-scoped shell actions if needed.",
+        "Do not repeat the same failing command blindly unless your changes address the failure.",
+        f"Original user request:\n{req.input}",
+        f"Execution evidence:\n{_execution_repair_report(execution)}",
+    ])
+    repair_req = AgentReq(
+        input=repair_prompt,
+        mode=req.mode,
+        active_file=req.active_file,
+        selection=req.selection,
+        current_content=req.current_content,
+        open_files=req.open_files,
+        project_root=req.project_root,
+        build_mode=req.build_mode,
+        preview_url=req.preview_url,
+        editor_status="Backend repair after validation failure",
+        asset_paths=req.asset_paths,
+        stream=False,
+        background=False,
+        auto_execute=False,
+    )
+    with _agent_lock_for_current_provider():
+        repair_pipeline = run_agent_pipeline(repair_req, ws_root=_ws(), emit=emit)
+    repair_changes = _prepare_agent_out_changes(_ws(), list(repair_pipeline.get("changes") or []))
+    repair_actions = list(repair_pipeline.get("actions") or [])
+    repair_execution = _auto_execute_agent_result(repair_req, repair_changes, repair_actions, emit, allow_repair=False)
+    return {
+        "spoken": repair_pipeline.get("spoken") or "",
+        "log": repair_pipeline.get("log") or "",
+        "changes": repair_changes,
+        "actions": repair_actions,
+        "intent": dict(repair_pipeline.get("intent") or {}),
+        "trace": dict(repair_pipeline.get("trace") or {}),
+        "execution": repair_execution,
+    }
+
+
+def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object]], actions: list[dict], emit, *, allow_repair: bool = True) -> dict:
+    project_root = str(req.project_root or ".").strip().strip("/") or "."
+    execution: dict[str, object] = {
+        "auto_execute": True,
+        "project_root": project_root,
+        "apply": None,
+        "shell": None,
+        "validation": None,
+        "repairs": [],
+        "ok": True,
+    }
+
+    if out_changes:
+        emit("status", {"phase": "executing_apply", "message": "Backend harness applying agent changes..."})
+        apply_req = AgentHarnessApplyReq(
+            project_root=project_root,
+            label="Backend auto execute",
+            changes=[
+                AgentHarnessApplyChange(
+                    path=str(change.get("path") or ""),
+                    content=str(change.get("new_content") or ""),
+                    diff=str(change.get("diff") or "") or None,
+                    expected_sha256=str(change.get("old_sha256") or "") or None,
+                    expected_exists=change.get("old_exists") if isinstance(change.get("old_exists"), bool) else None,
+                    old_sha256=str(change.get("old_sha256") or "") or None,
+                    old_exists=change.get("old_exists") if isinstance(change.get("old_exists"), bool) else None,
+                )
+                for change in out_changes
+                if str(change.get("path") or "").strip() and isinstance(change.get("new_content"), str)
+            ],
+        )
+        apply_result = agent_harness_apply(apply_req)
+        execution["apply"] = apply_result
+        execution["ok"] = bool(execution["ok"]) and bool(apply_result.get("ok"))
+        emit(
+            "tool_output",
+            {
+                "kind": "agent_harness",
+                "tool": "apply",
+                "ok": bool(apply_result.get("ok")),
+                "phase": "executing_apply",
+                "text": json.dumps({key: apply_result.get(key) for key in ("applied", "count", "paths", "checkpoint_path", "conflicts", "warnings")}, ensure_ascii=False)[:1200],
+            },
+        )
+
+    shell_actions = _agent_shell_actions(actions)
+    if shell_actions:
+        emit("status", {"phase": "executing_shell", "message": "Backend harness running agent shell actions..."})
+        shell_result = agent_harness_run_shell(AgentHarnessRunShellReq(project_root=project_root, actions=shell_actions))
+        execution["shell"] = shell_result
+        execution["ok"] = bool(execution["ok"]) and bool(shell_result.get("ok"))
+        emit(
+            "tool_output",
+            {
+                "kind": "agent_harness",
+                "tool": "run-shell",
+                "ok": bool(shell_result.get("ok")),
+                "phase": "executing_shell",
+                "text": json.dumps({"ran": shell_result.get("ran"), "results": shell_result.get("results")}, ensure_ascii=False)[:1200],
+            },
+        )
+
+    if out_changes:
+        try:
+            project_dir = safe_join(_ws(), project_root)
+            validation_commands = _infer_validation_commands(project_dir)[:4]
+        except Exception:
+            validation_commands = []
+        if validation_commands:
+            emit("status", {"phase": "executing_validation", "message": "Backend harness validating project output..."})
+            validation_shell = agent_harness_run_shell(
+                AgentHarnessRunShellReq(
+                    project_root=project_root,
+                    actions=[
+                        AgentHarnessShellAction(command=command, cwd=project_root, reason="Backend auto validation")
+                        for command in validation_commands
+                    ],
+                )
+            )
+            validation_results = list(validation_shell.get("results") or [])
+            validation = {
+                "ok": all(bool(item.get("ok")) for item in validation_results) if validation_results else True,
+                "project_root": project_root,
+                "commands": validation_commands,
+                "results": validation_results,
+                "ran": len(validation_results),
+                "passed": sum(1 for item in validation_results if item.get("ok")),
+                "failed": sum(1 for item in validation_results if not item.get("ok")),
+            }
+            execution["validation"] = validation
+            emit(
+                "tool_output",
+                {
+                    "kind": "agent_harness",
+                    "tool": "validate",
+                    "ok": bool(validation.get("ok")),
+                    "phase": "executing_validation",
+                    "text": json.dumps({key: validation.get(key) for key in ("ok", "commands", "ran", "passed", "failed")}, ensure_ascii=False)[:1200],
+                },
+            )
+
+    if allow_repair and _execution_needs_repair(execution):
+        repair = _run_backend_repair_pass(req, execution, emit)
+        repairs = execution.setdefault("repairs", [])
+        if isinstance(repairs, list):
+            repairs.append(repair)
+        repair_execution = repair.get("execution") if isinstance(repair, dict) else None
+        if isinstance(repair_execution, dict):
+            execution["ok"] = bool(repair_execution.get("ok"))
+
+    return execution
+
+
+def _trace_has_blocking_verifier_failures(trace: dict) -> bool:
+    checks = trace.get("verification") if isinstance(trace, dict) else None
+    if not isinstance(checks, list):
+        return False
+    for check in checks:
+        if not isinstance(check, dict):
+            continue
+        if check.get("ok") is False and str(check.get("name") or "") != "full-agent-coverage":
+            return True
+    return False
+
+
 @app.post("/api/agent/worker/run")
 def agent_worker_run(req: AgentWorkerRunReq, request: Request):
     _require_worker_auth(request)
@@ -2969,27 +3366,7 @@ def _run_agent_impl(req: AgentReq, event_cb=None, job_id: str | None = None):
         normalized_changes = list(pipeline.get("changes") or [])
 
         emit("status", {"phase": "diffing", "message": "Lagi nyusun diff biar siap dipakai UI..."})
-        out_changes: list[dict[str, str]] = []
-        for ch in normalized_changes:
-            if not isinstance(ch, dict):
-                continue
-            p = str(ch.get("path") or "").strip()
-            nc = ch.get("new_content")
-            if not p or not isinstance(nc, str):
-                continue
-
-            target = safe_join(ws_root, p)
-            old_exists = target.exists()
-            old = target.read_text(encoding="utf-8") if old_exists else ""
-
-            out_changes.append({
-                "path": p,
-                "new_content": nc,
-                "diff": diff_text(old, nc, filename=p),
-                "old_sha256": _sha256_text(old),
-                "new_sha256": _sha256_text(nc),
-                "old_exists": old_exists,
-            })
+        out_changes = _prepare_agent_out_changes(ws_root, normalized_changes)
 
         result = {
             "job_id": job_id,
@@ -3001,6 +3378,18 @@ def _run_agent_impl(req: AgentReq, event_cb=None, job_id: str | None = None):
             "trace": dict(pipeline.get("trace") or {}),
             "no_changes": len(out_changes) == 0 and len(normalized_actions) == 0,
         }
+        if req.auto_execute and (out_changes or normalized_actions) and not _trace_has_blocking_verifier_failures(result["trace"]):
+            result["execution"] = _auto_execute_agent_result(req, out_changes, normalized_actions, emit)
+        elif req.auto_execute and _trace_has_blocking_verifier_failures(result["trace"]):
+            result["execution"] = {
+                "auto_execute": True,
+                "ok": False,
+                "skipped": True,
+                "reason": "Verifier reported blocking failures before backend execution.",
+                "project_root": str(req.project_root or ".").strip().strip("/") or ".",
+                "apply": None,
+                "shell": None,
+            }
         if not streamed_spoken:
             for chunk in _spoken_stream_chunks(sug_spoken):
                 emit("delta", {"spoken_chunk": chunk})
