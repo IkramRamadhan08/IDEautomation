@@ -1300,16 +1300,21 @@ _SAFE_COMMAND_PREFIXES = (
     ("npm", "run"),
     ("npm", "test"),
     ("npm", "install"),
+    ("npm", "i"),
+    ("npm", "add"),
     ("npm", "ci"),
     ("pnpm", "run"),
     ("pnpm", "test"),
     ("pnpm", "install"),
+    ("pnpm", "add"),
     ("yarn", "run"),
     ("yarn", "test"),
     ("yarn", "install"),
+    ("yarn", "add"),
     ("bun", "run"),
     ("bun", "test"),
     ("bun", "install"),
+    ("bun", "add"),
     ("python3", "-m", "compileall"),
     ("python", "-m", "compileall"),
 )
@@ -1317,28 +1322,11 @@ _SAFE_COMMAND_PREFIXES = (
 _APPROVAL_COMMANDS = {"git", "npx", "pnpm", "yarn", "bun", "npm"}
 _BLOCKED_COMMANDS = {"rm", "sudo", "su", "dd", "mkfs", "mount", "umount", "shutdown", "reboot", "kill", "pkill"}
 _DESTRUCTIVE_GIT_ARGS = {"reset", "clean", "checkout", "restore", "rebase"}
+_SHELL_CHAIN_OPERATORS = {"&&"}
+_SHELL_UNSAFE_TOKENS = {";", "|", "||", "&", ">", ">>", "<", "<<", "$(", "`"}
 
 
-def _command_policy_decision(command: str) -> CommandPolicyDecision:
-    clean = str(command or "").strip()
-    if not clean:
-        return CommandPolicyDecision(ok=False, command=clean, risk_level="blocked", reason="Command kosong.", requires_approval=True)
-
-    lowered = clean.lower()
-    if any(token in lowered for token in ("curl ", "wget ", "| sh", "| bash", " > /", ">> /", " --global", " -g ")):
-        return CommandPolicyDecision(
-            ok=False,
-            command=clean,
-            risk_level="approval_required",
-            reason="Command berpotensi mengunduh/menulis di luar project atau mengubah environment global.",
-            requires_approval=True,
-        )
-
-    try:
-        parts = shlex.split(clean)
-    except ValueError as exc:
-        return CommandPolicyDecision(ok=False, command=clean, risk_level="blocked", reason=f"Command tidak bisa diparse: {exc}", requires_approval=True)
-
+def _command_policy_decision_for_parts(clean: str, parts: list[str]) -> CommandPolicyDecision:
     if not parts:
         return CommandPolicyDecision(ok=False, command=clean, risk_level="blocked", reason="Command kosong.", requires_approval=True)
 
@@ -1357,6 +1345,80 @@ def _command_policy_decision(command: str) -> CommandPolicyDecision:
         return CommandPolicyDecision(ok=False, command=clean, risk_level="approval_required", reason="Command package/git di luar allowlist safe butuh approval eksplisit.", requires_approval=True)
 
     return CommandPolicyDecision(ok=False, command=clean, risk_level="approval_required", reason="Command belum masuk allowlist guarded autonomy.", requires_approval=True)
+
+
+def _split_safe_shell_chain(parts: list[str]) -> list[list[str]] | None:
+    segments: list[list[str]] = []
+    current: list[str] = []
+    for part in parts:
+        if part in _SHELL_CHAIN_OPERATORS:
+            if not current:
+                return None
+            segments.append(current)
+            current = []
+            continue
+        if part in _SHELL_UNSAFE_TOKENS or any(token in part for token in ("$(", "`")):
+            return None
+        current.append(part)
+    if not current:
+        return None
+    segments.append(current)
+    return segments
+
+
+def _command_policy_decision(command: str) -> CommandPolicyDecision:
+    clean = str(command or "").strip()
+    if not clean:
+        return CommandPolicyDecision(ok=False, command=clean, risk_level="blocked", reason="Command kosong.", requires_approval=True)
+
+    lowered = clean.lower()
+    if any(token in lowered for token in ("curl ", "wget ", "| sh", "| bash", " > /", ">> /", " --global", " -g ")):
+        return CommandPolicyDecision(
+            ok=False,
+            command=clean,
+            risk_level="approval_required",
+            reason="Command berpotensi mengunduh/menulis di luar project atau mengubah environment global.",
+            requires_approval=True,
+        )
+    if (
+        ";" in clean
+        or "|" in clean
+        or ">" in clean
+        or "<" in clean
+        or "`" in clean
+        or "$(" in clean
+        or re.search(r"(?<!&)&(?!&)", clean)
+    ):
+        return CommandPolicyDecision(
+            ok=False,
+            command=clean,
+            risk_level="approval_required",
+            reason="Command memakai operator shell yang butuh approval eksplisit.",
+            requires_approval=True,
+        )
+
+    try:
+        parts = shlex.split(clean)
+    except ValueError as exc:
+        return CommandPolicyDecision(ok=False, command=clean, risk_level="blocked", reason=f"Command tidak bisa diparse: {exc}", requires_approval=True)
+
+    if not parts:
+        return CommandPolicyDecision(ok=False, command=clean, risk_level="blocked", reason="Command kosong.", requires_approval=True)
+
+    if any(part in _SHELL_CHAIN_OPERATORS for part in parts):
+        segments = _split_safe_shell_chain(parts)
+        if not segments:
+            return CommandPolicyDecision(ok=False, command=clean, risk_level="approval_required", reason="Shell chain mengandung operator yang butuh approval eksplisit.", requires_approval=True)
+        for segment in segments:
+            decision = _command_policy_decision_for_parts(" ".join(segment), segment)
+            if not decision.ok:
+                return CommandPolicyDecision(ok=False, command=clean, risk_level=decision.risk_level, reason=f"Shell chain ditahan: {decision.reason}", requires_approval=True)
+        return CommandPolicyDecision(ok=True, command=clean, risk_level="safe", reason="Semua command dalam chain project-scoped dan boleh auto-run.", requires_approval=False)
+
+    if any(part in _SHELL_UNSAFE_TOKENS or any(token in part for token in ("$(", "`")) for part in parts):
+        return CommandPolicyDecision(ok=False, command=clean, risk_level="approval_required", reason="Command memakai operator shell yang butuh approval eksplisit.", requires_approval=True)
+
+    return _command_policy_decision_for_parts(clean, parts)
 
 
 def _infer_validation_commands(project_dir: Path) -> list[str]:

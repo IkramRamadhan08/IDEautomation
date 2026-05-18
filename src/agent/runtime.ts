@@ -311,6 +311,7 @@ export function buildRepairPrompt(
   validationReport?: string | null,
   previewAuditReport?: string | null,
   shellReport?: string | null,
+  failureDiagnosis?: string | null,
   passNumber?: number,
   maxPasses?: number,
 ): string {
@@ -324,6 +325,12 @@ export function buildRepairPrompt(
   if (passNumber && maxPasses) {
     sections.push(
       `Repair loop pass ${passNumber} of ${maxPasses}. Do not repeat the same failed approach; use the latest command/validation/audit output as ground truth.`
+    );
+  }
+
+  if (failureDiagnosis?.trim()) {
+    sections.push(
+      `Failure diagnosis from Appora's classifier:\n${failureDiagnosis.trim()}\n\nUse this diagnosis to choose the smallest targeted patch. If the diagnosis names files or line numbers, inspect/fix those areas first.`
     );
   }
 

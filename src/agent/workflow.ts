@@ -81,7 +81,7 @@ type WorkflowArgs = {
   buffers: Record<string, FileBuffer>;
   makeAgentLiveId: () => string;
   pushAgentLiveItem: (item: Omit<AgentLiveItem, "id">) => void;
-  appendAssistantLiveText: (chunk: string, tone?: AgentLiveItem["tone"]) => void;
+  appendAssistantLiveText: (chunk: string, tone?: AgentLiveItem["tone"], exact?: boolean) => void;
   refreshExplorer: (path?: string) => Promise<void>;
   ensurePreviewRunning: () => Promise<string>;
   refreshPreviewFrame: () => void;
@@ -177,6 +177,74 @@ function formatShellActionReport(results: ShellActionRun[], maxChars = 8000) {
     .join("\n\n");
 
   return report.length > maxChars ? `${report.slice(0, maxChars)}\n…[truncated]` : report;
+}
+
+function classifyCommandFailureText(text: string): string {
+  const raw = String(text || "");
+  const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const lower = raw.toLowerCase();
+  const hints: string[] = [];
+
+  const fileLineMatches = Array.from(raw.matchAll(/(?:^|\s)([\w./-]+\.(?:ts|tsx|js|jsx|css|json|html|py))[:(](\d+)(?::(\d+))?/g))
+    .map((match) => `${match[1]}:${match[2]}${match[3] ? `:${match[3]}` : ""}`);
+  const uniqueLocations = Array.from(new Set(fileLineMatches)).slice(0, 6);
+  if (uniqueLocations.length > 0) hints.push(`Likely files: ${uniqueLocations.join(", ")}`);
+
+  if (/(cannot find module|module not found|could not resolve|failed to resolve import)/i.test(raw)) {
+    hints.push("Class: missing import/module or dependency declaration.");
+  }
+  if (/(not found|command not found|is not recognized|could not determine executable)/i.test(raw)) {
+    hints.push("Class: missing project tool/dependencies; install or use the package manager before patching app code.");
+  }
+  if (/(ts\d{4}|type .* is not assignable|property .* does not exist|implicitly has an 'any' type)/i.test(raw)) {
+    hints.push("Class: TypeScript compile error; patch the referenced file/type, then rerun validation.");
+  }
+  if (/(eslint|lint|react hooks|jsx-a11y|no-unused-vars|prefer-const)/i.test(raw)) {
+    hints.push("Class: lint/static analysis error; make the smallest code cleanup that satisfies the rule.");
+  }
+  if (/(syntaxerror|unexpected token|unterminated|string literal|parse error)/i.test(raw)) {
+    hints.push("Class: syntax/parse error; inspect the nearest referenced line before changing behavior.");
+  }
+  if (/(eaddrinuse|port .* already in use|address already in use)/i.test(raw)) {
+    hints.push("Class: preview/runtime port conflict; avoid app code churn unless the command itself is wrong.");
+  }
+  if (/(enoent|no such file or directory)/i.test(raw)) {
+    hints.push("Class: missing file/path; verify generated paths and imports.");
+  }
+
+  const highSignal = lines
+    .filter((line) => (
+      /error|failed|cannot|not found|ts\d{4}|eslint|syntax|unexpected|enoent|eaddrinuse/i.test(line)
+      && !/^\$ /.test(line)
+    ))
+    .slice(0, 10);
+  if (highSignal.length > 0) hints.push(`High-signal lines:\n- ${highSignal.join("\n- ")}`);
+
+  if (hints.length === 0 && lower.trim()) {
+    hints.push(`No classifier matched. Start from the last failing command and shortest error line.\n- ${lines.slice(-6).join("\n- ")}`);
+  }
+  return hints.join("\n");
+}
+
+function classifyValidationFailure(validation: ProjectValidationRun | null): string | null {
+  if (!validation || validation.ok) return null;
+  const failing = validation.results.filter((result) => !result.ok);
+  if (failing.length === 0) return null;
+  return failing.map((result, index) => [
+    `Failure ${index + 1}: ${result.command} (exit ${result.returncode})`,
+    classifyCommandFailureText(`${result.stdout || ""}\n${result.stderr || ""}`),
+  ].filter(Boolean).join("\n")).join("\n\n");
+}
+
+function classifyShellFailure(results: ShellActionRun[]): string | null {
+  const failing = results.filter((result) => !result.ok);
+  if (failing.length === 0) return null;
+  return failing.map((result, index) => [
+    `Failure ${index + 1}: ${result.command} (exit ${result.returncode})`,
+    result.policy && !result.policy.ok ? `Policy: ${result.policy.risk_level} - ${result.policy.reason}` : null,
+    result.error ? `Execution error: ${result.error}` : null,
+    classifyCommandFailureText(`${result.stdout || ""}\n${result.stderr || ""}`),
+  ].filter(Boolean).join("\n")).join("\n\n");
 }
 
 function formatApplyPreflightConflicts(conflicts: ApplyPreflightConflict[], maxItems = 8) {
@@ -379,6 +447,33 @@ function retryActionsForFailedShell(results: ShellActionRun[]): AgentAction[] {
     .map((command) => ({ type: "shell", command }));
 }
 
+function installCommandForMissingProjectTool(validation: ProjectValidationRun | null): AgentAction | null {
+  if (!validation || validation.ok) return null;
+  const joined = validation.results
+    .filter((result) => !result.ok)
+    .map((result) => `${result.command}\n${result.stdout || ""}\n${result.stderr || ""}`)
+    .join("\n")
+    .toLowerCase();
+  if (!joined) return null;
+  const looksMissingTool = [
+    "not found",
+    "command not found",
+    "is not recognized",
+    "cannot find module",
+    "could not determine executable",
+    "missing script",
+  ].some((token) => joined.includes(token));
+  if (!looksMissingTool) return null;
+  const command = validation.results.map((result) => result.command).join(" && ");
+  if (/\bpnpm\b/i.test(command)) return { type: "shell", command: "pnpm install", reason: "Validation failed because project dependencies/tools are missing." };
+  if (/\byarn\b/i.test(command)) return { type: "shell", command: "yarn install", reason: "Validation failed because project dependencies/tools are missing." };
+  if (/\bbun\b/i.test(command)) return { type: "shell", command: "bun install", reason: "Validation failed because project dependencies/tools are missing." };
+  if (/\bnpm\b/i.test(command) || /\b(tsc|vite|eslint|vitest)\b/i.test(joined)) {
+    return { type: "shell", command: "npm install", reason: "Validation failed because project dependencies/tools are missing." };
+  }
+  return null;
+}
+
 export async function runAgentWorkflow({
   agentInput,
   agentStatus,
@@ -490,10 +585,14 @@ export async function runAgentWorkflow({
 
         if (event.event === "delta") {
           const spokenChunk = typeof event.data.spoken_chunk === "string" ? event.data.spoken_chunk : "";
+          const nativeStream = event.data.native_stream === true;
           const message = typeof event.data.message === "string" ? event.data.message : "";
           if (spokenChunk) {
-            setAgentReply((prev) => (prev ? `${prev} ${spokenChunk}` : spokenChunk));
-            appendAssistantLiveText(spokenChunk);
+            setAgentReply((prev) => {
+              if (!prev) return nativeStream ? spokenChunk.trimStart() : spokenChunk;
+              return nativeStream ? `${prev}${spokenChunk}` : `${prev} ${spokenChunk}`;
+            });
+            appendAssistantLiveText(spokenChunk, "default", nativeStream);
           }
           if (message) {
             setWorkingMsg(message);
@@ -992,6 +1091,22 @@ export async function runAgentWorkflow({
     if (outputSafeToApply && (changes.length > 0 || actions.length > 0) && shouldRunValidation) {
       validation = await runValidationPass("VALIDATION PASS 1");
     }
+    if (outputSafeToApply && validation && !validation.ok) {
+      const installAction = installCommandForMissingProjectTool(validation);
+      if (installAction) {
+        pushAgentLiveItem({
+          role: "tool",
+          tone: "working",
+          text: "Validasi gagal karena dependency/tool project belum terpasang. Aku install dependency dulu lalu ulang validasi.",
+          meta: String(installAction.command || ""),
+        });
+        const installResults = await runShellActionsForPass([installAction]);
+        shellResults.push(...installResults);
+        if (installResults.every((result) => result.ok)) {
+          validation = await runValidationPass("VALIDATION PASS 1B");
+        }
+      }
+    }
     if (outputSafeToApply && auditedPreviewUrl && (changes.length > 0 || actions.length > 0) && shouldAuditPreview) {
       previewAudit = await runPreviewAuditPass(auditedPreviewUrl, "PREVIEW AUDIT 1");
     }
@@ -1028,9 +1143,21 @@ export async function runAgentWorkflow({
         const validationReport = latestValidation && !latestValidation.ok ? formatValidationReport(latestValidation, 6000) : null;
         const shellReport = latestShellResults.some((result) => !result.ok) ? formatShellActionReport(latestShellResults, 6000) : null;
         const previewAuditReport = latestPreviewAudit && latestPreviewAudit.issues.length > 0 ? formatPreviewAuditReport(latestPreviewAudit, 3500) : null;
+        const failureDiagnosis = [
+          classifyValidationFailure(latestValidation),
+          classifyShellFailure(latestShellResults),
+        ].filter(Boolean).join("\n\n") || null;
+        if (failureDiagnosis) {
+          pushAgentLiveItem({
+            role: "tool",
+            tone: "working",
+            text: "Appora mengklasifikasi error sebelum repair.",
+            meta: failureDiagnosis.slice(0, 420),
+          });
+        }
 
         const repairRes = await runAgentPass(
-          buildRepairPrompt(buildMode, agentInput, validationReport, previewAuditReport, shellReport, pass, maxRepairPasses),
+          buildRepairPrompt(buildMode, agentInput, validationReport, previewAuditReport, shellReport, failureDiagnosis, pass, maxRepairPasses),
           `Fixing preview and validation issues (${pass}/${maxRepairPasses})...`,
         );
 

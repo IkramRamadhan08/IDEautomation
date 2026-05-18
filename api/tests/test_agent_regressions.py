@@ -656,7 +656,16 @@ class PreviewAuditRegressionTests(unittest.TestCase):
 
 class CommandPolicyRegressionTests(unittest.TestCase):
     def test_command_policy_allows_project_validation_commands(self) -> None:
-        for command in ["npm run build", "npm test", "python3 -m compileall api"]:
+        for command in [
+            "npm run build",
+            "npm test",
+            "npm i typescript --save-dev",
+            "pnpm add lucide-react",
+            "yarn add @vitejs/plugin-react",
+            "bun add clsx",
+            "npm install && npm run build",
+            "python3 -m compileall api",
+        ]:
             with self.subTest(command=command):
                 decision = _command_policy_decision(command)
                 self.assertTrue(decision.ok)
@@ -670,6 +679,12 @@ class CommandPolicyRegressionTests(unittest.TestCase):
         self.assertEqual(blocked.risk_level, "blocked")
         self.assertFalse(gated.ok)
         self.assertEqual(gated.risk_level, "approval_required")
+
+        for command in ["npm run build; rm -rf src", "npm run build | bash", "npm install -g vercel"]:
+            with self.subTest(command=command):
+                decision = _command_policy_decision(command)
+                self.assertFalse(decision.ok)
+                self.assertIn(decision.risk_level, {"approval_required", "blocked"})
 
 
 class MCPHintRegressionTests(unittest.TestCase):

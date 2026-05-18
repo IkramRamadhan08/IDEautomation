@@ -283,17 +283,17 @@ export default function App() {
     setAgentLiveItems((prev) => [...prev, { ...item, id: makeAgentLiveId() }]);
   }, [makeAgentLiveId]);
 
-  const appendAssistantLiveText = useCallback((chunk: string, tone: AgentLiveItem["tone"] = "default") => {
-    const clean = chunk.trim();
-    if (!clean) return;
+  const appendAssistantLiveText = useCallback((chunk: string, tone: AgentLiveItem["tone"] = "default", exact = false) => {
+    const text = exact ? chunk : chunk.trim();
+    if (!text) return;
     setAgentLiveItems((prev) => {
       const next = [...prev];
       const last = next[next.length - 1];
       if (last && last.role === "assistant" && last.tone === tone) {
-        last.text = `${last.text}${last.text ? " " : ""}${clean}`;
+        last.text = exact ? `${last.text}${text}` : `${last.text}${last.text ? " " : ""}${text}`;
         return next;
       }
-      next.push({ id: makeAgentLiveId(), role: "assistant", tone, text: clean });
+      next.push({ id: makeAgentLiveId(), role: "assistant", tone, text: exact ? text.trimStart() : text });
       return next;
     });
   }, [makeAgentLiveId]);
