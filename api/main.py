@@ -3172,6 +3172,9 @@ def _execution_needs_repair(execution: dict[str, object]) -> bool:
     validation = execution.get("validation")
     if isinstance(validation, dict) and validation.get("ok") is False:
         return True
+    replay = execution.get("replay")
+    if isinstance(replay, dict) and replay.get("ok") is False:
+        return True
     preview_audit = execution.get("preview_audit")
     if isinstance(preview_audit, dict) and preview_audit.get("ok") is False and not preview_audit.get("skipped"):
         return True
@@ -3311,6 +3314,7 @@ def _execution_failure_analysis(execution: dict[str, object]) -> dict[str, objec
 
     signatures.extend(_failed_command_signatures(execution.get("shell"), kind="shell"))
     signatures.extend(_failed_command_signatures(execution.get("validation"), kind="validation"))
+    signatures.extend(_failed_command_signatures(execution.get("replay"), kind="replay"))
 
     preview_audit = execution.get("preview_audit")
     if isinstance(preview_audit, dict) and preview_audit.get("ok") is False and not preview_audit.get("skipped"):
@@ -3416,6 +3420,15 @@ def _execution_completion_report(execution: dict[str, object]) -> dict[str, obje
         if execution.get("apply") is not None:
             residual_risks.append("No validation command was inferred after file changes.")
 
+    replay = execution.get("replay")
+    if isinstance(replay, dict):
+        failed = sum(1 for item in list(replay.get("results") or []) if isinstance(item, dict) and not item.get("ok"))
+        criteria.append(_criterion(
+            "replay",
+            "passed" if replay.get("ok") else "failed",
+            f"ran={replay.get('ran')} failed={failed}",
+        ))
+
     preview_audit = execution.get("preview_audit")
     if isinstance(preview_audit, dict):
         if preview_audit.get("skipped"):
@@ -3494,6 +3507,7 @@ def _execution_repair_report(execution: dict[str, object], max_chars: int = 9000
                 "execution_ok": repair_execution.get("ok") if isinstance(repair_execution, dict) else None,
                 "validation": repair_execution.get("validation") if isinstance(repair_execution, dict) else None,
                 "shell": repair_execution.get("shell") if isinstance(repair_execution, dict) else None,
+                "replay": repair_execution.get("replay") if isinstance(repair_execution, dict) else None,
                 "preview_audit": repair_execution.get("preview_audit") if isinstance(repair_execution, dict) else None,
                 "failure_analysis": repair_execution.get("failure_analysis") if isinstance(repair_execution, dict) else None,
             })
@@ -3513,6 +3527,7 @@ def _execution_repair_report(execution: dict[str, object], max_chars: int = 9000
             "apply": execution.get("apply"),
             "shell": execution.get("shell"),
             "validation": execution.get("validation"),
+            "replay": execution.get("replay"),
             "preview_audit": preview_repair,
             "failure_analysis": execution.get("failure_analysis") or _execution_failure_analysis(execution),
             "completion_report": execution.get("completion_report"),
@@ -3657,7 +3672,7 @@ def _repair_file_context(project_root: str, execution: dict[str, object], *, max
     }, ensure_ascii=False, indent=2)[:9000]
 
 
-def _repair_replay_plan(execution: dict[str, object]) -> str:
+def _repair_replay_command_items(execution: dict[str, object]) -> list[dict[str, object]]:
     commands: list[dict[str, object]] = []
     for kind in ("shell", "validation"):
         container = execution.get(kind)
@@ -3699,10 +3714,85 @@ def _repair_replay_plan(execution: dict[str, object]) -> str:
             continue
         seen.add(key)
         deduped.append(item)
+    return deduped[:8]
+
+
+def _repair_replay_plan(execution: dict[str, object]) -> str:
+    deduped = _repair_replay_command_items(execution)
     return json.dumps({
-        "commands": deduped[:8],
+        "commands": deduped,
         "instruction": "After making repair changes, include shell actions for non-validation replay commands that still need explicit rerun. Backend validation commands are rerun automatically after file changes.",
     }, ensure_ascii=False, indent=2)[:5000]
+
+
+def _run_repair_replay(project_root: str, previous_execution: dict[str, object], repair_actions: list[dict], emit) -> dict[str, object] | None:
+    planned = [
+        item for item in _repair_replay_command_items(previous_execution)
+        if str(item.get("kind") or "") == "shell" and str(item.get("command") or "").strip()
+    ]
+    if not planned:
+        return None
+    already_requested = {
+        str(item.get("command") or "").strip()
+        for item in repair_actions
+        if isinstance(item, dict) and str(item.get("type") or "").strip().lower() == "shell"
+    }
+    replay_actions: list[AgentHarnessShellAction] = []
+    skipped_commands: list[dict[str, object]] = []
+    for item in planned:
+        command = str(item.get("command") or "").strip()
+        if not command or command in already_requested:
+            continue
+        policy = _command_policy_decision(command)
+        if not policy.ok:
+            skipped_commands.append({
+                "command": command,
+                "reason": policy.reason,
+                "risk_level": policy.risk_level,
+            })
+            continue
+        replay_actions.append(AgentHarnessShellAction(
+            command=command,
+            cwd=str(item.get("cwd") or project_root or "."),
+            reason=str(item.get("reason") or "Replay previously failing shell command after repair."),
+        ))
+    if not replay_actions:
+        if skipped_commands:
+            return {
+                "ok": True,
+                "skipped": True,
+                "project_root": project_root,
+                "ran": 0,
+                "results": [],
+                "skipped_commands": skipped_commands,
+                "summary": "Replay commands skipped because they are not safe for guarded autonomy.",
+            }
+        return None
+    emit("status", {"phase": "executing_replay", "message": "Backend harness replaying previously failing shell commands..."})
+    replay = agent_harness_run_shell(AgentHarnessRunShellReq(project_root=project_root, actions=replay_actions))
+    if skipped_commands:
+        replay["skipped_commands"] = skipped_commands
+    steps = replay.setdefault("steps", [])
+    if isinstance(steps, list):
+        steps.append(_execution_step(
+            "replay",
+            "Backend repair replay",
+            bool(replay.get("ok")),
+            f"ran={replay.get('ran')}",
+            commands=[action.command for action in replay_actions],
+            failed=sum(1 for item in list(replay.get("results") or []) if isinstance(item, dict) and not item.get("ok")),
+        ))
+    emit(
+        "tool_output",
+        {
+            "kind": "agent_harness",
+            "tool": "repair-replay",
+            "ok": bool(replay.get("ok")),
+            "phase": "executing_replay",
+            "text": json.dumps({"ran": replay.get("ran"), "results": replay.get("results")}, ensure_ascii=False)[:1200],
+        },
+    )
+    return replay
 
 
 def _execution_step(kind: str, label: str, ok: bool, detail: str, **extra: object) -> dict[str, object]:
@@ -3858,7 +3948,26 @@ def _run_backend_repair_pass(req: AgentReq, execution: dict[str, object], emit, 
     repair_actions = list(repair_pipeline.get("actions") or [])
     repair_execution = _auto_execute_agent_result(repair_req, repair_changes, repair_actions, emit, allow_repair=False)
     if isinstance(repair_execution, dict):
+        replay = _run_repair_replay(project_root, execution, repair_actions, emit)
+        if isinstance(replay, dict):
+            repair_execution["replay"] = replay
+            repair_execution["ok"] = bool(repair_execution.get("ok")) and bool(replay.get("ok"))
+            steps = repair_execution.setdefault("steps", [])
+            if isinstance(steps, list):
+                steps.append(_execution_step(
+                    "replay",
+                    "Backend repair replay",
+                    bool(replay.get("ok")),
+                    f"ran={replay.get('ran')}",
+                    commands=[
+                        str(item.get("command") or "")
+                        for item in list(replay.get("results") or [])
+                        if isinstance(item, dict)
+                    ],
+                    failed=sum(1 for item in list(replay.get("results") or []) if isinstance(item, dict) and not item.get("ok")),
+                ))
         repair_execution["failure_analysis"] = _execution_failure_analysis(repair_execution)
+        repair_execution["completion_report"] = _execution_completion_report(repair_execution)
     return {
         "spoken": repair_pipeline.get("spoken") or "",
         "log": repair_pipeline.get("log") or "",

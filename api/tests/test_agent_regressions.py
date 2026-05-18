@@ -1933,7 +1933,7 @@ class AgentAutoExecuteRegressionTests(unittest.TestCase):
                     "spoken": "Aku coba apply tapi validasi gagal.",
                     "log": "first",
                     "changes": [{"path": "demo/bad.py", "new_content": "print(\n"}],
-                    "actions": [{"type": "shell", "command": "python3 helper.py", "cwd": "demo", "reason": "reproduce helper syntax"}],
+                    "actions": [{"type": "shell", "command": "python3 -m compileall helper.py", "cwd": "demo", "reason": "reproduce helper syntax"}],
                     "intent": {"kind": "command"},
                     "trace": {"passes": 1, "memory_hits": [], "skills": [], "mcp_servers": [], "mcp_tools_used": [], "verification": [], "warnings": []},
                 }
@@ -1965,13 +1965,16 @@ class AgentAutoExecuteRegressionTests(unittest.TestCase):
                 self.assertIn("print(", repair_req.input)
                 self.assertIn("value =", repair_req.input)
                 self.assertIn("Repair replay plan", repair_req.input)
-                self.assertIn('"command": "python3 helper.py"', repair_req.input)
+                self.assertIn('"command": "python3 -m compileall helper.py"', repair_req.input)
                 self.assertIn("include shell actions for non-validation replay commands", repair_req.input)
                 self.assertFalse(result["execution"]["validation"]["ok"])
                 self.assertEqual(len(result["execution"]["repairs"]), 1)
                 repair_execution = result["execution"]["repairs"][0]["execution"]
                 self.assertTrue(repair_execution["ok"])
                 self.assertTrue(repair_execution["validation"]["ok"])
+                self.assertTrue(repair_execution["replay"]["ok"])
+                self.assertEqual(repair_execution["replay"]["results"][0]["command"], "python3 -m compileall helper.py")
+                self.assertIn("replay", [step["kind"] for step in repair_execution["steps"]])
                 self.assertIn("repair", [step["kind"] for step in result["execution"]["steps"]])
                 self.assertEqual(result["execution"]["completion_report"]["state"], "complete")
                 self.assertIn("completion", [step["kind"] for step in result["execution"]["steps"]])
