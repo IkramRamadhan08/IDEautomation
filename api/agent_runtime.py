@@ -2290,6 +2290,16 @@ def _route_after_verify(state: AgentRuntimeState) -> str:
     return "finalize"
 
 
+def _route_after_strict_retry(state: AgentRuntimeState) -> str:
+    ctx = state["context"]
+    mcp_actions, tool_actions, _other_actions = _split_runtime_actions(list(state.get("actions") or []))
+    can_run_read_tools = ctx.intent.should_run_tools or ctx.intent.kind == "inspection"
+    if can_run_read_tools and int(state.get("tool_iterations") or 0) < _max_tool_loops_for_run(ctx):
+        if tool_actions or mcp_actions:
+            return "tooling"
+    return "verify"
+
+
 def _needs_autonomous_continue(state: AgentRuntimeState) -> bool:
     ctx = state["context"]
     if not ctx.intent.should_write_files:
@@ -2503,7 +2513,7 @@ _AGENT_GRAPH_BUILDER.add_conditional_edges("draft", _route_after_draft, {"toolin
 _AGENT_GRAPH_BUILDER.add_edge("tooling", "draft")
 _AGENT_GRAPH_BUILDER.add_edge("refine", "verify")
 _AGENT_GRAPH_BUILDER.add_conditional_edges("verify", _route_after_verify, {"strict_retry": "strict_retry", "autonomous_continue": "autonomous_continue", "finalize": "finalize"})
-_AGENT_GRAPH_BUILDER.add_edge("strict_retry", "verify")
+_AGENT_GRAPH_BUILDER.add_conditional_edges("strict_retry", _route_after_strict_retry, {"tooling": "tooling", "verify": "verify"})
 _AGENT_GRAPH_BUILDER.add_edge("autonomous_continue", "draft")
 _AGENT_GRAPH_BUILDER.add_edge("finalize", END)
 _AGENT_GRAPH = _AGENT_GRAPH_BUILDER.compile()

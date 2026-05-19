@@ -244,7 +244,7 @@ export function resetClientIdentity() {
   window.localStorage.removeItem(USER_STORAGE_KEY);
 }
 
-async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+async function apiFetch(path: string, init: RequestInit = {}, options: { auth?: boolean } = {}): Promise<Response> {
   const headers = new Headers(init.headers ?? {});
   const sessionId = getSessionId();
   const userId = getUserId();
@@ -253,13 +253,15 @@ async function apiFetch(path: string, init: RequestInit = {}): Promise<Response>
   headers.set("X-VoiceIDE-Session", sessionId);
   headers.set("X-VoiceIDE-User", userId);
 
-  try {
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token?.trim() || getCachedSupabaseAccessToken();
-    if (token) headers.set("Authorization", `Bearer ${token}`);
-  } catch {
-    const token = getCachedSupabaseAccessToken();
-    if (token) headers.set("Authorization", `Bearer ${token}`);
+  if (options.auth !== false) {
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token?.trim() || getCachedSupabaseAccessToken();
+      if (token) headers.set("Authorization", `Bearer ${token}`);
+    } catch {
+      const token = getCachedSupabaseAccessToken();
+      if (token) headers.set("Authorization", `Bearer ${token}`);
+    }
   }
 
   return fetch(`${BASE}${path}`, {
@@ -274,10 +276,15 @@ export async function listHostedProjects(): Promise<{ ok: boolean; projects: Hos
   return r.json();
 }
 
+let projectTemplatesCache: { ok: boolean; templates: ProjectTemplate[] } | null = null;
+
 export async function listProjectTemplates(): Promise<{ ok: boolean; templates: ProjectTemplate[] }> {
-  const r = await apiFetch(`/api/projects/templates`);
+  if (projectTemplatesCache) return projectTemplatesCache;
+  const r = await apiFetch(`/api/projects/templates`, {}, { auth: false });
   if (!r.ok) throw new Error(await r.text());
-  return r.json();
+  const data = await r.json();
+  projectTemplatesCache = data;
+  return data;
 }
 
 export async function createHostedProject(payload: { name: string; slug?: string | null; template_id?: string | null }): Promise<{ ok: boolean; project: HostedProject }> {

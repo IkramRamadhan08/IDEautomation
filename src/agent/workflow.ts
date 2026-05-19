@@ -1679,7 +1679,7 @@ export async function runAgentWorkflow({
 
     let changes: AgentChange[] = res.changes || [];
     let actions: AgentAction[] = res.actions || [];
-    const backendAutoExecuted = res.execution?.auto_execute === true && res.execution?.ok !== false && !res.execution?.skipped;
+    const backendAutoExecuted = res.execution?.auto_execute === true && !res.execution?.skipped;
     const resolvedIntent = res.intent || inputIntent;
 
     pushAgentLiveItem({

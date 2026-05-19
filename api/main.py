@@ -307,6 +307,10 @@ def _hydrate_hosted_project(ws_root: Path, project_root: str) -> None:
     root = str(project_root or ".").strip().strip("/") or "."
     if root == ".":
         return
+    session = _session_state()
+    hydrated = session.setdefault("hydrated_projects", set())
+    if root in hydrated:
+        return
     try:
         rows = supabase_list_project_files(owner_id=CURRENT_USER_ID.get(), project_root=root) or []
     except Exception:
@@ -326,6 +330,7 @@ def _hydrate_hosted_project(ws_root: Path, project_root: str) -> None:
             target.write_text(content, encoding="utf-8")
         except Exception:
             continue
+    hydrated.add(root)
 
 
 def _hydrate_hosted_projects(ws_root: Path) -> None:
@@ -660,6 +665,7 @@ def _session_state() -> dict:
     if sid not in sessions:
         sessions[sid] = {
             "workspace": None,
+            "hydrated_projects": set(),
             "runners": {},
             "agent_jobs": {},
             "oauth_pending": {},
@@ -1767,8 +1773,6 @@ def get_workspace():
     if p is None and has_supabase():
         p, _created = _provision_managed_workspace()
         _session_state()["workspace"] = p
-    if p is not None:
-        _hydrate_hosted_projects(p)
     return WorkspaceInfo(path=str(p) if p else None, default=settings_mod.settings.default_workspace)
 
 
@@ -1781,12 +1785,14 @@ def set_workspace(req: WorkspaceSetReq):
         raise HTTPException(400, "Workspace path must be an existing directory")
     # Public-friendly behavior: keep workspace selection in memory only.
     _session_state()["workspace"] = p
+    _session_state()["hydrated_projects"] = set()
     return {"ok": True, "path": str(p)}
 
 
 @app.post("/api/workspace/clear")
 def clear_workspace():
     _session_state()["workspace"] = None
+    _session_state()["hydrated_projects"] = set()
     return {"ok": True}
 
 
@@ -1794,6 +1800,7 @@ def clear_workspace():
 def provision_workspace():
     session_dir, created = _provision_managed_workspace()
     _session_state()["workspace"] = session_dir
+    _session_state()["hydrated_projects"] = set()
     return WorkspaceProvisionResp(ok=True, path=str(session_dir), created=created)
 
 
@@ -1900,6 +1907,7 @@ async def import_browser_folder(files: list[UploadFile] = File(...), paths: list
         raise HTTPException(400, "No folder content received")
 
     _session_state()["workspace"] = target_root
+    _session_state()["hydrated_projects"] = set()
     return WorkspaceProvisionResp(ok=True, path=str(target_root), created=not target_root_preexisting, managed=True)
 
 
@@ -1984,7 +1992,6 @@ def _ws() -> Path:
     if isinstance(p, str):
         p = Path(p)
         _session_state()["workspace"] = p
-    _hydrate_hosted_projects(p)
     return p
 
 
@@ -2075,7 +2082,8 @@ class DetectedProject(BaseModel):
 @app.get("/api/run/detect")
 def run_detect():
     base = _ws()
-    _hydrate_hosted_projects(base)
+    if _hosted_project_files_enabled():
+        return {"ok": True, "projects": []}
     out: list[dict] = []
     seen = set()
 
@@ -2346,12 +2354,9 @@ class ListReq(BaseModel):
 @app.post("/api/fs/list")
 def fs_list(req: ListReq):
     root = _ws()
-    if req.path == ".":
-        _hydrate_hosted_projects(root)
-    else:
-        split = _split_project_path(req.path)
-        if split:
-            _hydrate_hosted_project(root, split[0])
+    split = _split_project_path(req.path)
+    if split:
+        _hydrate_hosted_project(root, split[0])
     return {"items": list_tree(_ws(), req.path)}
 
 
@@ -4668,6 +4673,65 @@ def _trace_has_blocking_verifier_failures(trace: dict) -> bool:
     return False
 
 
+def _trace_verifier_failure_summary(trace: dict) -> str:
+    checks = trace.get("verification") if isinstance(trace, dict) else None
+    if not isinstance(checks, list):
+        return "Verifier reported blocking failures before backend execution."
+    failures: list[str] = []
+    for check in checks:
+        if not isinstance(check, dict):
+            continue
+        if check.get("ok") is not False or str(check.get("name") or "") == "full-agent-coverage":
+            continue
+        name = str(check.get("name") or "verifier").strip()
+        detail = str(check.get("detail") or "").strip()
+        failures.append(f"{name}: {detail}" if detail else name)
+    return "\n".join(failures[:8]) or "Verifier reported blocking failures before backend execution."
+
+
+def _build_backend_verifier_repair_prompt(req: AgentReq, trace: dict) -> str:
+    build_mode = str(req.build_mode or "hybrid")
+    persona = "Clara" if build_mode == "full-agent" else "Raka"
+    mode_directive = (
+        f"{persona}, stay in full ownership mode and produce a complete, valid implementation."
+        if build_mode == "full-agent"
+        else f"{persona}, stay scoped, but return a valid actionable fix."
+    )
+    return "\n\n".join([
+        str(req.input or "").strip(),
+        mode_directive,
+        "Your previous output failed the backend verifier before it could be safely applied.",
+        f"Verifier failures:\n{_trace_verifier_failure_summary(trace)}",
+        "Return corrected JSON for the same user task. If this is a build/edit request, include valid file changes or valid shell actions. Do not return raw tool/MCP actions as the final output.",
+    ]).strip()
+
+
+def _run_backend_verifier_repair_pass(req: AgentReq, ws_root: Path, trace: dict, emit) -> dict:
+    emit("status", {"phase": "verifier_repair", "message": "Verifier gagal, agent memperbaiki output sebelum backend apply..."})
+    repair_req = req.model_copy(update={
+        "input": _build_backend_verifier_repair_prompt(req, trace),
+        "stream": False,
+        "background": False,
+        "auto_execute": False,
+        "editor_status": "Backend verifier repair before apply",
+    })
+    with _agent_lock_for_current_provider():
+        repair_pipeline = run_agent_pipeline(repair_req, ws_root=ws_root, emit=emit)
+    repair_changes = _prepare_agent_out_changes(ws_root, list(repair_pipeline.get("changes") or []))
+    repair_actions = list(repair_pipeline.get("actions") or [])
+    repair_trace = dict(repair_pipeline.get("trace") or {})
+    return {
+        "spoken": str(repair_pipeline.get("spoken") or ""),
+        "log": str(repair_pipeline.get("log") or ""),
+        "changes": repair_changes,
+        "actions": repair_actions,
+        "intent": dict(repair_pipeline.get("intent") or {}),
+        "trace": repair_trace,
+        "ok": not _trace_has_blocking_verifier_failures(repair_trace),
+        "failure_summary": _trace_verifier_failure_summary(repair_trace) if _trace_has_blocking_verifier_failures(repair_trace) else "",
+    }
+
+
 def _remember_backend_execution_state(req: AgentReq, result: dict) -> None:
     execution = result.get("execution")
     if not isinstance(execution, dict) or execution.get("auto_execute") is not True:
@@ -4756,6 +4820,22 @@ def _run_agent_impl(req: AgentReq, event_cb=None, job_id: str | None = None):
             "trace": dict(pipeline.get("trace") or {}),
             "no_changes": len(out_changes) == 0 and len(normalized_actions) == 0,
         }
+        if req.auto_execute and _trace_has_blocking_verifier_failures(result["trace"]):
+            repair = _run_backend_verifier_repair_pass(req, ws_root, result["trace"], emit)
+            result["verifier_repair"] = repair
+            if repair.get("spoken"):
+                result["spoken"] = str(repair.get("spoken") or "")
+            if repair.get("log"):
+                result["log"] = f"{str(result.get('log') or '').strip()} verifier_repair=1 {str(repair.get('log') or '').strip()}".strip()
+            if repair.get("ok"):
+                out_changes = list(repair.get("changes") or [])
+                normalized_actions = list(repair.get("actions") or [])
+                result["changes"] = out_changes
+                result["actions"] = normalized_actions
+                result["intent"] = dict(repair.get("intent") or result.get("intent") or {})
+                result["trace"] = dict(repair.get("trace") or {})
+                result["no_changes"] = len(out_changes) == 0 and len(normalized_actions) == 0
+
         if req.auto_execute and (out_changes or normalized_actions) and not _trace_has_blocking_verifier_failures(result["trace"]):
             result["execution"] = _auto_execute_agent_result(req, out_changes, normalized_actions, emit)
             _remember_backend_execution_state(req, result)
@@ -4765,12 +4845,13 @@ def _run_agent_impl(req: AgentReq, event_cb=None, job_id: str | None = None):
                 "ok": False,
                 "skipped": True,
                 "reason": "Verifier reported blocking failures before backend execution.",
+                "verifier_failures": _trace_verifier_failure_summary(result["trace"]),
                 "project_root": str(req.project_root or ".").strip().strip("/") or ".",
                 "apply": None,
                 "shell": None,
             }
         if not streamed_spoken:
-            for chunk in _spoken_stream_chunks(sug_spoken):
+            for chunk in _spoken_stream_chunks(str(result.get("spoken") or "")):
                 emit("delta", {"spoken_chunk": chunk})
         _update_agent_job_record(job_id, "completed", result=result)
         emit("done", {"message": "Beres, hasil agent siap dipakai.", "result": result})

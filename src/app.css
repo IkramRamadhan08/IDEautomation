@@ -16,21 +16,21 @@
 
 :root {
   color-scheme: dark;
-  --bg: #090a0d;
-  --bg-2: #101115;
-  --panel: rgba(18, 19, 23, 0.88);
-  --panel-strong: rgba(14, 15, 18, 0.96);
-  --panel-soft: rgba(229, 231, 235, 0.06);
-  --surface: rgba(255, 255, 255, 0.035);
-  --surface-strong: rgba(255, 255, 255, 0.075);
-  --border: rgba(229, 231, 235, 0.12);
-  --border-strong: rgba(229, 231, 235, 0.22);
-  --text: #f4f1ea;
-  --text-soft: #d8d3c8;
-  --muted: #8f938f;
-  --brand: #8fa3ff;
-  --brand-strong: #c7d2fe;
-  --brand-soft: rgba(143, 163, 255, 0.14);
+  --bg: #071015;
+  --bg-2: #0d171b;
+  --panel: rgba(10, 18, 24, 0.86);
+  --panel-strong: rgba(8, 16, 21, 0.94);
+  --panel-soft: rgba(246, 250, 245, 0.06);
+  --surface: rgba(246, 250, 245, 0.045);
+  --surface-strong: rgba(246, 250, 245, 0.08);
+  --border: rgba(209, 250, 229, 0.12);
+  --border-strong: rgba(209, 250, 229, 0.22);
+  --text: #f6faf5;
+  --text-soft: rgba(246, 250, 245, 0.74);
+  --muted: rgba(246, 250, 245, 0.5);
+  --brand: #61e8ff;
+  --brand-strong: #9cff5f;
+  --brand-soft: rgba(97, 232, 255, 0.14);
   --success: #65d6ad;
   --danger: #f87171;
   --warning: #e7bf6a;
@@ -46,21 +46,21 @@
 
 :root[data-app-theme="light"] {
   color-scheme: light;
-  --bg: #f8f5ec;
-  --bg-2: #eee8dc;
-  --panel: rgba(255, 255, 255, 0.78);
-  --panel-strong: rgba(255, 255, 255, 0.94);
-  --panel-soft: rgba(23, 23, 23, 0.045);
-  --surface: rgba(23, 23, 23, 0.045);
-  --surface-strong: rgba(23, 23, 23, 0.075);
-  --border: rgba(23, 23, 23, 0.12);
-  --border-strong: rgba(23, 23, 23, 0.22);
-  --text: #171717;
-  --text-soft: rgba(23, 23, 23, 0.72);
-  --muted: rgba(23, 23, 23, 0.52);
-  --brand: #171717;
-  --brand-strong: #171717;
-  --brand-soft: rgba(182, 255, 107, 0.32);
+  --bg: #f6faef;
+  --bg-2: #eef9fb;
+  --panel: rgba(255, 255, 255, 0.72);
+  --panel-strong: rgba(255, 255, 255, 0.92);
+  --panel-soft: rgba(17, 23, 23, 0.045);
+  --surface: rgba(17, 23, 23, 0.045);
+  --surface-strong: rgba(17, 23, 23, 0.075);
+  --border: rgba(17, 23, 23, 0.11);
+  --border-strong: rgba(17, 23, 23, 0.2);
+  --text: #111717;
+  --text-soft: rgba(17, 23, 23, 0.72);
+  --muted: rgba(17, 23, 23, 0.54);
+  --brand: #0f8395;
+  --brand-strong: #111717;
+  --brand-soft: rgba(156, 255, 95, 0.32);
   --success: #0f8b5f;
   --danger: #c24155;
   --warning: #9a6a08;
@@ -123,9 +123,9 @@ a {
   height: 100vh;
   width: 100vw;
   background:
-    radial-gradient(circle at 18% -10%, rgba(143, 163, 255, 0.12), transparent 32%),
-    radial-gradient(circle at 82% 4%, rgba(101, 214, 173, 0.08), transparent 26%),
-    linear-gradient(180deg, #090a0d 0%, #07080a 100%);
+    radial-gradient(circle at 10% 0%, rgba(156, 255, 95, 0.16), transparent 32%),
+    radial-gradient(circle at 86% 4%, rgba(97, 232, 255, 0.14), transparent 30%),
+    linear-gradient(180deg, #071015 0%, #071015 42%, #05090d 100%);
 }
 
 .appMain {
@@ -144,7 +144,7 @@ a {
   padding: 6px 10px;
   border-bottom: 1px solid rgba(229, 231, 235, 0.075);
   background:
-    linear-gradient(180deg, rgba(15, 16, 20, 0.96), rgba(9, 10, 13, 0.94));
+    linear-gradient(180deg, rgba(10, 18, 24, 0.95), rgba(7, 16, 21, 0.92));
   backdrop-filter: blur(18px) saturate(1.08);
   position: relative;
   z-index: 10;
@@ -153,13 +153,15 @@ a {
 
 :root[data-app-theme="light"] .shell {
   background:
-    radial-gradient(circle at top left, rgba(182, 255, 107, 0.22), transparent 34%),
-    linear-gradient(180deg, #faf7ef 0%, #f2eddf 100%);
+    radial-gradient(circle at 10% 8%, rgba(156, 255, 95, 0.25), transparent 30%),
+    radial-gradient(circle at 86% 12%, rgba(97, 232, 255, 0.22), transparent 34%),
+    radial-gradient(circle at 58% 92%, rgba(255, 123, 216, 0.1), transparent 34%),
+    linear-gradient(180deg, #f6faef 0%, #eef9fb 52%, #f8f8f2 100%);
 }
 
 :root[data-app-theme="light"] .topbar {
   border-bottom-color: rgba(23, 23, 23, 0.1);
-  background: rgba(255, 255, 255, 0.76);
+  background: rgba(255, 255, 255, 0.74);
   box-shadow: 0 18px 48px rgba(36, 30, 17, 0.08);
 }
 
@@ -185,7 +187,7 @@ a {
   align-items: center;
   justify-content: center;
   color: white;
-  background: linear-gradient(135deg, rgba(244, 241, 234, 0.11), rgba(143, 163, 255, 0.13));
+  background: linear-gradient(135deg, rgba(156, 255, 95, 0.18), rgba(97, 232, 255, 0.14));
   border: 1px solid rgba(229, 231, 235, 0.12);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
@@ -364,26 +366,25 @@ a {
 
 .btn {
   border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.045);
+  background: rgba(246, 250, 245, 0.045);
   color: var(--text);
-  padding: 6px 9px;
-  border-radius: 7px;
+  min-height: 30px;
+  padding: 6px 10px;
+  border-radius: 8px;
   cursor: pointer;
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 650;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  transition: background 140ms ease, border-color 140ms ease, transform 140ms ease, box-shadow 140ms ease, opacity 140ms ease;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease, opacity 140ms ease;
   text-decoration: none;
 }
 
 .btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.09);
+  background: rgba(246, 250, 245, 0.075);
   border-color: var(--border-strong);
-  transform: none;
-  box-shadow: none;
 }
 
 .btn:disabled {
@@ -394,20 +395,20 @@ a {
 }
 
 .btn.primary {
-  border-color: rgba(143, 163, 255, 0.35);
-  background: linear-gradient(135deg, rgba(143, 163, 255, 0.24), rgba(244, 241, 234, 0.08));
-  color: #f7f9ff;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  border-color: rgba(156, 255, 95, 0.18);
+  background: #e9ffd8;
+  color: #071015;
+  box-shadow: none;
 }
 
 :root[data-app-theme="light"] .btn.primary {
-  border-color: rgba(23, 23, 23, 0.12);
-  background: #171717;
-  color: #ffffff;
+  border-color: rgba(17, 23, 23, 0.12);
+  background: #111717;
+  color: #f8faf3;
 }
 
 :root[data-app-theme="light"] .btn.primary:hover:not(:disabled) {
-  background: #2b2b2b;
+  background: #24302e;
 }
 
 :root[data-app-theme="light"] .topbarPill.success,
@@ -419,18 +420,35 @@ a {
 }
 
 .btn.primary:hover:not(:disabled) {
-  background: linear-gradient(135deg, rgba(124, 140, 255, 0.4), rgba(124, 140, 255, 0.22));
+  background: #d8ffc1;
 }
 
 .btn.subtleBtn,
 .btn.paneToggleBtn,
 .btn.modeBtn,
 .btn.iconBtn {
-  background: rgba(255, 255, 255, 0.045);
+  background: rgba(246, 250, 245, 0.04);
 }
 
 .btn.iconBtn {
-  min-width: 36px;
+  min-width: 32px;
+}
+
+.btn.iconBtn,
+.btn.panelToggleBtn {
+  padding-inline: 9px;
+}
+
+.topbarModeSwitch .btn.modeBtn {
+  min-height: 28px;
+  border-radius: 6px;
+  padding-inline: 10px;
+}
+
+.topbarModeSwitch .btn.modeBtn:not(.primary) {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-soft);
 }
 
 .topbarSelectWrap {
@@ -506,8 +524,8 @@ a {
 }
 
 .pane {
-  background: linear-gradient(180deg, rgba(18, 19, 23, 0.98), rgba(12, 13, 16, 0.99));
-  border: 1px solid rgba(229, 231, 235, 0.095);
+  background: linear-gradient(180deg, rgba(10, 18, 24, 0.94), rgba(7, 14, 19, 0.96));
+  border: 1px solid rgba(209, 250, 229, 0.1);
   border-radius: var(--radius-xl);
   box-shadow: none;
   min-height: 0;
@@ -684,8 +702,8 @@ a {
 .emptyState,
 .previewViewport,
 .previewEmbedSmall {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.025));
-  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: linear-gradient(180deg, rgba(246, 250, 245, 0.055), rgba(246, 250, 245, 0.026));
+  border: 1px solid rgba(209, 250, 229, 0.12);
   border-radius: 8px;
 }
 
@@ -729,8 +747,8 @@ a {
   min-width: 0;
   height: 32px;
   border-radius: 7px;
-  border: 1px solid rgba(148, 163, 184, 0.14);
-  background: rgba(5, 6, 9, 0.82);
+  border: 1px solid rgba(209, 250, 229, 0.12);
+  background: rgba(7, 16, 21, 0.82);
   color: var(--text);
   padding: 0 10px;
   font: inherit;
@@ -758,8 +776,8 @@ a {
   min-height: 0;
   overflow: auto;
   border-radius: 7px;
-  background: rgba(3, 4, 7, 0.34);
-  border: 1px solid rgba(148, 163, 184, 0.085);
+  background: rgba(3, 10, 14, 0.34);
+  border: 1px solid rgba(209, 250, 229, 0.08);
   padding: 5px;
 }
 
@@ -783,9 +801,9 @@ a {
 }
 
 .treeRow.active {
-  background: rgba(143, 163, 255, 0.16);
-  color: #f7f9ff;
-  box-shadow: inset 2px 0 0 rgba(199, 210, 254, 0.75);
+  background: linear-gradient(135deg, rgba(156, 255, 95, 0.16), rgba(97, 232, 255, 0.13));
+  color: #f6faf5;
+  box-shadow: inset 2px 0 0 rgba(156, 255, 95, 0.7);
 }
 
 .treeChevron {
@@ -806,7 +824,7 @@ a {
 }
 
 .treeIcon.dir {
-  color: #f7c86c;
+  color: #9cff5f;
 }
 
 .treeLabel {
@@ -823,8 +841,9 @@ a {
 
 .treeLoading {
   color: var(--muted);
-  padding: 8px 0;
-  font-size: 12px;
+  padding: 6px 0;
+  font-size: 11px;
+  opacity: 0.76;
 }
 
 .tabs {
@@ -854,8 +873,8 @@ a {
 
 .tab.active {
   color: var(--text);
-  background: #0b0c0f;
-  border-color: rgba(148, 163, 184, 0.13);
+  background: #071015;
+  border-color: rgba(209, 250, 229, 0.12);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
 }
 
@@ -955,7 +974,7 @@ a {
   border: 0;
   border-radius: 0;
   overflow: hidden;
-  background: #0b1220;
+  background: #071015;
   display: flex;
   min-height: 0;
 }
@@ -980,7 +999,9 @@ a {
   align-items: center;
   justify-content: center;
   padding: 28px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.02));
+  background:
+    radial-gradient(circle at 50% 0%, rgba(97, 232, 255, 0.1), transparent 34%),
+    linear-gradient(180deg, rgba(246, 250, 245, 0.045), rgba(246, 250, 245, 0.02));
 }
 
 .emptyState,
@@ -1025,7 +1046,7 @@ a {
   margin-top: 8px;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(148, 163, 184, 0.1);
+  border: 1px solid rgba(209, 250, 229, 0.1);
   color: var(--text-soft);
   font-size: 12px;
 }
@@ -1218,9 +1239,9 @@ a {
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  border: 1px solid rgba(148, 163, 184, 0.105);
+  border: 1px solid rgba(209, 250, 229, 0.1);
   border-radius: 8px;
-  background: rgba(5, 6, 9, 0.38);
+  background: rgba(5, 16, 20, 0.38);
 }
 
 .previewMiniHeader {
@@ -1257,7 +1278,7 @@ a {
   min-height: 0;
   flex: 1;
   border-radius: 8px;
-  background: rgba(3, 8, 16, 0.62);
+  background: rgba(3, 12, 17, 0.62);
 }
 
 .previewViewport {
@@ -1277,7 +1298,7 @@ a {
   margin-bottom: 8px;
   border-radius: 7px;
   background: rgba(255, 255, 255, 0.035);
-  border: 1px solid rgba(148, 163, 184, 0.105);
+  border: 1px solid rgba(209, 250, 229, 0.1);
 }
 
 .previewDots {
@@ -1319,7 +1340,7 @@ a {
   min-height: 0;
   overflow: hidden;
   border-radius: 8px;
-  background: #0b1220;
+  background: #071015;
 }
 
 .previewFrame {
@@ -1359,10 +1380,11 @@ a {
 
 .hybridWorkspaceShell {
   background:
-    linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px),
-    radial-gradient(circle at 50% -18%, rgba(143, 163, 255, 0.13), transparent 28%),
-    #08090b;
+    linear-gradient(rgba(246, 250, 245, 0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(246, 250, 245, 0.02) 1px, transparent 1px),
+    radial-gradient(circle at 16% -18%, rgba(156, 255, 95, 0.13), transparent 28%),
+    radial-gradient(circle at 82% -10%, rgba(97, 232, 255, 0.12), transparent 30%),
+    #071015;
   background-size: 28px 28px, 28px 28px, auto, auto;
 }
 
@@ -1372,8 +1394,8 @@ a {
   gap: 8px;
   padding: 8px;
   background:
-    linear-gradient(180deg, rgba(17, 18, 22, 0.96), rgba(10, 11, 14, 0.98));
-  border-left: 1px solid rgba(229, 231, 235, 0.085);
+    linear-gradient(180deg, rgba(10, 18, 24, 0.94), rgba(7, 14, 19, 0.98));
+  border-left: 1px solid rgba(209, 250, 229, 0.09);
 }
 
 .hybridAssistSummary {
@@ -1420,17 +1442,17 @@ a {
 
 .hybridEditorPane {
   background:
-    linear-gradient(180deg, rgba(13, 14, 18, 0.98), rgba(7, 8, 10, 0.99));
+    linear-gradient(180deg, rgba(9, 18, 24, 0.97), rgba(6, 12, 16, 0.99));
 }
 
 .hybridExplorerPane {
   background:
-    linear-gradient(180deg, rgba(18, 19, 23, 0.98), rgba(10, 11, 14, 0.99));
-  border-right: 1px solid rgba(229, 231, 235, 0.085);
+    linear-gradient(180deg, rgba(11, 20, 26, 0.97), rgba(7, 14, 19, 0.99));
+  border-right: 1px solid rgba(209, 250, 229, 0.09);
 }
 
 .codeEditorShell {
-  background: #090a0d;
+  background: #071015;
 }
 
 .hybridTerminalPanel {
@@ -1438,9 +1460,9 @@ a {
   min-height: 198px;
   display: flex;
   flex-direction: column;
-  border-top: 1px solid rgba(229, 231, 235, 0.095);
+  border-top: 1px solid rgba(209, 250, 229, 0.1);
   background:
-    linear-gradient(180deg, rgba(10, 11, 14, 0.99), rgba(6, 7, 9, 1));
+    linear-gradient(180deg, rgba(7, 16, 21, 0.99), rgba(5, 10, 14, 1));
 }
 
 .terminalTabs {
@@ -1449,8 +1471,8 @@ a {
   align-items: center;
   gap: 2px;
   padding: 0 8px;
-  border-bottom: 1px solid rgba(229, 231, 235, 0.075);
-  background: rgba(255, 255, 255, 0.024);
+  border-bottom: 1px solid rgba(209, 250, 229, 0.08);
+  background: rgba(246, 250, 245, 0.024);
 }
 
 .terminalTab {
@@ -1473,7 +1495,7 @@ a {
 
 .terminalTab.active {
   color: var(--text);
-  border-bottom-color: var(--brand-strong);
+  border-bottom-color: #9cff5f;
 }
 
 .terminalTabsSpacer {
@@ -1502,10 +1524,10 @@ a {
 }
 
 .terminalIconButton {
-  width: 27px;
-  height: 27px;
-  border: 0;
-  border-radius: 7px;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 8px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1515,7 +1537,8 @@ a {
 }
 
 .terminalIconButton:hover {
-  background: rgba(255, 255, 255, 0.07);
+  background: rgba(246, 250, 245, 0.07);
+  border-color: rgba(209, 250, 229, 0.12);
   color: var(--text);
 }
 
@@ -1553,8 +1576,8 @@ a {
   overflow: auto;
   padding: 10px 12px 12px;
   background:
-    radial-gradient(circle at top left, rgba(143, 163, 255, 0.055), transparent 34%),
-    #07080a;
+    radial-gradient(circle at top left, rgba(97, 232, 255, 0.07), transparent 34%),
+    #050a0e;
 }
 
 .terminalLines {
@@ -1598,7 +1621,7 @@ a {
 .terminalPrefix,
 .terminalPrompt {
   flex-shrink: 0;
-  color: #38d39f;
+  color: #9cff5f;
 }
 
 .terminalLineMeta {
@@ -1664,20 +1687,21 @@ a {
 
 :root[data-app-theme="light"] .hybridWorkspaceShell {
   background:
-    linear-gradient(rgba(23, 23, 23, 0.024) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(23, 23, 23, 0.024) 1px, transparent 1px),
-    radial-gradient(circle at 50% -18%, rgba(182, 255, 107, 0.28), transparent 28%),
-    #f4efe4;
+    linear-gradient(rgba(17, 23, 23, 0.026) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(17, 23, 23, 0.026) 1px, transparent 1px),
+    radial-gradient(circle at 14% -18%, rgba(156, 255, 95, 0.3), transparent 28%),
+    radial-gradient(circle at 86% -10%, rgba(97, 232, 255, 0.24), transparent 32%),
+    #f6faef;
   background-size: 28px 28px, 28px 28px, auto, auto;
 }
 
 :root[data-app-theme="light"] .hybridExplorerPane,
 :root[data-app-theme="light"] .hybridSidePane {
-  background: rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.68);
 }
 
 :root[data-app-theme="light"] .hybridEditorPane {
-  background: rgba(255, 255, 255, 0.64);
+  background: rgba(255, 255, 255, 0.56);
 }
 
 :root[data-app-theme="light"] .tabs,
@@ -1693,22 +1717,42 @@ a {
 }
 
 :root[data-app-theme="light"] .tab.active {
-  background: #fbfbf9;
+  background: #ffffff;
   border-color: rgba(23, 23, 23, 0.12);
+  color: #111717;
 }
 
 :root[data-app-theme="light"] .treeExplorer,
 :root[data-app-theme="light"] .previewMiniShell,
 :root[data-app-theme="light"] .previewViewport,
 :root[data-app-theme="light"] .previewEmbedSmall {
-  background: rgba(255, 255, 255, 0.48);
+  background: rgba(255, 255, 255, 0.58);
   border-color: rgba(23, 23, 23, 0.1);
 }
 
 :root[data-app-theme="light"] .treeRow.active {
   color: #171717;
-  background: rgba(182, 255, 107, 0.36);
+  background: linear-gradient(135deg, rgba(156, 255, 95, 0.45), rgba(97, 232, 255, 0.28));
   box-shadow: inset 2px 0 0 rgba(23, 23, 23, 0.58);
+}
+
+:root[data-app-theme="light"] .treeRow,
+:root[data-app-theme="light"] .tab,
+:root[data-app-theme="light"] .editorHint,
+:root[data-app-theme="light"] .previewAddress,
+:root[data-app-theme="light"] .previewFooterMeta,
+:root[data-app-theme="light"] .missionCompactMeta,
+:root[data-app-theme="light"] .missionEmpty,
+:root[data-app-theme="light"] .agentAuditMeta,
+:root[data-app-theme="light"] .emptyStateText,
+:root[data-app-theme="light"] .explorerSummaryMeta {
+  color: rgba(17, 23, 23, 0.62);
+}
+
+:root[data-app-theme="light"] .treeRow:hover,
+:root[data-app-theme="light"] .terminalCollapsedBar:hover {
+  color: #111717;
+  background: rgba(17, 23, 23, 0.055);
 }
 
 .topbarModeSwitch,
@@ -1724,8 +1768,9 @@ a {
   padding: 16px;
   gap: 16px;
   background:
-    radial-gradient(circle at top center, rgba(124, 140, 255, 0.1), transparent 28%),
-    linear-gradient(180deg, rgba(6, 11, 20, 0.98), rgba(5, 10, 18, 1));
+    radial-gradient(circle at 16% 0%, rgba(156, 255, 95, 0.13), transparent 30%),
+    radial-gradient(circle at 84% 0%, rgba(97, 232, 255, 0.12), transparent 32%),
+    linear-gradient(180deg, rgba(7, 16, 21, 0.98), rgba(5, 10, 14, 1));
 }
 
 .fullAgentRail {
@@ -1765,19 +1810,19 @@ a {
 
 .missionCard {
   padding: 14px;
-  border-radius: 18px;
-  border: 1px solid rgba(148, 163, 184, 0.12);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.025));
+  border-radius: 14px;
+  border: 1px solid rgba(209, 250, 229, 0.12);
+  background: linear-gradient(180deg, rgba(246, 250, 245, 0.05), rgba(246, 250, 245, 0.025));
 }
 
 .missionStatusCard.working {
-  border-color: rgba(124, 140, 255, 0.24);
-  background: linear-gradient(180deg, rgba(124, 140, 255, 0.12), rgba(255, 255, 255, 0.03));
+  border-color: rgba(97, 232, 255, 0.22);
+  background: linear-gradient(180deg, rgba(97, 232, 255, 0.1), rgba(246, 250, 245, 0.03));
 }
 
 .missionStatusCard.review {
   border-color: rgba(56, 211, 159, 0.22);
-  background: linear-gradient(180deg, rgba(56, 211, 159, 0.1), rgba(255, 255, 255, 0.03));
+  background: linear-gradient(180deg, rgba(156, 255, 95, 0.1), rgba(246, 250, 245, 0.03));
 }
 
 .missionStatusCard.error {
@@ -1848,8 +1893,8 @@ a {
   width: 100%;
   padding: 11px 12px;
   border-radius: 14px;
-  border: 1px solid rgba(148, 163, 184, 0.12);
-  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(209, 250, 229, 0.11);
+  background: rgba(246, 250, 245, 0.032);
   color: var(--text-soft);
   text-align: left;
   cursor: pointer;
@@ -1857,8 +1902,8 @@ a {
 
 .missionReviewItem:hover,
 .missionCompactItem:hover {
-  border-color: rgba(124, 140, 255, 0.24);
-  background: rgba(124, 140, 255, 0.08);
+  border-color: rgba(97, 232, 255, 0.2);
+  background: rgba(97, 232, 255, 0.08);
 }
 
 .missionCompactItem.static {
@@ -1866,8 +1911,8 @@ a {
 }
 
 .missionCompactItem.static:hover {
-  border-color: rgba(148, 163, 184, 0.12);
-  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(209, 250, 229, 0.11);
+  background: rgba(246, 250, 245, 0.032);
 }
 
 .missionReviewTop,
@@ -1902,7 +1947,7 @@ a {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: linear-gradient(135deg, rgba(143, 163, 255, 0.08), transparent 48%);
+  background: linear-gradient(135deg, rgba(97, 232, 255, 0.08), transparent 48%);
 }
 
 .agentCapabilityCard > * {
@@ -1925,7 +1970,7 @@ a {
   align-items: center;
   justify-content: center;
   border-radius: 8px;
-  border: 1px solid rgba(148, 163, 184, 0.14);
+  border: 1px solid rgba(209, 250, 229, 0.12);
   color: var(--muted);
   background: rgba(255, 255, 255, 0.035);
 }
@@ -1969,7 +2014,7 @@ a {
 .agentLiveEmpty {
   padding: 12px 14px;
   border-radius: 16px;
-  border: 1px dashed rgba(148, 163, 184, 0.18);
+  border: 1px dashed rgba(209, 250, 229, 0.18);
   color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
@@ -1979,20 +2024,20 @@ a {
   max-width: 92%;
   padding: 12px 14px;
   border-radius: 18px;
-  border: 1px solid rgba(148, 163, 184, 0.14);
-  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(209, 250, 229, 0.13);
+  background: rgba(246, 250, 245, 0.04);
 }
 
 .agentLiveBubble.user {
   margin-left: auto;
-  background: rgba(124, 140, 255, 0.14);
-  border-color: rgba(124, 140, 255, 0.2);
+  background: rgba(97, 232, 255, 0.12);
+  border-color: rgba(97, 232, 255, 0.18);
 }
 
 .agentLiveBubble.assistant.working,
 .agentLiveBubble.tool.working {
-  border-color: rgba(124, 140, 255, 0.22);
-  background: rgba(124, 140, 255, 0.08);
+  border-color: rgba(97, 232, 255, 0.22);
+  background: rgba(97, 232, 255, 0.08);
 }
 
 .agentLiveBubble.assistant.success,
@@ -2048,8 +2093,8 @@ a {
 .agentAuditStage {
   padding: 12px;
   border-radius: 16px;
-  border: 1px solid rgba(148, 163, 184, 0.14);
-  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(209, 250, 229, 0.13);
+  background: rgba(246, 250, 245, 0.032);
 }
 
 .agentAuditStageHeader {
@@ -2094,8 +2139,8 @@ a {
 .agentAuditRow {
   padding: 10px 12px;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(148, 163, 184, 0.1);
+  background: rgba(246, 250, 245, 0.03);
+  border: 1px solid rgba(209, 250, 229, 0.1);
 }
 
 .agentAuditRow.ok {
@@ -2123,8 +2168,8 @@ a {
   align-items: center;
   padding: 6px 10px;
   border-radius: 999px;
-  background: rgba(124, 140, 255, 0.1);
-  border: 1px solid rgba(124, 140, 255, 0.16);
+  background: rgba(97, 232, 255, 0.09);
+  border: 1px solid rgba(97, 232, 255, 0.14);
   color: var(--text-soft);
   font-size: 11px;
 }
@@ -5329,9 +5374,9 @@ a {
   max-width: 700px;
   margin-inline: auto;
   color: rgba(246, 250, 245, 0.96);
-  font-size: clamp(32px, 4.6vw, 58px);
+  font-size: clamp(30px, 4vw, 46px);
   font-weight: 680;
-  line-height: 0.98;
+  line-height: 1;
   letter-spacing: 0;
 }
 
@@ -5389,22 +5434,28 @@ a {
   flex-wrap: wrap;
 }
 
+.workspaceGateTutorNote {
+  margin-top: 12px;
+  color: rgba(246, 250, 245, 0.48);
+  font-size: 12px;
+}
+
 .workspaceSetupCard .workspaceGateActions .btn {
   min-height: 44px;
   min-width: 148px;
-  border-radius: 999px;
-  border-color: transparent;
-  background: rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  border-color: rgba(209, 250, 229, 0.12);
+  background: rgba(246, 250, 245, 0.07);
   color: rgba(246, 250, 245, 0.92);
   font-size: 13px;
   font-weight: 680;
 }
 
 .workspaceSetupCard .workspaceGateActions .btn.primary {
-  border: 0;
-  background: linear-gradient(135deg, #84ff61, #61e8ff);
+  border: 1px solid rgba(156, 255, 95, 0.28);
+  background: #e9ffd8;
   color: #071015;
-  box-shadow: 0 12px 34px rgba(97, 232, 255, 0.16);
+  box-shadow: none;
 }
 
 .apporaLoadingShell {
@@ -5559,6 +5610,10 @@ a {
   color: rgba(17, 23, 23, 0.64);
 }
 
+:root[data-app-theme="light"] .workspaceGateTutorNote {
+  color: rgba(17, 23, 23, 0.5);
+}
+
 :root[data-app-theme="light"] .gateFeatureCard {
   border-color: transparent;
   background: rgba(255, 255, 255, 0.62);
@@ -5570,8 +5625,8 @@ a {
 }
 
 :root[data-app-theme="light"] .workspaceSetupCard .workspaceGateActions .btn {
-  border-color: transparent;
-  background: rgba(255, 255, 255, 0.76);
+  border-color: rgba(17, 23, 23, 0.1);
+  background: rgba(255, 255, 255, 0.74);
   color: #111717;
 }
 
@@ -5789,14 +5844,14 @@ a {
 }
 
 .savedProjectOpen {
-  border: 0;
-  border-radius: 999px;
-  padding: 7px 10px;
-  background: rgba(97, 232, 255, 0.14);
+  border: 1px solid rgba(97, 232, 255, 0.16);
+  border-radius: 8px;
+  padding: 6px 9px;
+  background: rgba(97, 232, 255, 0.08);
   flex-shrink: 0;
-  color: #61e8ff;
-  font-size: 12px;
-  font-weight: 700;
+  color: rgba(246, 250, 245, 0.88);
+  font-size: 11px;
+  font-weight: 650;
   cursor: pointer;
 }
 
@@ -5808,21 +5863,22 @@ a {
 }
 
 .iconOnlyBtn {
-  width: 31px;
-  height: 31px;
+  width: 30px;
+  height: 30px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 0;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(246, 250, 245, 0.76);
+  border: 1px solid rgba(209, 250, 229, 0.1);
+  border-radius: 8px;
+  background: rgba(246, 250, 245, 0.045);
+  color: rgba(246, 250, 245, 0.68);
   cursor: pointer;
 }
 
 .iconOnlyBtn:hover,
 .savedProjectOpen:hover {
-  background: rgba(255, 255, 255, 0.14);
+  background: rgba(246, 250, 245, 0.08);
+  border-color: rgba(209, 250, 229, 0.18);
 }
 
 .iconOnlyBtn.danger {
@@ -5993,15 +6049,15 @@ a {
 .newProjectModal .btn {
   min-height: 44px;
   min-width: 126px;
-  border-radius: 999px;
-  border-color: transparent;
-  background: rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  border-color: rgba(209, 250, 229, 0.12);
+  background: rgba(246, 250, 245, 0.07);
   color: rgba(246, 250, 245, 0.92);
 }
 
 .newProjectModal .btn.primary {
-  border: 0;
-  background: linear-gradient(135deg, #84ff61, #61e8ff);
+  border: 1px solid rgba(156, 255, 95, 0.28);
+  background: #e9ffd8;
   color: #071015;
 }
 
@@ -6262,8 +6318,8 @@ a {
   margin: 0 0 10px auto;
   padding: 10px 12px;
   border-radius: 16px 16px 6px 16px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background: rgba(8, 15, 27, 0.96);
+  border: 1px solid rgba(209, 250, 229, 0.14);
+  background: rgba(8, 18, 24, 0.96);
   box-shadow: var(--shadow-md);
   color: var(--text-soft);
   font-size: 12px;
@@ -6272,8 +6328,8 @@ a {
 
 .agentOrbBubble.sleepy,
 .agentOrbBubble.sleeping {
-  color: #e6e8f7;
-  background: rgba(9, 13, 23, 0.96);
+  color: rgba(246, 250, 245, 0.82);
+  background: rgba(8, 18, 24, 0.96);
 }
 
 .agentOrbBubble.sleeping::after {
@@ -6282,11 +6338,11 @@ a {
 }
 
 .agentOrbBubble.playful {
-  background: rgba(20, 17, 38, 0.96);
+  background: rgba(9, 30, 28, 0.96);
 }
 
 .agentOrbBubble.curious {
-  background: rgba(12, 23, 42, 0.96);
+  background: rgba(9, 24, 34, 0.96);
 }
 
 .agentOrbBubble.celebrate {
@@ -6313,8 +6369,8 @@ a {
 .agentOrbDockChip,
 .agentOrbQuickAction,
 .agentOrbContextChip {
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(209, 250, 229, 0.14);
+  background: rgba(246, 250, 245, 0.045);
   color: var(--text-soft);
 }
 
@@ -6328,8 +6384,11 @@ a {
   width: 380px;
   margin-bottom: 14px;
   border-radius: 22px;
-  border: 1px solid rgba(148, 163, 184, 0.14);
-  background: linear-gradient(180deg, rgba(10, 17, 30, 0.98), rgba(7, 13, 23, 0.98));
+  border: 1px solid rgba(209, 250, 229, 0.14);
+  background:
+    radial-gradient(circle at 12% 0%, rgba(156, 255, 95, 0.1), transparent 30%),
+    radial-gradient(circle at 88% 4%, rgba(97, 232, 255, 0.12), transparent 34%),
+    linear-gradient(180deg, rgba(9, 19, 25, 0.98), rgba(7, 14, 20, 0.98));
   box-shadow: var(--shadow-xl);
   overflow: hidden;
 }
@@ -6352,9 +6411,9 @@ a {
 }
 
 .agentStatusPill.thinking {
-  color: #eef2ff;
-  background: rgba(124, 140, 255, 0.14);
-  border-color: rgba(124, 140, 255, 0.24);
+  color: #effffd;
+  background: rgba(97, 232, 255, 0.12);
+  border-color: rgba(97, 232, 255, 0.22);
 }
 
 .agentStatusPill.error {
@@ -6430,8 +6489,8 @@ a {
 
 .agentOrbQuickAction:hover,
 .agentOrbDockChip:hover {
-  border-color: rgba(124, 140, 255, 0.22);
-  background: rgba(124, 140, 255, 0.08);
+  border-color: rgba(97, 232, 255, 0.2);
+  background: rgba(97, 232, 255, 0.08);
   color: var(--text);
 }
 
@@ -6446,7 +6505,7 @@ a {
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  border: 2px solid rgba(124, 140, 255, 0.18);
+  border: 2px solid rgba(97, 232, 255, 0.18);
   border-top-color: var(--brand-strong);
   animation: spin 0.8s linear infinite;
 }
@@ -6468,7 +6527,7 @@ a {
 .agentOrbStep {
   padding: 10px 12px;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(246, 250, 245, 0.04);
   color: var(--text-soft);
   font-size: 12px;
 }
@@ -6480,7 +6539,7 @@ a {
 .agentOrbReply {
   padding: 10px 12px;
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(246, 250, 245, 0.04);
   font-size: 12px;
   line-height: 1.55;
   color: var(--text-soft);
@@ -6491,7 +6550,7 @@ a {
   margin: 0;
   padding: 12px;
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(246, 250, 245, 0.04);
   color: var(--muted);
   font-size: 11px;
   line-height: 1.55;
@@ -6499,29 +6558,29 @@ a {
 }
 
 .agentOrbButton {
-  width: 62px;
-  height: 62px;
-  border-radius: 999px;
-  border: 1px solid rgba(124, 140, 255, 0.28);
-  background: radial-gradient(circle at 30% 30%, rgba(170, 184, 255, 0.98), rgba(124, 140, 255, 0.7) 40%, rgba(74, 87, 196, 0.96) 100%);
+  width: 58px;
+  height: 58px;
+  border-radius: 18px;
+  border: 1px solid rgba(97, 232, 255, 0.22);
+  background: linear-gradient(135deg, rgba(156, 255, 95, 0.92), rgba(97, 232, 255, 0.86));
   color: white;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  box-shadow: var(--shadow-lg);
+  box-shadow: 0 18px 44px rgba(7, 16, 21, 0.28);
   cursor: pointer;
   position: relative;
   overflow: hidden;
 }
 
 .agentOrb.raka .agentOrbButton {
-  border-color: rgba(94, 234, 212, 0.3);
-  background: radial-gradient(circle at 30% 30%, rgba(187, 247, 238, 0.98), rgba(45, 212, 191, 0.72) 42%, rgba(15, 118, 110, 0.96) 100%);
+  border-color: rgba(97, 232, 255, 0.24);
+  background: linear-gradient(135deg, rgba(156, 255, 95, 0.95), rgba(97, 232, 255, 0.88));
 }
 
 .agentOrb.clara .agentOrbButton {
-  border-color: rgba(244, 114, 182, 0.26);
-  background: radial-gradient(circle at 30% 30%, rgba(252, 231, 243, 0.98), rgba(244, 114, 182, 0.72) 42%, rgba(147, 51, 123, 0.96) 100%);
+  border-color: rgba(97, 232, 255, 0.24);
+  background: linear-gradient(135deg, rgba(97, 232, 255, 0.9), rgba(156, 255, 95, 0.86));
 }
 
 .agentOrb.raka .agentOrbBubble.playful,
@@ -6537,9 +6596,9 @@ a {
 .agentOrbButton::after {
   content: "";
   position: absolute;
-  inset: 6px;
+  inset: 0;
   border-radius: inherit;
-  background: radial-gradient(circle at 35% 25%, rgba(255, 255, 255, 0.34), transparent 38%);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.28), transparent 46%);
   pointer-events: none;
 }
 
@@ -6561,11 +6620,11 @@ a {
 }
 
 .agentOrbButton.thinking {
-  border-color: rgba(124, 140, 255, 0.42);
+  border-color: rgba(97, 232, 255, 0.42);
 }
 
 .agentOrbButton.curious {
-  box-shadow: 0 0 0 4px rgba(124, 140, 255, 0.08), var(--shadow-lg);
+  box-shadow: 0 0 0 4px rgba(97, 232, 255, 0.09), var(--shadow-lg);
 }
 
 .agentOrbButton.celebrate {
@@ -7164,4 +7223,86 @@ a {
 :root[data-app-theme="light"] .terminalCommandInput {
   background: rgba(255, 255, 255, 0.08);
   border-color: rgba(255, 255, 255, 0.12);
+}
+
+:root[data-app-theme="light"] .explorerSummaryCard,
+:root[data-app-theme="light"] .emptyState,
+:root[data-app-theme="light"] .emptyPreview,
+:root[data-app-theme="light"] .settingsInfoCard,
+:root[data-app-theme="light"] .settingsSection,
+:root[data-app-theme="light"] .settingsReadinessItem,
+:root[data-app-theme="light"] .missionReviewItem,
+:root[data-app-theme="light"] .missionCompactItem,
+:root[data-app-theme="light"] .agentAuditStage,
+:root[data-app-theme="light"] .agentAuditRow,
+:root[data-app-theme="light"] .agentLiveBubble,
+:root[data-app-theme="light"] .agentOrbStep,
+:root[data-app-theme="light"] .agentOrbReply,
+:root[data-app-theme="light"] .agentOrbLog {
+  background: rgba(255, 255, 255, 0.68);
+  border-color: rgba(17, 23, 23, 0.09);
+  color: #111717;
+}
+
+:root[data-app-theme="light"] .missionStatusCard.working {
+  background: linear-gradient(180deg, rgba(97, 232, 255, 0.16), rgba(255, 255, 255, 0.64));
+}
+
+:root[data-app-theme="light"] .missionStatusCard.review {
+  background: linear-gradient(180deg, rgba(156, 255, 95, 0.2), rgba(255, 255, 255, 0.64));
+}
+
+:root[data-app-theme="light"] .agentLiveBubble.user,
+:root[data-app-theme="light"] .agentLiveBubble.assistant.working,
+:root[data-app-theme="light"] .agentLiveBubble.tool.working {
+  background: rgba(97, 232, 255, 0.16);
+  border-color: rgba(15, 131, 149, 0.18);
+}
+
+:root[data-app-theme="light"] .agentOrbPanel {
+  background:
+    radial-gradient(circle at 12% 0%, rgba(156, 255, 95, 0.2), transparent 30%),
+    radial-gradient(circle at 88% 4%, rgba(97, 232, 255, 0.18), transparent 34%),
+    rgba(255, 255, 255, 0.92);
+  border-color: rgba(17, 23, 23, 0.11);
+  color: #111717;
+}
+
+:root[data-app-theme="light"] .agentOrbBubble {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(17, 23, 23, 0.11);
+  color: rgba(17, 23, 23, 0.74);
+}
+
+:root[data-app-theme="light"] .agentOrb.raka .agentOrbBubble.playful,
+:root[data-app-theme="light"] .agentOrb.raka .agentOrbBubble.curious,
+:root[data-app-theme="light"] .agentOrb.clara .agentOrbBubble.playful,
+:root[data-app-theme="light"] .agentOrb.clara .agentOrbBubble.curious,
+:root[data-app-theme="light"] .agentOrbBubble.sleepy,
+:root[data-app-theme="light"] .agentOrbBubble.sleeping,
+:root[data-app-theme="light"] .agentOrbBubble.celebrate,
+:root[data-app-theme="light"] .agentOrbBubble.surprised {
+  background: rgba(255, 255, 255, 0.92);
+  color: rgba(17, 23, 23, 0.74);
+}
+
+:root[data-app-theme="light"] .agentOrbDockChip,
+:root[data-app-theme="light"] .agentOrbQuickAction,
+:root[data-app-theme="light"] .agentOrbContextChip,
+:root[data-app-theme="light"] .agentStatusPill {
+  background: rgba(255, 255, 255, 0.7);
+  border-color: rgba(17, 23, 23, 0.1);
+  color: rgba(17, 23, 23, 0.72);
+}
+
+:root[data-app-theme="light"] .agentStatusPill.thinking {
+  color: #0f8395;
+  background: rgba(97, 232, 255, 0.18);
+  border-color: rgba(15, 131, 149, 0.18);
+}
+
+:root[data-app-theme="light"] .agentStatusPill.error {
+  color: #9f1239;
+  background: rgba(251, 113, 133, 0.12);
+  border-color: rgba(159, 18, 57, 0.16);
 }

@@ -26,7 +26,7 @@ interface MonacoEditorProps {
 
 const LazyEditor = React.lazy(() => import("@monaco-editor/react"));
 
-export const MonacoEditor: React.FC<MonacoEditorProps> = ({
+export const MonacoEditor: React.FC<MonacoEditorProps> = React.memo(({
   activeFile,
   openFiles,
   buffers,
@@ -189,9 +189,8 @@ export const MonacoEditor: React.FC<MonacoEditorProps> = ({
           <div className="hybridPrimarySurface">
             {activeFile ? (
               <div className="codeEditorShell">
-                <React.Suspense fallback={<div className="emptyEditor"><div className="emptyState"><div className="emptyStateTitle">Loading editor…</div><div className="emptyStateText">Monaco is loading only when you actually open a file.</div></div></div>}>
+                <React.Suspense fallback={<div className="emptyEditor"><div className="emptyState"><div className="emptyStateTitle">Loading editor…</div></div></div>}>
                   <LazyEditor
-                    key={activeFile}
                     path={activeFile}
                     height="100%"
                     width="100%"
@@ -218,9 +217,6 @@ export const MonacoEditor: React.FC<MonacoEditorProps> = ({
               <div className="emptyEditor">
                 <div className="emptyState">
                   <div className="emptyStateTitle">Open a file to begin</div>
-                  <div className="emptyStateText">
-                    Keep the layout calm, edit deliberately, and use Assist when you want focused agent help.
-                  </div>
                 </div>
               </div>
             )}
@@ -274,7 +270,7 @@ export const MonacoEditor: React.FC<MonacoEditorProps> = ({
                   <span className="terminalLineMeta">user + agent commands</span>
                 </div>
                 {hasActivity ? null : (
-                  <div className="terminalLine muted">Waiting for shell commands, agent commands, and tool activity...</div>
+                  <div className="terminalLine muted">Waiting for activity...</div>
                 )}
                 {terminalHistory.map((entry) => (
                   <React.Fragment key={entry.id}>
@@ -339,4 +335,4 @@ export const MonacoEditor: React.FC<MonacoEditorProps> = ({
       </div>
     </section>
   );
-};
+});

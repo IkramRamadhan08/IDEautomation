@@ -8,7 +8,7 @@ InteractionKind = Literal["command", "conversation", "mixed", "inspection"]
 
 _WRITE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\b(fix|build|ship|implement|create|add|remove|update|change|edit|refactor|repair|wire|connect|integrate|generate|scaffold|run|start|launch|deploy)\b", re.IGNORECASE), "explicit write/build verb"),
-    (re.compile(r"\b(bikin|buat|tambahin|tambah|hapus|ubah|rapihin|benahin|perbaiki|perbaikin|jalanin|pasang|sambungin|integrasi|implementasiin|kerjain|garap|eksekusi)\b", re.IGNORECASE), "explicit Indonesian write/build verb"),
+    (re.compile(r"\b(bikin|buat|tambahin|tambah|hapus|ubah|rombak|rapihin|benahin|benerin|perbaiki|perbaikin|fix|jalanin|pasang|sambungin|integrasi|implementasiin|terapin|terapkan|kerjain|garap|eksekusi|gaskeun|gaspol|gasss+|maksimalin|naikin)\b", re.IGNORECASE), "explicit Indonesian write/build verb"),
 ]
 
 _INSPECTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
@@ -28,7 +28,7 @@ _CONVERSATION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 ]
 
 _EXPLICIT_WRITE_REQUEST_RE = re.compile(
-    r"\b(can you|please|tolong|implement|build|fix|bikin|buat|tambahin|ubah|rapihin|perbaiki|implementasiin|kerjain|garap|eksekusi)\b",
+    r"\b(can you|please|tolong|implement|build|fix|bikin|buat|tambahin|ubah|rombak|rapihin|benahin|benerin|perbaiki|implementasiin|terapin|terapkan|kerjain|garap|eksekusi|gaskeun|gaspol|gasss+|maksimalin|naikin)\b",
     re.IGNORECASE,
 )
 _FOLLOWUP_WRITE_RE = re.compile(r"^\s*(gas|lanjut|lanjutin|go|execute|eksekusi|oke lanjut|yaudah lanjut)\b", re.IGNORECASE)
@@ -41,7 +41,12 @@ _SHORT_CHAT_RE = re.compile(r"^(p+|hi+|hello+|hey+|hai+|halo+|hei+|yo+|ok|oke|si
 _BARE_FOLLOWUP_RE = re.compile(r"^(gas+|lanju+t+|lanjutin|terus+|next|continue|go+|oke lanjut|yaudah lanjut)[!.?\\s]*$", re.IGNORECASE)
 _CONTINUATION_WRITE_RE = re.compile(r"^\s*(gas+|lanju+t+|lanjutin|terus+|next|continue|go+|oke lanjut|yaudah lanjut)\b", re.IGNORECASE)
 _WRITE_OBJECT_RE = re.compile(
-    r"\b(file|page|screen|ui|ux|component|button|modal|form|layout|style|css|tsx|react|vite|route|api|endpoint|database|schema|table|auth|login|project|app|landing|navbar|sidebar|terminal|agent|memory|provider|model)\b",
+    r"\b(file|page|screen|ui|ux|component|button|tombol|modal|form|layout|style|css|tsx|react|vite|route|api|endpoint|database|schema|table|auth|login|project|app|landing|navbar|sidebar|terminal|agent|memory|provider|model|preview|editor|tree|folder)\b",
+    re.IGNORECASE,
+)
+_NEGATIVE_UI_QUALITY_RE = re.compile(r"\b(norak|jelek|aneh|berantakan|kurang|belum senada|gak senada|nggak senada|tidak senada|lambat|lemot|lama)\b", re.IGNORECASE)
+_BROKEN_APP_SYMPTOM_RE = re.compile(
+    r"\b(blank|putih|kosong|error runtime|runtime error|crash|ngeblank|gagal render|tidak muncul|gak muncul|nggak muncul|not rendering|not showing)\b",
     re.IGNORECASE,
 )
 
@@ -155,6 +160,15 @@ def classify_agent_intent(
     if raw.count("\n") >= 2:
         write_score += 0.15
         inspection_score += 0.1
+    negative_ui_request = bool(_NEGATIVE_UI_QUALITY_RE.search(raw) and has_write_object)
+    if negative_ui_request:
+        write_score += 1.15
+        signals.append("negative UI quality change request")
+    broken_app_request = bool(_BROKEN_APP_SYMPTOM_RE.search(raw) and has_write_object)
+    if broken_app_request:
+        write_score += 1.25
+        inspection_score += 0.35
+        signals.append("broken app symptom change request")
     if re.search(r"\b(agentic app builder|app builder|builder agent)\b", lowered):
         write_score += 0.45
         inspection_score += 0.2
@@ -163,6 +177,8 @@ def classify_agent_intent(
     continuation_can_write = bool(is_continuation_followup and not re.match(r"^(gas|lanjut|terus)[!.?\s]*$", raw, re.IGNORECASE))
     explicit_write_request = (
         bool(_EXPLICIT_WRITE_REQUEST_RE.search(raw))
+        or negative_ui_request
+        or broken_app_request
         or bool(_FOLLOWUP_WRITE_RE.search(raw) and has_write_object)
         or bool(continuation_can_write and (active_file or open_files or build_mode == "full-agent") and not has_question)
     )

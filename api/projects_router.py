@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 
 from api.auth_policy import require_hosted_user
 from api.projects import ProjectCreateReq, ProjectDuplicateReq, ProjectListResp, ProjectRenameReq, ProjectResp, ProjectTemplateListResp, archive_project, available_project_templates, create_project, duplicate_project, list_projects, rename_project, save_project_snapshot
@@ -15,8 +15,8 @@ def build_projects_router(*, session_state, ensure_workspace=None):
         return ProjectListResp(projects=list_projects(workspace_root=ws_root, owner_id=user.user_id))
 
     @router.get("/templates", response_model=ProjectTemplateListResp)
-    def get_project_templates(user=Depends(require_hosted_user)):
-        _ = user
+    def get_project_templates(response: Response):
+        response.headers["Cache-Control"] = "public, max-age=300"
         return ProjectTemplateListResp(templates=available_project_templates())
 
     @router.post("", response_model=ProjectResp)

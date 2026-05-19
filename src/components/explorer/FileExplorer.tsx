@@ -19,7 +19,7 @@ interface FileExplorerProps {
   onNewFile: () => void;
 }
 
-export const FileExplorer: React.FC<FileExplorerProps> = ({
+export const FileExplorer: React.FC<FileExplorerProps> = React.memo(({
   selectedProject,
   projectOptions,
   explorerItems,
@@ -69,7 +69,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
             <div className="treeChildren">
               {loading ? (
                 <div className="treeLoading" style={{ paddingLeft: 28 + depth * 14 }}>
-                  Loading folder…
+                  Loading…
                 </div>
               ) : (
                 renderTree(children, depth + 1)
@@ -136,8 +136,8 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
         <div className="treeExplorer">
           {explorerItems.length === 0 ? (
             <div className="emptyState compactEmptyState">
-              <div className="emptyStateTitle">No files yet</div>
-              <div className="emptyStateText">Open a folder, create a file, or let the agent scaffold the project structure for you.</div>
+              <div className="emptyStateTitle">No files</div>
+              <div className="emptyStateText">Create or open a project file.</div>
             </div>
           ) : (
             renderTree(explorerItems)
@@ -146,4 +146,4 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
       </div>
     </aside>
   );
-};
+});

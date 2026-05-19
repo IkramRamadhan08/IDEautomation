@@ -87,7 +87,8 @@ def list_projects(*, owner_id: str) -> list[dict[str, Any]] | None:
     client = get_supabase_admin()
     if not client:
         return None
-    res = client.table("projects").select("*").eq("owner_id", owner_id).order("updated_at", desc=True).execute()
+    columns = "id,owner_id,name,slug,root,created_at,updated_at,archived"
+    res = client.table("projects").select(columns).eq("owner_id", owner_id).order("updated_at", desc=True).execute()
     data = getattr(res, "data", None)
     return data if isinstance(data, list) else []
 

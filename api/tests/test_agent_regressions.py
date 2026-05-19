@@ -16,7 +16,7 @@ from api import agent as agent_mod
 from api import main as main_mod
 from api.agent_mcp import MCPServerInfo, MCPToolCallResult, MCPToolInfo, discover_mcp_servers, execute_mcp_tool, suggest_mcp_actions
 from api.agent_memory import get_agent_memory_overview, remember_agent_run, retrieve_agent_memory
-from api.agent_runtime import _autonomous_continue_node, _intent_with_active_work_context, _looks_like_plan_only_reply, _max_tool_loops_for_run, _plan_node, _remember_project_work_state, _route_after_verify, _should_run_deep_preflight, _should_run_refinement, _strict_agentic_retry_node, _verify_node, prepare_agent_context
+from api.agent_runtime import _autonomous_continue_node, _intent_with_active_work_context, _looks_like_plan_only_reply, _max_tool_loops_for_run, _plan_node, _remember_project_work_state, _route_after_strict_retry, _route_after_verify, _should_run_deep_preflight, _should_run_refinement, _strict_agentic_retry_node, _verify_node, prepare_agent_context
 from api.agent_skills import detect_project_stack, resolve_agent_skills
 from api.agent_tools import execute_local_tool
 from api.app_state import CURRENT_SESSION_ID, CURRENT_USER_ID, STATE
@@ -43,6 +43,10 @@ class AgentIntentRegressionTests(unittest.TestCase):
             ("jelasin flow graph agent ini", "inspection", False, False),
             ("gimana statusnya bro?", "conversation", False, False),
             ("review lalu perbaiki auth flow ini", "command", True, True),
+            ("button button juga norak banget ya", "command", True, True),
+            ("rombak UI preview biar senada", "command", True, True),
+            ("preview blank putih", "command", True, True),
+            ("kenapa preview blank putih?", "command", True, True),
         ]
         for prompt, expected_kind, should_write, should_tools in cases:
             with self.subTest(prompt=prompt):
@@ -242,6 +246,9 @@ class AgentRuntimeContextRegressionTests(unittest.TestCase):
 
     def test_strict_agentic_guard_flags_plan_only_build_reply(self) -> None:
         self.assertTrue(_looks_like_plan_only_reply("Aku cek dulu struktur routing lalu baru patch."))
+        self.assertTrue(_looks_like_plan_only_reply(
+            "Aku cek dulu struktur routing dan komponen halaman yang ada, karena preview blank putih biasanya karena komponen halaman belum diimplementasi atau ada error runtime. Setelah itu aku validasi build-nya."
+        ))
         self.assertFalse(_looks_like_plan_only_reply("Masalahnya import route salah dan patch sudah disiapkan."))
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -299,6 +306,42 @@ class AgentRuntimeContextRegressionTests(unittest.TestCase):
             self.assertEqual(_route_after_verify(state), "strict_retry")
             state["strict_agentic_retried"] = True
             self.assertEqual(_route_after_verify(state), "finalize")
+
+    def test_repeated_plan_only_build_reply_routes_to_autonomous_continue(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            project_dir.mkdir()
+            req = SimpleNamespace(
+                input="kenapa preview blank putih?",
+                project_root="demo",
+                build_mode="full-agent",
+                active_file=None,
+                open_files=[],
+                current_content=None,
+                asset_paths=[],
+            )
+            ctx = prepare_agent_context(req, ws_root)
+            state = {
+                "context": ctx,
+                "input": req.input,
+                "spoken": (
+                    "Aku cek dulu struktur routing dan komponen halaman yang ada, karena preview blank putih "
+                    "biasanya karena komponen halaman belum diimplementasi atau ada error runtime. Setelah itu aku validasi build-nya."
+                ),
+                "changes": [],
+                "actions": [],
+                "strict_agentic_retried": True,
+                "autonomous_iterations": 0,
+                "emit": lambda *_args: None,
+            }
+
+            verified = _verify_node(state)
+            routed_state = {**state, **verified}
+
+            self.assertTrue(routed_state["context"].intent.should_write_files)
+            self.assertEqual(routed_state["context"].trace_task_state["status"], "blocked")
+            self.assertEqual(_route_after_verify(routed_state), "autonomous_continue")
 
     def test_blocked_task_state_routes_to_autonomous_continue(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -380,6 +423,36 @@ class AgentRuntimeContextRegressionTests(unittest.TestCase):
             self.assertEqual(next_state["changes"], suggestion.changes)
             self.assertIn("strict_agentic_retry=1", next_state["log"])
             mocked_suggest.assert_called_once()
+
+    def test_strict_retry_tool_request_routes_back_to_tool_loop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            project_dir.mkdir()
+            req = SimpleNamespace(
+                input="fix preview blank putih",
+                project_root="demo",
+                build_mode="full-agent",
+                active_file=None,
+                open_files=[],
+                current_content=None,
+                asset_paths=[],
+            )
+            ctx = prepare_agent_context(req, ws_root)
+
+            tool_state = {
+                "context": ctx,
+                "actions": [{"type": "tool", "tool": "repo_read", "arguments": {"path": "demo/src/App.tsx"}}],
+                "tool_iterations": 0,
+            }
+            shell_state = {
+                "context": ctx,
+                "actions": [{"type": "shell", "command": "npm run build"}],
+                "tool_iterations": 0,
+            }
+
+            self.assertEqual(_route_after_strict_retry(tool_state), "tooling")
+            self.assertEqual(_route_after_strict_retry(shell_state), "verify")
 
     def test_project_instruction_stack_is_loaded_into_agent_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1763,6 +1836,7 @@ class AgentAutoExecuteRegressionTests(unittest.TestCase):
                 self.assertIn("apply", step_kinds)
                 self.assertIn("shell", step_kinds)
                 self.assertIn("validation", step_kinds)
+
                 tool_calls = [data for event, data in events if event == "tool_call" and data.get("kind") == "agent_harness"]
                 tool_outputs = [data for event, data in events if event == "tool_output" and data.get("kind") == "agent_harness"]
                 command_calls = [data for event, data in events if event == "tool_call" and data.get("kind") == "agent_harness_command"]
@@ -1784,6 +1858,69 @@ class AgentAutoExecuteRegressionTests(unittest.TestCase):
                 self.assertTrue(any(item.get("tool") == "validate" and item.get("returncode") == 0 for item in command_outputs))
                 self.assertTrue(any(item.get("tool") in {"run-shell", "validate"} and item.get("stream") == "stdout" for item in command_chunks))
                 self.assertEqual((project / "src" / "App.tsx").read_text(encoding="utf-8"), "agent edit\n")
+        finally:
+            CURRENT_SESSION_ID.reset(session_token)
+            STATE.get("sessions", {}).pop(session_id, None)
+
+    def test_backend_auto_execute_repairs_verifier_failure_before_apply(self) -> None:
+        session_id = "auto-execute-verifier-repair-test"
+        STATE.get("sessions", {}).pop(session_id, None)
+        session_token = CURRENT_SESSION_ID.set(session_id)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                project = root / "demo"
+                project.mkdir()
+                (project / "README.md").write_text("old\n", encoding="utf-8")
+                STATE["sessions"][session_id] = {
+                    "workspace": str(root),
+                    "runners": {},
+                    "agent_jobs": {},
+                    "oauth_pending": {},
+                    "google_user": None,
+                }
+                first = {
+                    "spoken": "Aku sudah siap patch.",
+                    "log": "first",
+                    "changes": [{"path": "demo/README.md", "new_content": "bad\n"}],
+                    "actions": [],
+                    "intent": {"kind": "command", "should_write_files": True},
+                    "trace": {
+                        "verification": [
+                            {"name": "relative-imports-resolve", "ok": False, "detail": "Missing relative import."}
+                        ],
+                        "warnings": [],
+                    },
+                }
+                repair = {
+                    "spoken": "Verifier sudah diperbaiki dan patch siap apply.",
+                    "log": "repair",
+                    "changes": [{"path": "demo/README.md", "new_content": "fixed\n"}],
+                    "actions": [],
+                    "intent": {"kind": "command", "should_write_files": True},
+                    "trace": {
+                        "verification": [
+                            {"name": "relative-imports-resolve", "ok": True, "detail": "Imports resolve."}
+                        ],
+                        "warnings": [],
+                    },
+                }
+
+                events: list[tuple[str, dict]] = []
+                with patch("api.main.run_agent_pipeline", side_effect=[first, repair]) as mocked_pipeline, \
+                    patch("api.main.has_supabase", return_value=False), \
+                    patch("api.main._persist_hosted_file", return_value=None):
+                    result = main_mod._run_agent_impl(
+                        main_mod.AgentReq(input="fix readme", project_root="demo", auto_execute=True),
+                        event_cb=lambda event, data: events.append((event, data)),
+                    )
+
+                self.assertEqual(mocked_pipeline.call_count, 2)
+                self.assertTrue(result["verifier_repair"]["ok"])
+                self.assertTrue(result["execution"]["ok"])
+                self.assertTrue(result["execution"]["apply"]["applied"])
+                self.assertEqual((project / "README.md").read_text(encoding="utf-8"), "fixed\n")
+                self.assertTrue(any(data.get("phase") == "verifier_repair" for event, data in events if event == "status"))
         finally:
             CURRENT_SESSION_ID.reset(session_token)
             STATE.get("sessions", {}).pop(session_id, None)
@@ -3017,6 +3154,13 @@ class TranscriptPurityRegressionTests(unittest.TestCase):
         self.assertNotIn("Konteksnya sudah kebaca", workflow_text)
         self.assertIn('event.event === "tool_call"', workflow_text)
         self.assertIn('event.event === "tool_output"', workflow_text)
+
+    def test_frontend_does_not_double_apply_failed_backend_execution(self) -> None:
+        repo_root = Path(__file__).resolve().parents[2]
+        workflow_text = (repo_root / "src" / "agent" / "workflow.ts").read_text(encoding="utf-8")
+
+        self.assertIn("const backendAutoExecuted = res.execution?.auto_execute === true && !res.execution?.skipped;", workflow_text)
+        self.assertNotIn("res.execution?.ok !== false && !res.execution?.skipped", workflow_text)
 
     def test_agent_contract_requires_model_native_progress(self) -> None:
         repo_root = Path(__file__).resolve().parents[2]

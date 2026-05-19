@@ -624,7 +624,7 @@ export default function App() {
       const [detected, hosted, templates] = await Promise.all([
         detectProjects().catch(() => ({ ok: true, projects: [] as ProjectInfo[] })),
         hasVerifiedHostedAuth ? listHostedProjects().catch((error) => ({ error })) : Promise.resolve({ ok: true, projects: [] as HostedProject[] }),
-        hasVerifiedHostedAuth ? listProjectTemplates().catch((error) => ({ error })) : Promise.resolve({ ok: true, templates: [] as ProjectTemplate[] }),
+        listProjectTemplates().catch((error) => ({ error })),
       ]);
       if (requestAuthUserKey !== latestAuthUserKeyRef.current) return;
       setProjects(detected.projects || []);
@@ -676,7 +676,6 @@ export default function App() {
   useEffect(() => {
     if (ws) {
       void refreshProjects();
-      void refreshExplorer(".");
     }
   }, [ws]);
 
@@ -750,6 +749,7 @@ export default function App() {
     const nextExpanded = !treeExpanded[path];
     setTreeExpanded((prev) => ({ ...prev, [path]: nextExpanded }));
     if (nextExpanded) {
+      if (treeChildren[path]) return;
       await refreshExplorer(path);
     }
   };
@@ -1731,25 +1731,13 @@ export default function App() {
       <main className="workspaceSetupMain">
         <div className="workspaceGateCard pane workspaceSetupCard">
           <div className="workspaceGateKicker">Project setup</div>
-          <div className="workspaceGateTitle">Choose where to continue</div>
-          <div className="workspaceGateSubtitle">
-            Pick a saved project, upload one, or create a new Supabase-backed project before Appora opens the IDE.
-            {isHostedBrowser() ? " Project text files are restored from Supabase between serverless runs." : ""}
-          </div>
+          <div className="workspaceGateTitle">Pilih project</div>
+          <div className="workspaceGateSubtitle">Lanjut dari project tersimpan, upload repo, atau buat project baru.</div>
           <div className="workspaceGateActions">
             <button className="btn primary" onClick={pickWorkspace}>{isHostedBrowser() ? "Upload project…" : "Open project…"}</button>
             <button className="btn" onClick={openNewProjectModal}>New project</button>
           </div>
-          <div className="workspaceGateFeatureGrid">
-            <div className="gateFeatureCard">
-              <div className="gateFeatureTitle">Open or upload project</div>
-              <div className="gateFeatureText">Best when you already have a repo and want to keep working immediately.</div>
-            </div>
-            <div className="gateFeatureCard">
-              <div className="gateFeatureTitle">Create new project</div>
-              <div className="gateFeatureText">Best when you want Clara to build around a full preview, or Raka to help you code it step by step.</div>
-            </div>
-          </div>
+          <div className="workspaceGateTutorNote">Tutor nanti dikumpulkan di satu tempat khusus.</div>
           {hasVerifiedHostedAuth ? renderSavedProjectsPanel("setup") : null}
           {renderFolderInput()}
         </div>
