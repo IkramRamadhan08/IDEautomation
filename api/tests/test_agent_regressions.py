@@ -1737,12 +1737,13 @@ class AgentAutoExecuteRegressionTests(unittest.TestCase):
                     "trace": {"passes": 1, "memory_hits": [], "skills": [], "mcp_servers": [], "mcp_tools_used": [], "verification": [], "warnings": []},
                 }
 
+                events: list[tuple[str, dict]] = []
                 with patch("api.main.run_agent_pipeline", return_value=pipeline), \
                     patch("api.main.has_supabase", return_value=False), \
                     patch("api.main._persist_hosted_file", return_value=None):
                     result = main_mod._run_agent_impl(
                         main_mod.AgentReq(input="patch and validate", project_root="demo", auto_execute=True),
-                        event_cb=lambda *_args: None,
+                        event_cb=lambda event, data: events.append((event, data)),
                     )
 
                 self.assertTrue(result["execution"]["ok"])
@@ -1751,14 +1752,58 @@ class AgentAutoExecuteRegressionTests(unittest.TestCase):
                 self.assertTrue(result["execution"]["shell"]["results"][0]["ok"])
                 self.assertTrue(result["execution"]["validation"]["ok"])
                 self.assertGreaterEqual(result["execution"]["validation"]["ran"], 1)
+                self.assertTrue(result["execution"]["run_ledger"])
+                ledger_phases = [item["phase"] for item in result["execution"]["run_ledger"]]
+                self.assertIn("observe", ledger_phases)
+                self.assertIn("edit", ledger_phases)
+                self.assertIn("run", ledger_phases)
+                self.assertIn("verify", ledger_phases)
+                self.assertIn("complete", ledger_phases)
                 step_kinds = [step["kind"] for step in result["execution"]["steps"]]
                 self.assertIn("apply", step_kinds)
                 self.assertIn("shell", step_kinds)
                 self.assertIn("validation", step_kinds)
+                tool_calls = [data for event, data in events if event == "tool_call" and data.get("kind") == "agent_harness"]
+                tool_outputs = [data for event, data in events if event == "tool_output" and data.get("kind") == "agent_harness"]
+                command_calls = [data for event, data in events if event == "tool_call" and data.get("kind") == "agent_harness_command"]
+                command_outputs = [data for event, data in events if event == "tool_output" and data.get("kind") == "agent_harness_command"]
+                command_chunks = [data for event, data in events if event == "tool_output" and data.get("kind") == "agent_harness_command_chunk"]
+                self.assertTrue(any(item.get("tool") == "apply" and item.get("paths") == ["demo/src/App.tsx"] for item in tool_calls))
+                shell_output = next(item for item in tool_outputs if item.get("tool") == "run-shell")
+                validation_output = next(item for item in tool_outputs if item.get("tool") == "validate")
+                self.assertIn("summary", shell_output)
+                self.assertIn("commands", shell_output)
+                self.assertIn("results", shell_output)
+                self.assertEqual(shell_output["results"][0]["command"], "python3 -m compileall .")
+                self.assertIn("summary", validation_output)
+                self.assertIn("commands", validation_output)
+                self.assertIn("results", validation_output)
+                self.assertTrue(any(item.get("tool") == "run-shell" and item.get("command") == "python3 -m compileall ." for item in command_calls))
+                self.assertTrue(any(item.get("tool") == "validate" for item in command_calls))
+                self.assertTrue(any(item.get("tool") == "run-shell" and item.get("status") == "passed" for item in command_outputs))
+                self.assertTrue(any(item.get("tool") == "validate" and item.get("returncode") == 0 for item in command_outputs))
+                self.assertTrue(any(item.get("tool") in {"run-shell", "validate"} and item.get("stream") == "stdout" for item in command_chunks))
                 self.assertEqual((project / "src" / "App.tsx").read_text(encoding="utf-8"), "agent edit\n")
         finally:
             CURRENT_SESSION_ID.reset(session_token)
             STATE.get("sessions", {}).pop(session_id, None)
+
+    def test_streaming_shell_buffers_output_chunks_without_losing_stdout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            chunks: list[tuple[str, str]] = []
+            result = main_mod._run_shell_command_streaming(
+                "python3 -c \"for i in range(20): print('line-%02d' % i)\"",
+                Path(tmp),
+                lambda stream, chunk: chunks.append((stream, chunk)),
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertIn("line-00", result["stdout"])
+        self.assertIn("line-19", result["stdout"])
+        stdout_chunks = [chunk for stream, chunk in chunks if stream == "stdout"]
+        self.assertTrue(stdout_chunks)
+        self.assertLess(len(stdout_chunks), 20)
+        self.assertIn("line-19", "".join(stdout_chunks))
 
     def test_backend_auto_execute_records_preview_audit_step_when_preview_url_is_available(self) -> None:
         session_id = "auto-execute-preview-audit-test"
@@ -1976,6 +2021,10 @@ class AgentAutoExecuteRegressionTests(unittest.TestCase):
                 self.assertEqual(repair_execution["replay"]["results"][0]["command"], "python3 -m compileall helper.py")
                 self.assertIn("replay", [step["kind"] for step in repair_execution["steps"]])
                 self.assertIn("repair", [step["kind"] for step in result["execution"]["steps"]])
+                self.assertEqual(result["execution"]["failure_analysis"]["failure_count"], 0)
+                self.assertGreater(result["execution"]["failure_analysis"]["resolved_failure_count"], 0)
+                self.assertEqual(result["execution"]["failure_analysis"]["resolved_by"], "repair-loop")
+                self.assertIn("Resolved", result["execution"]["failure_analysis"]["summary"])
                 self.assertEqual(result["execution"]["completion_report"]["state"], "complete")
                 self.assertIn("completion", [step["kind"] for step in result["execution"]["steps"]])
                 validation_criteria = [
@@ -2130,6 +2179,67 @@ class AgentAutoExecuteRegressionTests(unittest.TestCase):
                 self.assertEqual(completion_steps[-1]["state"], "complete")
                 self.assertTrue(result["execution"]["ok"])
                 self.assertEqual((project / "bad.py").read_text(encoding="utf-8"), "print('ok')\n")
+        finally:
+            CURRENT_SESSION_ID.reset(session_token)
+            STATE.get("sessions", {}).pop(session_id, None)
+
+    def test_backend_auto_execute_marks_repair_stop_when_budget_exhausted(self) -> None:
+        session_id = "auto-execute-repair-stop-test"
+        STATE.get("sessions", {}).pop(session_id, None)
+        session_token = CURRENT_SESSION_ID.set(session_id)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                project = root / "demo"
+                project.mkdir()
+                (project / "bad.py").write_text("print(\n", encoding="utf-8")
+                STATE["sessions"][session_id] = {
+                    "workspace": str(root),
+                    "runners": {},
+                    "agent_jobs": {},
+                    "oauth_pending": {},
+                    "google_user": None,
+                }
+                first = {
+                    "spoken": "Aku coba apply tapi validasi gagal.",
+                    "log": "first",
+                    "changes": [{"path": "demo/bad.py", "new_content": "print(\n"}],
+                    "actions": [],
+                    "intent": {"kind": "command"},
+                    "trace": {"passes": 1, "memory_hits": [], "skills": [], "mcp_servers": [], "mcp_tools_used": [], "verification": [], "warnings": []},
+                }
+                bad_repair = {
+                    "spoken": "Aku coba repair tapi masih gagal.",
+                    "log": "bad-repair",
+                    "changes": [{"path": "demo/bad.py", "new_content": "print('still bad'\n"}],
+                    "actions": [],
+                    "intent": {"kind": "command"},
+                    "trace": {"passes": 1, "memory_hits": [], "skills": [], "mcp_servers": [], "mcp_tools_used": [], "verification": [], "warnings": []},
+                }
+
+                with patch("api.main.run_agent_pipeline", side_effect=[first, bad_repair, bad_repair, bad_repair]) as mocked_pipeline, \
+                    patch("api.main.has_supabase", return_value=False), \
+                    patch("api.main._persist_hosted_file", return_value=None):
+                    result = main_mod._run_agent_impl(
+                        main_mod.AgentReq(input="fix python syntax but stop clearly", project_root="demo", auto_execute=True),
+                        event_cb=lambda *_args: None,
+                    )
+
+                execution = result["execution"]
+                self.assertEqual(mocked_pipeline.call_count, 4)
+                self.assertFalse(execution["ok"])
+                self.assertEqual(len(execution["repairs"]), 3)
+                self.assertEqual(execution["repair_stop"]["reason"], "max_repair_passes_exhausted")
+                self.assertEqual(execution["repair_stop"]["attempts"], 3)
+                self.assertEqual(execution["repair_stop"]["max_repair_passes"], 3)
+                self.assertIn("Read the failing validation output", execution["repair_stop"]["next_action"])
+                self.assertIn("repair_stop", [step["kind"] for step in execution["steps"]])
+                self.assertIn("blocked", [item["phase"] for item in execution["run_ledger"]])
+                self.assertTrue(any(item.get("next_action") for item in execution["run_ledger"] if item["phase"] == "blocked"))
+                self.assertEqual(execution["completion_report"]["state"], "blocked")
+                criteria = {item["label"]: item for item in execution["completion_report"]["criteria"]}
+                self.assertEqual(criteria["repair-budget"]["status"], "failed")
+                self.assertTrue(any("Backend repair stopped" in item for item in execution["completion_report"]["residual_risks"]))
         finally:
             CURRENT_SESSION_ID.reset(session_token)
             STATE.get("sessions", {}).pop(session_id, None)

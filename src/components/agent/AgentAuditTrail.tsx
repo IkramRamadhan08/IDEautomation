@@ -152,6 +152,31 @@ export const AgentAuditTrail: React.FC<AgentAuditTrailProps> = ({ snapshots, com
             </div>
           ) : null}
 
+          {snapshot.runLedger && snapshot.runLedger.length > 0 ? (
+            <div className="agentAuditSection">
+              <div className="agentAuditSectionTitle">Run ledger</div>
+              <div className="agentAuditList">
+                {snapshot.runLedger.slice(0, compact ? 8 : 18).map((item) => {
+                  const rowTone = item.status === "failed" ? "error" : item.status === "running" ? "" : item.ok ? "ok" : "error";
+                  return (
+                  <div key={`${snapshot.id}-ledger-${item.id}`} className={`agentAuditRow ${rowTone}`}>
+                    <div className="agentAuditPrimary">{item.index}. {item.phase} / {item.label}</div>
+                    <div className="agentAuditSecondary">{item.kind} • {item.status} • {shortText(item.detail, compact ? 120 : 180)}</div>
+                    {!compact && item.repairIndex ? <div className="agentAuditSecondary">repair pass: {item.repairIndex}</div> : null}
+                    {!compact && item.state ? <div className="agentAuditSecondary">state: {item.state}</div> : null}
+                    {!compact && item.attempts !== undefined ? (
+                      <div className="agentAuditSecondary">attempts: {item.attempts}/{item.maxRepairPasses ?? "?"}</div>
+                    ) : null}
+                    {!compact && item.failureSignature ? <div className="agentAuditSecondary">signature: {item.failureSignature}</div> : null}
+                    {!compact && item.diagnosis ? <div className="agentAuditSecondary">{shortText(item.diagnosis, 220)}</div> : null}
+                    {!compact && item.nextAction ? <div className="agentAuditSecondary">next: {shortText(item.nextAction, 220)}</div> : null}
+                  </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+
           {snapshot.appliedPatches && snapshot.appliedPatches.length > 0 ? (
             <div className="agentAuditSection">
               <div className="agentAuditSectionTitle">Applied patches</div>
@@ -178,6 +203,47 @@ export const AgentAuditTrail: React.FC<AgentAuditTrailProps> = ({ snapshots, com
                     {!compact && run.stderrPreview ? <div className="agentAuditSecondary">{shortText(run.stderrPreview, 180)}</div> : null}
                     {!compact && !run.stderrPreview && run.stdoutPreview ? <div className="agentAuditSecondary">{shortText(run.stdoutPreview, 180)}</div> : null}
                     {!compact && run.error ? <div className="agentAuditSecondary">{shortText(run.error, 180)}</div> : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {snapshot.commandRows && snapshot.commandRows.length > 0 ? (
+            <div className="agentAuditSection">
+              <div className="agentAuditSectionTitle">Command timeline</div>
+              <div className="agentAuditList">
+                {snapshot.commandRows.slice(0, compact ? 8 : 18).map((row) => {
+                  const rowTone = row.status === "failed" ? "error" : row.status === "running" ? "" : "ok";
+                  return (
+                    <div key={`${snapshot.id}-command-${row.id}`} className={`agentAuditRow ${rowTone}`}>
+                      <div className="agentAuditPrimary">{row.group}: {row.command}</div>
+                      <div className="agentAuditSecondary">
+                        {row.status} • exit={row.returncode ?? "pending"}{row.riskLevel ? ` • ${row.riskLevel}` : ""}{row.chunkCount ? ` • chunks=${row.chunkCount}` : ""}{row.outputBytes ? ` • ${row.outputBytes}B` : ""}
+                      </div>
+                      {!compact && row.reason ? <div className="agentAuditSecondary">{shortText(row.reason, 180)}</div> : null}
+                      {!compact && row.stderrTail ? <div className="agentAuditSecondary">stderr: {shortText(row.stderrTail, 220)}</div> : null}
+                      {!compact && !row.stderrTail && row.stdoutTail ? <div className="agentAuditSecondary">stdout: {shortText(row.stdoutTail, 220)}</div> : null}
+                      {!compact && !row.stderrTail && !row.stdoutTail && row.stderrPreview ? <div className="agentAuditSecondary">{shortText(row.stderrPreview, 180)}</div> : null}
+                      {!compact && !row.stderrTail && !row.stdoutTail && !row.stderrPreview && row.stdoutPreview ? <div className="agentAuditSecondary">{shortText(row.stdoutPreview, 180)}</div> : null}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+
+          {snapshot.replayRuns && snapshot.replayRuns.length > 0 ? (
+            <div className="agentAuditSection">
+              <div className="agentAuditSectionTitle">Replay runs</div>
+              <div className="agentAuditList">
+                {snapshot.replayRuns.map((run, index) => (
+                  <div key={`${snapshot.id}-replay-${index}`} className={`agentAuditRow ${run.ok ? "ok" : "error"}`}>
+                    <div className="agentAuditPrimary">{run.label}: {run.command || "(no command)"}</div>
+                    <div className="agentAuditSecondary">{run.skipped ? "skipped" : run.ok ? "ok" : "failed"} • exit={run.returncode ?? "unknown"}</div>
+                    {!compact && run.reason ? <div className="agentAuditSecondary">{shortText(run.reason, 180)}</div> : null}
+                    {!compact && run.stderrPreview ? <div className="agentAuditSecondary">{shortText(run.stderrPreview, 180)}</div> : null}
+                    {!compact && !run.stderrPreview && run.stdoutPreview ? <div className="agentAuditSecondary">{shortText(run.stdoutPreview, 180)}</div> : null}
                   </div>
                 ))}
               </div>

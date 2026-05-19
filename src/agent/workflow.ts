@@ -34,11 +34,26 @@ type ShellActionRun = TerminalRunResult & {
 type RunEvidence = {
   validationRuns: AgentAuditSnapshot["validationRuns"];
   executionSteps: AgentAuditSnapshot["executionSteps"];
+  runLedger: AgentAuditSnapshot["runLedger"];
   appliedPatches: AgentAuditSnapshot["appliedPatches"];
   shellRuns: AgentAuditSnapshot["shellRuns"];
+  commandRows: AgentAuditSnapshot["commandRows"];
+  replayRuns: AgentAuditSnapshot["replayRuns"];
   previewAudits: AgentAuditSnapshot["previewAudits"];
   repairPasses: AgentAuditSnapshot["repairPasses"];
   commandPolicyDecisions: AgentAuditSnapshot["commandPolicyDecisions"];
+};
+
+type RunLedgerItem = NonNullable<AgentAuditSnapshot["runLedger"]>[number];
+type CommandRowItem = NonNullable<AgentAuditSnapshot["commandRows"]>[number];
+type StructuredHarnessResult = {
+  command?: unknown;
+  ok?: unknown;
+  returncode?: unknown;
+  stdout_preview?: unknown;
+  stderr_preview?: unknown;
+  reason?: unknown;
+  risk_level?: unknown;
 };
 
 type BackendExecutionResult = {
@@ -62,7 +77,10 @@ type BackendExecutionResult = {
   apply?: Record<string, unknown> | null;
   shell?: Record<string, unknown> | null;
   validation?: ProjectValidationRun | null;
+  replay?: Record<string, unknown> | null;
   preview_audit?: (PreviewAuditResult & { skipped?: boolean }) | Record<string, unknown> | null;
+  repairs?: Array<Record<string, unknown>>;
+  run_ledger?: Array<Record<string, unknown>>;
 };
 
 type ApplyPreflightConflict = {
@@ -401,13 +419,62 @@ function toAuditSnapshot(label: string, trace: AgentRunTrace, makeId: () => stri
     verification: trace.verification || [],
     validationRuns: evidence?.validationRuns || [],
     executionSteps: evidence?.executionSteps || [],
+    runLedger: evidence?.runLedger || [],
     appliedPatches: evidence?.appliedPatches || [],
     shellRuns: evidence?.shellRuns || [],
+    commandRows: evidence?.commandRows || [],
+    replayRuns: evidence?.replayRuns || [],
     previewAudits: evidence?.previewAudits || [],
     repairPasses: evidence?.repairPasses || [],
     commandPolicyDecisions: evidence?.commandPolicyDecisions || [],
   };
 }
+
+function toLiveAuditSnapshot(id: string, label: string, evidence: RunEvidence): AgentAuditSnapshot {
+  return {
+    id,
+    label,
+    passes: 0,
+    contextFiles: [],
+    memoryHits: [],
+    skills: [],
+    mcpServers: [],
+    mcpToolsUsed: [],
+    validationRuns: evidence.validationRuns || [],
+    executionSteps: evidence.executionSteps || [],
+    runLedger: evidence.runLedger || [],
+    appliedPatches: evidence.appliedPatches || [],
+    shellRuns: evidence.shellRuns || [],
+    commandRows: evidence.commandRows || [],
+    replayRuns: evidence.replayRuns || [],
+    previewAudits: evidence.previewAudits || [],
+    repairPasses: evidence.repairPasses || [],
+    commandPolicyDecisions: evidence.commandPolicyDecisions || [],
+  };
+}
+
+const LIVE_LEDGER_PHASES: Record<string, { phase: string; kind: string; label: string }> = {
+  queued: { phase: "observe", kind: "queued", label: "Agent job queued" },
+  starting: { phase: "observe", kind: "starting", label: "Context bootstrap" },
+  intent: { phase: "observe", kind: "intent", label: "Intent detection" },
+  memory: { phase: "observe", kind: "memory", label: "Memory retrieval" },
+  skills: { phase: "plan", kind: "skills", label: "Skill selection" },
+  mcp: { phase: "plan", kind: "mcp", label: "MCP boundary scan" },
+  planning: { phase: "plan", kind: "planning", label: "Agent planning" },
+  context_ready: { phase: "observe", kind: "context_ready", label: "Context ready" },
+  drafting: { phase: "plan", kind: "drafting", label: "Model drafting" },
+  tooling: { phase: "run", kind: "tooling", label: "Tool execution" },
+  refining: { phase: "plan", kind: "refining", label: "Result refinement" },
+  verifying: { phase: "verify", kind: "verifying", label: "Verifier checks" },
+  diffing: { phase: "edit", kind: "diffing", label: "Patch preparation" },
+  executing_apply: { phase: "edit", kind: "apply", label: "Backend apply harness" },
+  executing_shell: { phase: "run", kind: "shell", label: "Backend shell harness" },
+  executing_validation: { phase: "verify", kind: "validation", label: "Backend validation" },
+  executing_preview_audit: { phase: "inspect", kind: "preview_audit", label: "Backend preview audit" },
+  executing_repair: { phase: "repair", kind: "repair", label: "Backend repair pass" },
+  executing_replay: { phase: "verify", kind: "replay", label: "Backend repair replay" },
+  autonomous_loop: { phase: "repair", kind: "autonomous_loop", label: "Autonomous continuation" },
+};
 
 function pushRunTrace(pushAgentLiveItem: WorkflowArgs["pushAgentLiveItem"], trace: AgentRunTrace | undefined) {
   if (!trace) return;
@@ -569,8 +636,11 @@ export async function runAgentWorkflow({
   const evidence: RunEvidence = {
     validationRuns: [],
     executionSteps: [],
+    runLedger: [],
     appliedPatches: [],
     shellRuns: [],
+    commandRows: [],
+    replayRuns: [],
     previewAudits: [],
     repairPasses: [],
     commandPolicyDecisions: [],
@@ -580,6 +650,7 @@ export async function runAgentWorkflow({
     kind: "success",
     message: "Tugas selesai",
   };
+  const liveAuditId = makeAgentLiveId();
 
   const intentSummary = (intent: Pick<AgentIntent, "kind" | "confidence" | "rationale"> | { kind: string; confidence: number; rationale: string }) => {
     const label = intent.kind === "conversation"
@@ -607,12 +678,284 @@ export async function runAgentWorkflow({
       ...snapshot,
       validationRuns: evidence.validationRuns,
       executionSteps: evidence.executionSteps,
+      runLedger: evidence.runLedger,
       appliedPatches: evidence.appliedPatches,
       shellRuns: evidence.shellRuns,
+      commandRows: evidence.commandRows,
+      replayRuns: evidence.replayRuns,
       previewAudits: evidence.previewAudits,
       repairPasses: evidence.repairPasses,
       commandPolicyDecisions: evidence.commandPolicyDecisions,
     })));
+  };
+
+  const upsertRunLedgerItem = (item: RunLedgerItem) => {
+    const current = evidence.runLedger || [];
+    const existingIndex = current.findIndex((entry) => entry.id === item.id);
+    if (existingIndex >= 0) {
+      current[existingIndex] = { ...current[existingIndex], ...item };
+    } else {
+      current.push(item);
+    }
+    evidence.runLedger = current
+      .map((entry, index) => ({ ...entry, index }))
+      .sort((a, b) => a.index - b.index);
+    refreshAuditTrailEvidence();
+  };
+
+  const upsertCommandRow = (item: CommandRowItem) => {
+    const current = evidence.commandRows || [];
+    const existingIndex = current.findIndex((entry) => entry.id === item.id);
+    if (existingIndex >= 0) {
+      current[existingIndex] = { ...current[existingIndex], ...item };
+    } else {
+      current.push(item);
+    }
+    evidence.commandRows = current;
+    refreshAuditTrailEvidence();
+  };
+
+  const recordLiveLedgerStatus = (phase: string, message: string) => {
+    const descriptor = LIVE_LEDGER_PHASES[phase];
+    if (!descriptor) return;
+    upsertRunLedgerItem({
+      id: `live-${phase}`,
+      index: evidence.runLedger?.length || 0,
+      phase: descriptor.phase,
+      kind: descriptor.kind,
+      label: descriptor.label,
+      status: "running",
+      ok: true,
+      detail: message || PHASE_LABELS[phase] || descriptor.label,
+      createdAt: new Date().toISOString(),
+    });
+  };
+
+  const recordLiveLedgerToolOutput = (data: Record<string, unknown>) => {
+    const phase = typeof data.phase === "string" ? data.phase : "";
+    const descriptor = LIVE_LEDGER_PHASES[phase];
+    if (!descriptor) return;
+    const ok = data.ok === true;
+    const summary = typeof data.summary === "string" ? data.summary : "";
+    const text = typeof data.text === "string" ? data.text : "";
+    upsertRunLedgerItem({
+      id: `live-${phase}`,
+      index: evidence.runLedger?.length || 0,
+      phase: descriptor.phase,
+      kind: descriptor.kind,
+      label: descriptor.label,
+      status: ok ? "passed" : "failed",
+      ok,
+      detail: summary || text || (ok ? `${descriptor.label} finished.` : `${descriptor.label} failed.`),
+      createdAt: new Date().toISOString(),
+    });
+  };
+
+  const recordStructuredHarnessOutput = (data: Record<string, unknown>) => {
+    if (data.kind !== "agent_harness") return;
+    const tool = typeof data.tool === "string" ? data.tool : "";
+    const results = Array.isArray(data.results) ? data.results as StructuredHarnessResult[] : [];
+    if (tool === "apply") {
+      const paths = Array.isArray(data.paths) ? data.paths.map(String) : [];
+      const count = typeof data.count === "number" ? data.count : paths.length;
+      if (data.applied === true && paths.length > 0) {
+        evidence.appliedPatches?.push({
+          label: "Backend apply live",
+          count,
+          paths,
+          checkpointPath: typeof data.checkpoint_path === "string" ? data.checkpoint_path : null,
+        });
+      }
+      return;
+    }
+    if (tool === "run-shell" || tool === "repair-replay") {
+      for (const [index, run] of results.entries()) {
+        const item = {
+          command: String(run.command || ""),
+          ok: run.ok === true,
+          returncode: typeof run.returncode === "number" ? run.returncode : null,
+          stdoutPreview: String(run.stdout_preview || "").slice(0, 500),
+          stderrPreview: String(run.stderr_preview || "").slice(0, 500),
+          reason: typeof run.reason === "string" ? run.reason : null,
+        };
+        upsertCommandRow({
+          id: `${tool}-${index}-${item.command}`,
+          group: tool === "repair-replay" ? "repair replay" : "shell",
+          command: item.command,
+          status: item.ok ? "passed" : "failed",
+          ok: item.ok,
+          returncode: item.returncode,
+          stdoutPreview: item.stdoutPreview,
+          stderrPreview: item.stderrPreview,
+          reason: item.reason,
+          riskLevel: typeof run.risk_level === "string" ? run.risk_level : null,
+          completedAt: new Date().toISOString(),
+        });
+        if (tool === "repair-replay") {
+          evidence.replayRuns?.push({
+            label: "Backend repair replay live",
+            ...item,
+            skipped: false,
+          });
+        } else {
+          evidence.shellRuns?.push({
+            command: item.command,
+            ok: item.ok,
+            returncode: item.returncode,
+            stdoutPreview: item.stdoutPreview,
+            stderrPreview: item.stderrPreview,
+            error: item.ok ? null : item.reason,
+          });
+        }
+        if (run.risk_level) {
+          evidence.commandPolicyDecisions?.push({
+            command: item.command,
+            riskLevel: String(run.risk_level),
+            ok: item.ok,
+            reason: item.reason || "",
+          });
+        }
+      }
+      return;
+    }
+    if (tool === "validate") {
+      const commands = Array.isArray(data.commands) ? data.commands.map(String) : results.map((run) => String(run.command || "")).filter(Boolean);
+      evidence.validationRuns?.push({
+        label: "Backend validation live",
+        ok: data.ok === true,
+        ran: typeof data.ran === "number" ? data.ran : results.length,
+        failed: typeof data.failed === "number" ? data.failed : results.filter((run) => run.ok !== true).length,
+        commands,
+      });
+      results.forEach((run, index) => {
+        const command = String(run.command || commands[index] || "");
+        const ok = run.ok === true;
+        upsertCommandRow({
+          id: `validate-${index}-${command}`,
+          group: "validation",
+          command,
+          status: ok ? "passed" : "failed",
+          ok,
+          returncode: typeof run.returncode === "number" ? run.returncode : null,
+          stdoutPreview: String(run.stdout_preview || "").slice(0, 500),
+          stderrPreview: String(run.stderr_preview || "").slice(0, 500),
+          reason: typeof run.reason === "string" ? run.reason : null,
+          riskLevel: typeof run.risk_level === "string" ? run.risk_level : null,
+          completedAt: new Date().toISOString(),
+        });
+      });
+    }
+  };
+
+  const recordStructuredHarnessCommandStart = (data: Record<string, unknown>) => {
+    if (data.kind === "agent_harness_command") {
+      const tool = typeof data.tool === "string" ? data.tool : "";
+      const command = typeof data.command === "string" ? data.command : "";
+      if (!tool || !command) return;
+      const index = typeof data.index === "number" ? data.index : 0;
+      upsertCommandRow({
+        id: `${tool}-${index}-${command}`,
+        group: typeof data.group === "string" ? data.group : tool,
+        command,
+        status: "running",
+        ok: true,
+        returncode: null,
+        stdoutPreview: "",
+        stderrPreview: "",
+        reason: null,
+        riskLevel: null,
+        startedAt: new Date().toISOString(),
+      });
+      return;
+    }
+    if (data.kind !== "agent_harness") return;
+    const tool = typeof data.tool === "string" ? data.tool : "";
+    if (!["run-shell", "validate", "repair-replay"].includes(tool)) return;
+    const commands = Array.isArray(data.commands) ? data.commands.map(String) : [];
+    const group = tool === "validate" ? "validation" : tool === "repair-replay" ? "repair replay" : "shell";
+    commands.forEach((command, index) => {
+      upsertCommandRow({
+        id: `${tool}-${index}-${command}`,
+        group,
+        command,
+        status: "running",
+        ok: true,
+        returncode: null,
+        stdoutPreview: "",
+        stderrPreview: "",
+        reason: null,
+        riskLevel: null,
+        startedAt: new Date().toISOString(),
+      });
+    });
+  };
+
+  const recordStructuredHarnessCommandEnd = (data: Record<string, unknown>) => {
+    if (data.kind !== "agent_harness_command") return;
+    const tool = typeof data.tool === "string" ? data.tool : "";
+    const command = typeof data.command === "string" ? data.command : "";
+    if (!tool || !command) return;
+    const index = typeof data.index === "number" ? data.index : 0;
+    const ok = data.ok === true;
+    const existing = (evidence.commandRows || []).find((item) => item.id === `${tool}-${index}-${command}`);
+    const stdoutValue = String(data.stdout_preview || existing?.stdoutTail || existing?.stdoutPreview || "");
+    const stderrValue = String(data.stderr_preview || existing?.stderrTail || existing?.stderrPreview || "");
+    upsertCommandRow({
+      id: `${tool}-${index}-${command}`,
+      group: typeof data.group === "string" ? data.group : tool,
+      command,
+      status: ok ? "passed" : "failed",
+      ok,
+      returncode: typeof data.returncode === "number" ? data.returncode : null,
+      stdoutPreview: stdoutValue.slice(-500),
+      stderrPreview: stderrValue.slice(-500),
+      stdoutTail: stdoutValue.slice(-1200),
+      stderrTail: stderrValue.slice(-1200),
+      chunkCount: existing?.chunkCount,
+      outputBytes: existing?.outputBytes,
+      reason: typeof data.reason === "string" ? data.reason : null,
+      riskLevel: typeof data.risk_level === "string" ? data.risk_level : null,
+      startedAt: existing?.startedAt,
+      completedAt: new Date().toISOString(),
+    });
+  };
+
+  const recordStructuredHarnessCommandChunk = (data: Record<string, unknown>) => {
+    if (data.kind !== "agent_harness_command_chunk") return;
+    const tool = typeof data.tool === "string" ? data.tool : "";
+    const command = typeof data.command === "string" ? data.command : "";
+    if (!tool || !command) return;
+    const index = typeof data.index === "number" ? data.index : 0;
+    const stream = data.stream === "stderr" ? "stderr" : "stdout";
+    const chunk = typeof data.chunk === "string" ? data.chunk : typeof data.text === "string" ? data.text : "";
+    if (!chunk) return;
+    const id = `${tool}-${index}-${command}`;
+    const existing = (evidence.commandRows || []).find((item) => item.id === id);
+    const nextStdout = stream === "stdout"
+      ? `${existing?.stdoutTail || ""}${chunk}`.slice(-1200)
+      : existing?.stdoutTail || "";
+    const nextStderr = stream === "stderr"
+      ? `${existing?.stderrTail || ""}${chunk}`.slice(-1200)
+      : existing?.stderrTail || "";
+    const chunkBytes = new Blob([chunk]).size;
+    upsertCommandRow({
+      id,
+      group: typeof data.group === "string" ? data.group : tool,
+      command,
+      status: existing?.status || "running",
+      ok: existing?.ok ?? true,
+      returncode: existing?.returncode ?? null,
+      stdoutPreview: nextStdout.slice(-500),
+      stderrPreview: nextStderr.slice(-500),
+      stdoutTail: nextStdout,
+      stderrTail: nextStderr,
+      chunkCount: (existing?.chunkCount || 0) + 1,
+      outputBytes: (existing?.outputBytes || 0) + chunkBytes,
+      reason: existing?.reason || null,
+      riskLevel: existing?.riskLevel || null,
+      startedAt: existing?.startedAt || new Date().toISOString(),
+      completedAt: existing?.completedAt,
+    });
   };
 
   const recordBackendExecutionEvidence = (res: { execution?: BackendExecutionResult }, sourceChanges: AgentChange[]): { shellResults: ShellActionRun[]; validation: ProjectValidationRun | null } => {
@@ -627,6 +970,20 @@ export async function runAgentWorkflow({
       });
       return { shellResults: [], validation: null };
     }
+    evidence.appliedPatches = (evidence.appliedPatches || []).filter((item) => item.label !== "Backend apply live");
+    const finalShell = execution.shell && typeof execution.shell === "object" ? execution.shell as Record<string, unknown> : null;
+    const finalShellCommands = new Set(
+      (Array.isArray(finalShell?.results) ? finalShell.results as Array<Record<string, unknown>> : [])
+        .map((item) => String(item.command || ""))
+        .filter(Boolean),
+    );
+    if (finalShellCommands.size > 0) {
+      evidence.shellRuns = (evidence.shellRuns || []).filter((item) => !finalShellCommands.has(item.command));
+      evidence.commandPolicyDecisions = (evidence.commandPolicyDecisions || []).filter((item) => !finalShellCommands.has(item.command));
+    }
+    evidence.commandRows = [];
+    evidence.validationRuns = (evidence.validationRuns || []).filter((item) => item.label !== "Backend validation live");
+    evidence.replayRuns = (evidence.replayRuns || []).filter((item) => item.label !== "Backend repair replay live");
     if (Array.isArray(execution.steps) && execution.steps.length > 0) {
       const existingIds = new Set((evidence.executionSteps || []).map((step) => step.id));
       const nextSteps = execution.steps
@@ -668,6 +1025,40 @@ export async function runAgentWorkflow({
           tone: nextSteps.every((step) => step.ok) ? "success" : "error",
           text: `Backend execution graph mencatat ${nextSteps.length} langkah.`,
           meta: nextSteps.map((step) => `${step.kind}:${step.ok ? "ok" : "fail"}`).join(" • "),
+        });
+      }
+    }
+    if (Array.isArray(execution.run_ledger) && execution.run_ledger.length > 0) {
+      evidence.runLedger = (evidence.runLedger || []).filter((item) => !item.id.startsWith("live-"));
+      const existingLedgerIds = new Set((evidence.runLedger || []).map((item) => item.id));
+      const nextLedger = execution.run_ledger
+        .map((item, index) => ({
+          id: typeof item.id === "string" ? item.id : `backend-ledger-${index}`,
+          index: typeof item.index === "number" ? item.index : index,
+          phase: typeof item.phase === "string" ? item.phase : "execute",
+          kind: typeof item.kind === "string" ? item.kind : "execution",
+          label: typeof item.label === "string" ? item.label : "Backend execution",
+          status: typeof item.status === "string" ? item.status : item.ok === true ? "passed" : "failed",
+          ok: item.ok === true,
+          detail: typeof item.detail === "string" ? item.detail : "",
+          createdAt: typeof item.created_at === "string" ? item.created_at : undefined,
+          repairIndex: typeof item.repair_index === "number" ? item.repair_index : undefined,
+          state: typeof item.state === "string" ? item.state : undefined,
+          attempts: typeof item.attempts === "number" ? item.attempts : undefined,
+          maxRepairPasses: typeof item.max_repair_passes === "number" ? item.max_repair_passes : undefined,
+          nextAction: typeof item.next_action === "string" ? item.next_action : undefined,
+          failureSignature: typeof item.failure_signature === "string" ? item.failure_signature : undefined,
+          diagnosis: typeof item.diagnosis === "string" ? item.diagnosis : undefined,
+        }))
+        .filter((item) => !existingLedgerIds.has(item.id));
+      if (nextLedger.length > 0) {
+        evidence.runLedger?.push(...nextLedger);
+        const last = nextLedger[nextLedger.length - 1];
+        pushAgentLiveItem({
+          role: "tool",
+          tone: last.ok ? "success" : "error",
+          text: `Run ledger mencatat ${nextLedger.length} lifecycle event.`,
+          meta: nextLedger.map((item) => `${item.phase}:${item.status}`).join(" • "),
         });
       }
     }
@@ -715,6 +1106,53 @@ export async function runAgentWorkflow({
         tone: shellResults.every((run) => run.ok) ? "success" : "error",
         text: `Backend auto-execute menjalankan ${shellResults.length} command.`,
         meta: shellResults.map((run) => String(run.command || "")).join(" • "),
+      });
+    }
+    const recordReplayRuns = (rawReplay: unknown, label: string) => {
+      const replay = rawReplay && typeof rawReplay === "object" ? rawReplay as Record<string, unknown> : null;
+      if (!replay) return;
+      const results = Array.isArray(replay.results) ? replay.results as ShellActionRun[] : [];
+      for (const run of results) {
+        evidence.replayRuns?.push({
+          label,
+          command: String(run.command || ""),
+          ok: run.ok === true,
+          returncode: typeof run.returncode === "number" ? run.returncode : null,
+          stdoutPreview: String(run.stdout || "").slice(0, 500),
+          stderrPreview: String(run.stderr || "").slice(0, 500),
+          skipped: false,
+          reason: run.reason || null,
+        });
+      }
+      const skipped = Array.isArray(replay.skipped_commands) ? replay.skipped_commands as Array<Record<string, unknown>> : [];
+      for (const item of skipped) {
+        evidence.replayRuns?.push({
+          label,
+          command: String(item.command || ""),
+          ok: true,
+          returncode: null,
+          stdoutPreview: "",
+          stderrPreview: "",
+          skipped: true,
+          reason: String(item.reason || item.risk_level || "skipped"),
+        });
+      }
+      if (results.length > 0 || skipped.length > 0) {
+        pushAgentLiveItem({
+          role: "tool",
+          tone: results.every((run) => run.ok) ? "success" : "error",
+          text: `${label} menjalankan replay ${results.length} command${skipped.length ? `, skip ${skipped.length}` : ""}.`,
+          meta: [...results.map((run) => String(run.command || "")), ...skipped.map((item) => String(item.command || ""))].filter(Boolean).join(" • ") || null,
+        });
+      }
+    };
+    recordReplayRuns(execution.replay, "Backend replay");
+    if (Array.isArray(execution.repairs)) {
+      execution.repairs.forEach((repair, index) => {
+        const repairExecution = repair.execution && typeof repair.execution === "object"
+          ? repair.execution as Record<string, unknown>
+          : null;
+        recordReplayRuns(repairExecution?.replay, `Backend repair replay ${index + 1}`);
       });
     }
     const validation = execution.validation && typeof execution.validation === "object" ? execution.validation as ProjectValidationRun : null;
@@ -771,6 +1209,7 @@ export async function runAgentWorkflow({
           const jobId = typeof event.data.job_id === "string" ? event.data.job_id : "";
           setWorkingMsg(message || PHASE_LABELS[phase] || "Agent lagi kerja…");
           if (phase) setEditorStatus(PHASE_LABELS[phase] || passEditorStatus);
+          if (phase) recordLiveLedgerStatus(phase, message);
           if (phase && !seenPhases.has(phase)) {
             seenPhases.add(phase);
             if (phase === "queued" && jobId) {
@@ -788,11 +1227,13 @@ export async function runAgentWorkflow({
         if (event.event === "tool_call") {
           const name = toolEventName(event.data);
           const phase = typeof event.data.phase === "string" ? event.data.phase : "tooling";
+          const summary = typeof event.data.summary === "string" ? event.data.summary : "";
+          recordStructuredHarnessCommandStart(event.data);
           pushAgentLiveItem({
             role: "tool",
             tone: "working",
             text: `Tool call: ${name}`,
-            meta: phase,
+            meta: summary || phase,
           });
           return;
         }
@@ -802,11 +1243,16 @@ export async function runAgentWorkflow({
           const ok = event.data.ok === true;
           const duration = typeof event.data.duration_ms === "number" ? `${Math.round(event.data.duration_ms)}ms` : "";
           const error = typeof event.data.error === "string" ? event.data.error : "";
+          recordLiveLedgerToolOutput(event.data);
+          recordStructuredHarnessCommandChunk(event.data);
+          recordStructuredHarnessCommandEnd(event.data);
+          recordStructuredHarnessOutput(event.data);
+          refreshAuditTrailEvidence();
           pushAgentLiveItem({
             role: "tool",
             tone: ok ? "success" : "error",
             text: ok ? `Tool output: ${name} selesai.` : `Tool output: ${name} gagal.`,
-            meta: [duration, error].filter(Boolean).join(" • ") || null,
+            meta: [typeof event.data.summary === "string" ? event.data.summary : "", duration, error].filter(Boolean).join(" • ") || null,
           });
           return;
         }
@@ -1154,7 +1600,7 @@ export async function runAgentWorkflow({
   setAgentReply("");
   setAgentLog("");
   setAgentActions([]);
-  setAgentAuditTrail([]);
+  setAgentAuditTrail([toLiveAuditSnapshot(liveAuditId, "Live run", evidence)]);
   setAgentLiveItems([{ id: makeAgentLiveId(), role: "user", tone: "default", text: agentInput.trim() }]);
   setEditorStatus(requestEditorStatus);
   setWorkingMsg("Agent sedang berpikir…");

@@ -105,6 +105,24 @@ export type AgentAuditSnapshot = {
     completionCriteria?: Array<{ label: string; status: string; detail: string }>;
     residualRisks?: string[];
   }>;
+  runLedger?: Array<{
+    id: string;
+    index: number;
+    phase: string;
+    kind: string;
+    label: string;
+    status: string;
+    ok: boolean;
+    detail: string;
+    createdAt?: string;
+    repairIndex?: number;
+    state?: string;
+    attempts?: number;
+    maxRepairPasses?: number;
+    nextAction?: string;
+    failureSignature?: string;
+    diagnosis?: string;
+  }>;
   appliedPatches?: Array<{
     label: string;
     count: number;
@@ -118,6 +136,34 @@ export type AgentAuditSnapshot = {
     stdoutPreview?: string;
     stderrPreview?: string;
     error?: string | null;
+  }>;
+  commandRows?: Array<{
+    id: string;
+    group: string;
+    command: string;
+    status: "running" | "passed" | "failed" | "skipped";
+    ok: boolean;
+    returncode?: number | null;
+    stdoutPreview?: string;
+    stderrPreview?: string;
+    stdoutTail?: string;
+    stderrTail?: string;
+    chunkCount?: number;
+    outputBytes?: number;
+    reason?: string | null;
+    riskLevel?: string | null;
+    startedAt?: string;
+    completedAt?: string;
+  }>;
+  replayRuns?: Array<{
+    label: string;
+    command: string;
+    ok: boolean;
+    returncode?: number | null;
+    stdoutPreview?: string;
+    stderrPreview?: string;
+    skipped?: boolean;
+    reason?: string | null;
   }>;
   previewAudits?: Array<{
     label: string;

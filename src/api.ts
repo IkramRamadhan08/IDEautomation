@@ -905,6 +905,7 @@ export type AgentResult = {
     validation?: ProjectValidationRun | null;
     preview_audit?: PreviewAuditResult | Record<string, unknown> | null;
     repairs?: Array<Record<string, unknown>>;
+    run_ledger?: Array<Record<string, unknown>>;
   };
 };
 export type AgentJob = {

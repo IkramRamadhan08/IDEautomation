@@ -1322,6 +1322,96 @@ def _run_shell_command(command: str, cwd: Path, timeout: int = 120) -> dict:
         }
 
 
+def _run_shell_command_streaming(command: str, cwd: Path, emit_chunk, timeout: int = 120) -> dict:
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+    stream_buffers: dict[str, list[str]] = {"stdout": [], "stderr": []}
+    last_flush: dict[str, float] = {"stdout": time.monotonic(), "stderr": time.monotonic()}
+    started = time.monotonic()
+
+    def flush_stream(stream: str, *, force: bool = False) -> None:
+        buffered = "".join(stream_buffers.get(stream) or [])
+        if not buffered:
+            return
+        now = time.monotonic()
+        if not force and len(buffered) < 900 and now - last_flush.get(stream, now) < 0.35:
+            return
+        stream_buffers[stream] = []
+        last_flush[stream] = now
+        emit_chunk(stream, buffered)
+
+    def append_stream(stream: str, chunk: str) -> None:
+        if not chunk:
+            return
+        stream_buffers.setdefault(stream, []).append(chunk)
+        flush_stream(stream)
+
+    try:
+        proc = subprocess.Popen(
+            command,
+            shell=True,
+            cwd=str(cwd),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        assert proc.stdout is not None
+        try:
+            for line in proc.stdout:
+                if time.monotonic() - started > timeout:
+                    proc.kill()
+                    stderr_chunks.append("\nCommand timed out")
+                    return {
+                        "ok": False,
+                        "stdout": "".join(stdout_chunks),
+                        "stderr": "".join(stderr_chunks),
+                        "returncode": 124,
+                    }
+                stdout_chunks.append(line)
+                append_stream("stdout", line)
+        finally:
+            flush_stream("stdout", force=True)
+            flush_stream("stderr", force=True)
+            try:
+                proc.stdout.close()
+            except Exception:
+                pass
+        returncode = proc.wait(timeout=max(1, int(timeout - (time.monotonic() - started))))
+        return {
+            "ok": returncode == 0,
+            "stdout": "".join(stdout_chunks),
+            "stderr": "".join(stderr_chunks),
+            "returncode": returncode,
+        }
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()  # type: ignore[possibly-undefined]
+        except Exception:
+            pass
+        stderr_chunks.append("\nCommand timed out")
+        append_stream("stderr", "Command timed out\n")
+        flush_stream("stdout", force=True)
+        flush_stream("stderr", force=True)
+        return {
+            "ok": False,
+            "stdout": "".join(stdout_chunks),
+            "stderr": "".join(stderr_chunks),
+            "returncode": 124,
+        }
+    except Exception as exc:
+        stderr_chunks.append(str(exc))
+        append_stream("stderr", f"{exc}\n")
+        flush_stream("stdout", force=True)
+        flush_stream("stderr", force=True)
+        return {
+            "ok": False,
+            "stdout": "".join(stdout_chunks),
+            "stderr": "".join(stderr_chunks),
+            "returncode": 1,
+        }
+
+
 class CommandPolicyDecision(BaseModel):
     ok: bool
     command: str
@@ -1554,52 +1644,11 @@ def agent_harness_run_shell(req: AgentHarnessRunShellReq):
     project_root = str(req.project_root or ".").strip().strip("/") or "."
     _hydrate_hosted_project(ws_root_path, project_root)
 
-    results: list[dict] = []
-    for action in req.actions[:8]:
-        command = str(action.command or "").strip()
-        cwd_label = str(action.cwd or project_root or ".").strip().strip("/") or "."
-        policy = _command_policy_decision(command)
-        if not policy.ok:
-            results.append({
-                "command": command,
-                "ok": False,
-                "stdout": "",
-                "stderr": policy.reason,
-                "returncode": 126,
-                "policy": policy.model_dump(),
-                "synced_files": 0,
-                "reason": action.reason,
-            })
-            continue
-
-        try:
-            cwd = safe_join(ws_root_path, cwd_label)
-        except ValueError as exc:
-            results.append({
-                "command": command,
-                "ok": False,
-                "stdout": "",
-                "stderr": str(exc),
-                "returncode": 126,
-                "policy": policy.model_dump(),
-                "synced_files": 0,
-                "reason": action.reason,
-            })
-            continue
-
-        result = _run_shell_command(command, cwd)
-        result["command"] = command
-        result["policy"] = policy.model_dump()
-        result["synced_files"] = _sync_hosted_project_text_files_after_shell(ws_root_path, cwd)
-        result["reason"] = action.reason
-        results.append(result)
-
-    return {
-        "ok": all(bool(item.get("ok")) for item in results),
-        "project_root": project_root,
-        "ran": len(results),
-        "results": results,
-    }
+    return _run_harness_shell_actions_internal(
+        ws_root_path=ws_root_path,
+        project_root=project_root,
+        actions=req.actions,
+    )
 
 
 class WorkspaceSetReq(BaseModel):
@@ -3374,11 +3423,60 @@ def _execution_failure_analysis(execution: dict[str, object]) -> dict[str, objec
     }
 
 
+def _execution_final_failure_analysis(execution: dict[str, object]) -> dict[str, object]:
+    raw = _execution_failure_analysis(execution)
+    if not bool(execution.get("ok")):
+        return raw
+    resolved_failures = list(raw.get("failures") or [])
+    if not resolved_failures:
+        return raw
+    repairs = execution.get("repairs")
+    repair_attempts = len(repairs) if isinstance(repairs, list) else 0
+    return {
+        "current_signature": "",
+        "failure_count": 0,
+        "active_failure_count": 0,
+        "resolved_failure_count": len(resolved_failures),
+        "failures": [],
+        "resolved_failures": resolved_failures[:12],
+        "evidence_excerpt": "",
+        "primary_failure": "",
+        "summary": f"Resolved: {len(resolved_failures)} previous failure signal(s) were superseded by successful execution.",
+        "suggested_next_move": "No active backend failure remains. Continue with user-facing verification or the next task.",
+        "prior_signatures": list(raw.get("prior_signatures") or [])[-5:],
+        "repeated_failure": False,
+        "repeated_count": 0,
+        "resolved_by": "repair-loop" if repair_attempts else "successful-execution",
+        "repair_attempts": repair_attempts,
+    }
+
+
 def _criterion(label: str, status: str, detail: str) -> dict[str, str]:
     return {
         "label": label,
         "status": status,
         "detail": str(detail or "")[:500],
+    }
+
+
+def _build_repair_stop(execution: dict[str, object], *, max_repair_passes: int) -> dict[str, object]:
+    repairs = execution.get("repairs")
+    attempts = len(repairs) if isinstance(repairs, list) else 0
+    failure_analysis = execution.get("failure_analysis")
+    if not isinstance(failure_analysis, dict):
+        failure_analysis = _execution_failure_analysis(execution)
+    next_move = str(failure_analysis.get("suggested_next_move") or "").strip()
+    if not next_move:
+        next_move = "Inspect the latest failing execution evidence, change strategy, then run a new repair pass."
+    if bool(failure_analysis.get("repeated_failure")) and "change strategy" not in next_move.lower():
+        next_move = f"Change strategy before another attempt. {next_move}"
+    return {
+        "reason": "max_repair_passes_exhausted",
+        "max_repair_passes": max_repair_passes,
+        "attempts": attempts,
+        "failure_analysis": failure_analysis,
+        "next_action": next_move[:600],
+        "summary": f"Backend repair stopped after {attempts}/{max_repair_passes} repair pass(es); execution is still failing.",
     }
 
 
@@ -3461,6 +3559,18 @@ def _execution_completion_report(execution: dict[str, object]) -> dict[str, obje
     else:
         criteria.append(_criterion("repair-loop", "skipped", "No backend repair pass was needed."))
 
+    repair_stop = execution.get("repair_stop")
+    if isinstance(repair_stop, dict):
+        criteria.append(_criterion(
+            "repair-budget",
+            "failed",
+            str(repair_stop.get("summary") or "Backend repair budget was exhausted."),
+        ))
+        next_action = str(repair_stop.get("next_action") or "").strip()
+        residual_risks.append(str(repair_stop.get("summary") or "Backend repair stopped before completion."))
+        if next_action:
+            residual_risks.append(f"Next action after repair stop: {next_action}")
+
     if ok and repaired_success:
         for item in criteria:
             if item.get("status") == "failed" and item.get("label") != "repair-loop":
@@ -3531,7 +3641,9 @@ def _execution_repair_report(execution: dict[str, object], max_chars: int = 9000
             "preview_audit": preview_repair,
             "failure_analysis": execution.get("failure_analysis") or _execution_failure_analysis(execution),
             "completion_report": execution.get("completion_report"),
+            "run_ledger": execution.get("run_ledger"),
             "previous_repairs": repair_summaries,
+            "repair_stop": execution.get("repair_stop"),
             "last_repair_execution": execution.get("last_repair_execution"),
         },
         ensure_ascii=False,
@@ -3768,8 +3880,26 @@ def _run_repair_replay(project_root: str, previous_execution: dict[str, object],
                 "summary": "Replay commands skipped because they are not safe for guarded autonomy.",
             }
         return None
+    replay_commands = [action.command for action in replay_actions]
     emit("status", {"phase": "executing_replay", "message": "Backend harness replaying previously failing shell commands..."})
-    replay = agent_harness_run_shell(AgentHarnessRunShellReq(project_root=project_root, actions=replay_actions))
+    emit("tool_call", _harness_tool_call_payload(
+        "repair-replay",
+        "executing_replay",
+        project_root=project_root,
+        summary=f"Replaying {len(replay_commands)} command(s).",
+        commands=replay_commands,
+        skipped_commands=skipped_commands,
+    ))
+    _emit_command_start_events(emit, tool="repair-replay", phase="executing_replay", project_root=project_root, commands=replay_commands, group="repair replay")
+    replay = _run_harness_shell_actions_internal(
+        ws_root_path=_ws(),
+        project_root=project_root,
+        actions=replay_actions,
+        emit=emit,
+        tool="repair-replay",
+        phase="executing_replay",
+        group="repair replay",
+    )
     if skipped_commands:
         replay["skipped_commands"] = skipped_commands
     steps = replay.setdefault("steps", [])
@@ -3779,19 +3909,22 @@ def _run_repair_replay(project_root: str, previous_execution: dict[str, object],
             "Backend repair replay",
             bool(replay.get("ok")),
             f"ran={replay.get('ran')}",
-            commands=[action.command for action in replay_actions],
+            commands=replay_commands,
             failed=sum(1 for item in list(replay.get("results") or []) if isinstance(item, dict) and not item.get("ok")),
         ))
-    emit(
-        "tool_output",
-        {
-            "kind": "agent_harness",
-            "tool": "repair-replay",
-            "ok": bool(replay.get("ok")),
-            "phase": "executing_replay",
-            "text": json.dumps({"ran": replay.get("ran"), "results": replay.get("results")}, ensure_ascii=False)[:1200],
-        },
-    )
+    replay_failed = sum(1 for item in list(replay.get("results") or []) if isinstance(item, dict) and not item.get("ok"))
+    emit("tool_output", _harness_tool_output_payload(
+        "repair-replay",
+        "executing_replay",
+        project_root=project_root,
+        ok=bool(replay.get("ok")),
+        summary=f"Replay ran {replay.get('ran')} command(s), failed={replay_failed}.",
+        ran=replay.get("ran"),
+        failed=replay_failed,
+        commands=replay_commands,
+        results=_shell_event_results(replay.get("results")),
+        skipped_commands=skipped_commands,
+    ))
     return replay
 
 
@@ -3806,6 +3939,242 @@ def _execution_step(kind: str, label: str, ok: bool, detail: str, **extra: objec
     }
     step.update(extra)
     return step
+
+
+def _shell_event_results(results: object) -> list[dict[str, object]]:
+    out: list[dict[str, object]] = []
+    for item in list(results or []):
+        if not isinstance(item, dict):
+            continue
+        policy = item.get("policy")
+        out.append({
+            "command": str(item.get("command") or "")[:240],
+            "ok": bool(item.get("ok")),
+            "returncode": item.get("returncode"),
+            "stdout_preview": str(item.get("stdout") or "")[:500],
+            "stderr_preview": str(item.get("stderr") or "")[:500],
+            "reason": str(item.get("reason") or "")[:240],
+            "risk_level": policy.get("risk_level") if isinstance(policy, dict) else None,
+            "synced_files": item.get("synced_files"),
+        })
+    return out
+
+
+def _harness_tool_call_payload(tool: str, phase: str, *, project_root: str, summary: str, **extra: object) -> dict[str, object]:
+    payload = {
+        "kind": "agent_harness",
+        "tool": tool,
+        "phase": phase,
+        "project_root": project_root,
+        "summary": summary,
+    }
+    payload.update(extra)
+    return payload
+
+
+def _harness_tool_output_payload(tool: str, phase: str, *, project_root: str, ok: bool, summary: str, **extra: object) -> dict[str, object]:
+    payload = {
+        "kind": "agent_harness",
+        "tool": tool,
+        "ok": bool(ok),
+        "phase": phase,
+        "project_root": project_root,
+        "summary": summary,
+        "text": summary,
+    }
+    payload.update(extra)
+    return payload
+
+
+def _emit_command_start_events(emit, *, tool: str, phase: str, project_root: str, commands: list[str], group: str) -> None:
+    for index, command in enumerate(commands):
+        emit("tool_call", {
+            "kind": "agent_harness_command",
+            "tool": tool,
+            "phase": phase,
+            "project_root": project_root,
+            "group": group,
+            "index": index,
+            "command": command,
+            "summary": f"{group}: running `{command}`",
+        })
+
+
+def _emit_command_end_events(emit, *, tool: str, phase: str, project_root: str, results: object, group: str) -> None:
+    for index, item in enumerate(_shell_event_results(results)):
+        command = str(item.get("command") or "")
+        ok = bool(item.get("ok"))
+        emit("tool_output", {
+            "kind": "agent_harness_command",
+            "tool": tool,
+            "phase": phase,
+            "project_root": project_root,
+            "group": group,
+            "index": index,
+            "command": command,
+            "ok": ok,
+            "status": "passed" if ok else "failed",
+            "returncode": item.get("returncode"),
+            "stdout_preview": item.get("stdout_preview"),
+            "stderr_preview": item.get("stderr_preview"),
+            "reason": item.get("reason"),
+            "risk_level": item.get("risk_level"),
+            "synced_files": item.get("synced_files"),
+            "summary": f"{group}: {'passed' if ok else 'failed'} `{command}`",
+            "text": f"{group}: {'passed' if ok else 'failed'} `{command}`",
+        })
+
+
+def _run_harness_shell_actions_internal(
+    *,
+    ws_root_path: Path,
+    project_root: str,
+    actions: list[AgentHarnessShellAction],
+    emit=None,
+    tool: str = "run-shell",
+    phase: str = "executing_shell",
+    group: str = "shell",
+) -> dict[str, object]:
+    results: list[dict] = []
+    for index, action in enumerate(actions[:8]):
+        command = str(action.command or "").strip()
+        cwd_label = str(action.cwd or project_root or ".").strip().strip("/") or "."
+        policy = _command_policy_decision(command)
+        if not policy.ok:
+            result = {
+                "command": command,
+                "ok": False,
+                "stdout": "",
+                "stderr": policy.reason,
+                "returncode": 126,
+                "policy": policy.model_dump(),
+                "synced_files": 0,
+                "reason": action.reason,
+            }
+            results.append(result)
+            if emit:
+                _emit_command_end_events(emit, tool=tool, phase=phase, project_root=project_root, results=[result], group=group)
+            continue
+
+        try:
+            cwd = safe_join(ws_root_path, cwd_label)
+        except ValueError as exc:
+            result = {
+                "command": command,
+                "ok": False,
+                "stdout": "",
+                "stderr": str(exc),
+                "returncode": 126,
+                "policy": policy.model_dump(),
+                "synced_files": 0,
+                "reason": action.reason,
+            }
+            results.append(result)
+            if emit:
+                _emit_command_end_events(emit, tool=tool, phase=phase, project_root=project_root, results=[result], group=group)
+            continue
+
+        def emit_chunk(stream: str, chunk: str, command_index: int = index, command_text: str = command) -> None:
+            if not emit or not chunk:
+                return
+            emit("tool_output", {
+                "kind": "agent_harness_command_chunk",
+                "tool": tool,
+                "phase": phase,
+                "project_root": project_root,
+                "group": group,
+                "index": command_index,
+                "command": command_text,
+                "stream": stream,
+                "chunk": chunk[-2000:],
+                "summary": f"{group}: {stream} chunk from `{command_text}`",
+                "text": chunk[-2000:],
+            })
+
+        result = _run_shell_command_streaming(command, cwd, emit_chunk) if emit else _run_shell_command(command, cwd)
+        result["command"] = command
+        result["policy"] = policy.model_dump()
+        result["synced_files"] = _sync_hosted_project_text_files_after_shell(ws_root_path, cwd)
+        result["reason"] = action.reason
+        results.append(result)
+        if emit:
+            _emit_command_end_events(emit, tool=tool, phase=phase, project_root=project_root, results=[result], group=group)
+
+    return {
+        "ok": all(bool(item.get("ok")) for item in results),
+        "project_root": project_root,
+        "ran": len(results),
+        "results": results,
+    }
+
+
+_EXECUTION_LEDGER_PHASES = {
+    "apply": "edit",
+    "shell": "run",
+    "validation": "verify",
+    "preview_audit": "inspect",
+    "replay": "verify",
+    "repair": "repair",
+    "repair_stop": "blocked",
+    "completion": "complete",
+}
+
+
+def _execution_run_ledger(execution: dict[str, object]) -> list[dict[str, object]]:
+    ledger: list[dict[str, object]] = [{
+        "id": "backend-observe",
+        "index": 0,
+        "phase": "observe",
+        "kind": "observe",
+        "label": "Backend execution accepted",
+        "status": "passed",
+        "ok": True,
+        "detail": f"project_root={execution.get('project_root') or '.'}",
+    }]
+    steps = execution.get("steps")
+    if not isinstance(steps, list):
+        return ledger
+    for index, raw_step in enumerate(steps, start=1):
+        if not isinstance(raw_step, dict):
+            continue
+        kind = str(raw_step.get("kind") or "execution").strip() or "execution"
+        phase = _EXECUTION_LEDGER_PHASES.get(kind, "execute")
+        if kind == "completion" and str(raw_step.get("state") or "") == "blocked":
+            phase = "blocked"
+        ok = bool(raw_step.get("ok"))
+        status = "passed" if ok else "failed"
+        if raw_step.get("skipped") is True:
+            status = "skipped"
+        failure_analysis = raw_step.get("failure_analysis")
+        if not isinstance(failure_analysis, dict):
+            failure_analysis = raw_step.get("pre_repair_failure_analysis")
+        if not isinstance(failure_analysis, dict):
+            failure_analysis = {}
+        entry: dict[str, object] = {
+            "id": str(raw_step.get("id") or f"backend-step-{index}"),
+            "index": index,
+            "phase": phase,
+            "kind": kind,
+            "label": str(raw_step.get("label") or kind),
+            "status": status,
+            "ok": ok,
+            "detail": str(raw_step.get("detail") or "")[:500],
+            "created_at": raw_step.get("created_at"),
+        }
+        for key in ("repair_index", "state", "attempts", "max_repair_passes"):
+            if raw_step.get(key) is not None:
+                entry[key] = raw_step.get(key)
+        next_action = str(raw_step.get("next_action") or failure_analysis.get("suggested_next_move") or "").strip()
+        failure_signature = str(failure_analysis.get("current_signature") or "").strip()
+        diagnosis = str(failure_analysis.get("summary") or "").strip()
+        if next_action:
+            entry["next_action"] = next_action[:600]
+        if failure_signature:
+            entry["failure_signature"] = failure_signature
+        if diagnosis:
+            entry["diagnosis"] = diagnosis[:600]
+        ledger.append(entry)
+    return ledger[:40]
 
 
 def _auto_execute_preview_audit(req: AgentReq, project_root: str) -> dict[str, object] | None:
@@ -3999,7 +4368,20 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
     }
 
     if out_changes:
+        apply_paths = [
+            str(change.get("path") or "")
+            for change in out_changes
+            if str(change.get("path") or "").strip() and isinstance(change.get("new_content"), str)
+        ]
         emit("status", {"phase": "executing_apply", "message": "Backend harness applying agent changes..."})
+        emit("tool_call", _harness_tool_call_payload(
+            "apply",
+            "executing_apply",
+            project_root=project_root,
+            summary=f"Applying {len(apply_paths)} file change(s).",
+            paths=apply_paths,
+            count=len(apply_paths),
+        ))
         apply_req = AgentHarnessApplyReq(
             project_root=project_root,
             label="Backend auto execute",
@@ -4032,21 +4414,42 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
                 conflicts=apply_result.get("conflicts") or [],
                 warnings=apply_result.get("warnings") or [],
             ))
-        emit(
-            "tool_output",
-            {
-                "kind": "agent_harness",
-                "tool": "apply",
-                "ok": bool(apply_result.get("ok")),
-                "phase": "executing_apply",
-                "text": json.dumps({key: apply_result.get(key) for key in ("applied", "count", "paths", "checkpoint_path", "conflicts", "warnings")}, ensure_ascii=False)[:1200],
-            },
-        )
+        emit("tool_output", _harness_tool_output_payload(
+            "apply",
+            "executing_apply",
+            project_root=project_root,
+            ok=bool(apply_result.get("ok")),
+            summary=f"Apply {'completed' if apply_result.get('ok') else 'failed'}: applied={apply_result.get('applied')} count={apply_result.get('count')}.",
+            applied=apply_result.get("applied"),
+            count=apply_result.get("count"),
+            paths=apply_result.get("paths") or [],
+            checkpoint_path=apply_result.get("checkpoint_path"),
+            conflicts=apply_result.get("conflicts") or [],
+            warnings=apply_result.get("warnings") or [],
+        ))
 
     shell_actions = _agent_shell_actions(actions)
     if shell_actions:
+        shell_commands = [action.command for action in shell_actions]
         emit("status", {"phase": "executing_shell", "message": "Backend harness running agent shell actions..."})
-        shell_result = agent_harness_run_shell(AgentHarnessRunShellReq(project_root=project_root, actions=shell_actions))
+        emit("tool_call", _harness_tool_call_payload(
+            "run-shell",
+            "executing_shell",
+            project_root=project_root,
+            summary=f"Running {len(shell_commands)} shell command(s).",
+            commands=shell_commands,
+            count=len(shell_commands),
+        ))
+        _emit_command_start_events(emit, tool="run-shell", phase="executing_shell", project_root=project_root, commands=shell_commands, group="shell")
+        shell_result = _run_harness_shell_actions_internal(
+            ws_root_path=_ws(),
+            project_root=project_root,
+            actions=shell_actions,
+            emit=emit,
+            tool="run-shell",
+            phase="executing_shell",
+            group="shell",
+        )
         execution["shell"] = shell_result
         execution["ok"] = bool(execution["ok"]) and bool(shell_result.get("ok"))
         steps = execution.setdefault("steps", [])
@@ -4056,23 +4459,25 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
                 "Backend shell harness",
                 bool(shell_result.get("ok")),
                 f"ran={shell_result.get('ran')}",
-                commands=[action.command for action in shell_actions],
+                commands=shell_commands,
                 failed=sum(
                     1
                     for item in list(shell_result.get("results") or [])
                     if isinstance(item, dict) and not item.get("ok")
                 ),
             ))
-        emit(
-            "tool_output",
-            {
-                "kind": "agent_harness",
-                "tool": "run-shell",
-                "ok": bool(shell_result.get("ok")),
-                "phase": "executing_shell",
-                "text": json.dumps({"ran": shell_result.get("ran"), "results": shell_result.get("results")}, ensure_ascii=False)[:1200],
-            },
-        )
+        shell_failed = sum(1 for item in list(shell_result.get("results") or []) if isinstance(item, dict) and not item.get("ok"))
+        emit("tool_output", _harness_tool_output_payload(
+            "run-shell",
+            "executing_shell",
+            project_root=project_root,
+            ok=bool(shell_result.get("ok")),
+            summary=f"Shell ran {shell_result.get('ran')} command(s), failed={shell_failed}.",
+            ran=shell_result.get("ran"),
+            failed=shell_failed,
+            commands=shell_commands,
+            results=_shell_event_results(shell_result.get("results")),
+        ))
 
     if out_changes:
         try:
@@ -4082,14 +4487,26 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
             validation_commands = []
         if validation_commands:
             emit("status", {"phase": "executing_validation", "message": "Backend harness validating project output..."})
-            validation_shell = agent_harness_run_shell(
-                AgentHarnessRunShellReq(
-                    project_root=project_root,
-                    actions=[
-                        AgentHarnessShellAction(command=command, cwd=project_root, reason="Backend auto validation")
-                        for command in validation_commands
-                    ],
-                )
+            emit("tool_call", _harness_tool_call_payload(
+                "validate",
+                "executing_validation",
+                project_root=project_root,
+                summary=f"Running {len(validation_commands)} validation command(s).",
+                commands=validation_commands,
+                count=len(validation_commands),
+            ))
+            _emit_command_start_events(emit, tool="validate", phase="executing_validation", project_root=project_root, commands=validation_commands, group="validation")
+            validation_shell = _run_harness_shell_actions_internal(
+                ws_root_path=_ws(),
+                project_root=project_root,
+                actions=[
+                    AgentHarnessShellAction(command=command, cwd=project_root, reason="Backend auto validation")
+                    for command in validation_commands
+                ],
+                emit=emit,
+                tool="validate",
+                phase="executing_validation",
+                group="validation",
             )
             validation_results = list(validation_shell.get("results") or [])
             validation = {
@@ -4113,16 +4530,18 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
                     commands=validation.get("commands") or [],
                     failed=validation.get("failed"),
                 ))
-            emit(
-                "tool_output",
-                {
-                    "kind": "agent_harness",
-                    "tool": "validate",
-                    "ok": bool(validation.get("ok")),
-                    "phase": "executing_validation",
-                    "text": json.dumps({key: validation.get(key) for key in ("ok", "commands", "ran", "passed", "failed")}, ensure_ascii=False)[:1200],
-                },
-            )
+            emit("tool_output", _harness_tool_output_payload(
+                "validate",
+                "executing_validation",
+                project_root=project_root,
+                ok=bool(validation.get("ok")),
+                summary=f"Validation ran {validation.get('ran')} command(s), failed={validation.get('failed')}.",
+                commands=validation.get("commands") or [],
+                ran=validation.get("ran"),
+                passed=validation.get("passed"),
+                failed=validation.get("failed"),
+                results=_shell_event_results(validation.get("results")),
+            ))
 
     try:
         preview_project_dir = safe_join(_ws(), project_root)
@@ -4198,6 +4617,26 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
                 execution["failure_analysis"] = _execution_failure_analysis(execution)
             if bool(execution.get("ok")):
                 break
+        if _execution_needs_repair(execution) and not bool(execution.get("ok")):
+            execution["failure_analysis"] = _execution_failure_analysis(execution)
+            repair_stop = _build_repair_stop(execution, max_repair_passes=max_repair_passes)
+            execution["repair_stop"] = repair_stop
+            steps = execution.setdefault("steps", [])
+            if isinstance(steps, list):
+                steps.append(_execution_step(
+                    "repair_stop",
+                    "Backend repair budget",
+                    False,
+                    str(repair_stop.get("summary") or ""),
+                    reason=repair_stop.get("reason"),
+                    max_repair_passes=repair_stop.get("max_repair_passes"),
+                    attempts=repair_stop.get("attempts"),
+                    next_action=repair_stop.get("next_action"),
+                    failure_analysis=repair_stop.get("failure_analysis") or {},
+                ))
+
+    if bool(execution.get("ok")):
+        execution["failure_analysis"] = _execution_final_failure_analysis(execution)
 
     completion_report = _execution_completion_report(execution)
     execution["completion_report"] = completion_report
@@ -4212,6 +4651,7 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
             residual_risks=completion_report.get("residual_risks") or [],
             state=completion_report.get("state"),
         ))
+    execution["run_ledger"] = _execution_run_ledger(execution)
 
     return execution
 
