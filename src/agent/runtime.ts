@@ -349,7 +349,7 @@ export function buildRepairPrompt(
 
   if (shellReport?.trim()) {
     sections.push(
-      `One or more project commands were executed after applying the draft. Read the command output, identify the actual blocker, and fix the project so the command succeeds on the next run.\n\nCommand results:\n${shellReport.trim()}`
+      `One or more project commands were executed after applying the draft. Read the command output, identify the actual blocker, and fix the project so the command succeeds on the next run. If a command was blocked by guarded autonomy, do not skip validation; request a safer project-scoped equivalent or leave the blocker explicit after concrete file fixes.\n\nCommand results:\n${shellReport.trim()}`
     );
   }
 

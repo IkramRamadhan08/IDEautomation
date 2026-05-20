@@ -23,8 +23,10 @@ interface SettingsModalProps {
   modelRouteLoading: boolean;
   modelRouteTest: ModelRouteTestResult | null;
   modelRouteTesting: boolean;
+  agentAccessModeDraft: "safe" | "trusted";
   onClose: () => void;
   onBuildModeDraftChange: (mode: BuildMode) => void;
+  onAgentAccessModeDraftChange: (mode: "safe" | "trusted") => void;
   onModelDraftChange: (model: string) => void;
   onNineRouterBaseUrlChange: (url: string) => void;
   onApiKeyChange: (provider: ProviderChoice, key: string) => void;
@@ -48,8 +50,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   modelRouteLoading,
   modelRouteTest,
   modelRouteTesting,
+  agentAccessModeDraft,
   onClose,
   onBuildModeDraftChange,
+  onAgentAccessModeDraftChange,
   onModelDraftChange,
   onNineRouterBaseUrlChange,
   onApiKeyChange,
@@ -107,6 +111,34 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               >
                 Clara Preview
               </button>
+            </div>
+          </div>
+
+          <div className="settingsSection compactSettingsSection settingsSectionWide">
+            <div className="settingsRowHead">
+              <div className="brainTitle">Agent access</div>
+              <div className="providerStatusLine compactStatusLine">
+                <span className={`providerStatusChip ${agentAccessModeDraft === "trusted" ? "connected" : ""}`}>
+                  {agentAccessModeDraft === "trusted" ? "Trusted project" : "Safe mode"}
+                </span>
+              </div>
+            </div>
+            <div className="segmentedControl compactSegmentedControl">
+              <button
+                className={`btn modeBtn ${agentAccessModeDraft === "safe" ? "primary" : ""}`}
+                onClick={() => onAgentAccessModeDraftChange("safe")}
+              >
+                Safe
+              </button>
+              <button
+                className={`btn modeBtn ${agentAccessModeDraft === "trusted" ? "primary" : ""}`}
+                onClick={() => onAgentAccessModeDraftChange("trusted")}
+              >
+                Trusted
+              </button>
+            </div>
+            <div className="settingsSubtle compactHint">
+              Safe auto-runs known project commands. Trusted lets the agent run broader project-scoped commands without approval, while destructive commands and workspace escape stay blocked.
             </div>
           </div>
 

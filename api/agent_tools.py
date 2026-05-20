@@ -146,6 +146,37 @@ _LOCAL_TOOLS: list[LocalToolInfo] = [
             },
         },
     ),
+    LocalToolInfo(
+        name="memory_overview",
+        description="Inspect Appora agent memory readiness and counts for the current project/session (read-only).",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "project_root": {"type": "string", "description": "Project root relative to workspace"},
+            },
+        },
+    ),
+    LocalToolInfo(
+        name="mcp_status",
+        description="Inspect configured MCP servers and optionally their live tool names for this workspace/project (read-only).",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "project_root": {"type": "string", "description": "Project root relative to workspace"},
+                "include_live_tools": {"type": "boolean", "default": False},
+            },
+        },
+    ),
+    LocalToolInfo(
+        name="preview_capabilities",
+        description="Inspect whether the project has a runnable preview surface and which scripts/entry points are available (read-only).",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "project_root": {"type": "string", "description": "Project root relative to workspace"},
+            },
+        },
+    ),
 ]
 
 
@@ -322,6 +353,19 @@ def _line_at(text: str, line: int) -> str:
     return lines[line - 1][:180]
 
 
+def _count_emoji_chars(text: str) -> int:
+    count = 0
+    for char in str(text or ""):
+        code = ord(char)
+        if (
+            0x1F300 <= code <= 0x1FAFF
+            or 0x2600 <= code <= 0x27BF
+            or 0x2300 <= code <= 0x23FF
+        ):
+            count += 1
+    return count
+
+
 def _looks_like_component_file(rel: str, text: str) -> bool:
     name = Path(rel).stem
     return (
@@ -347,6 +391,8 @@ def _quality_signals_for_file(rel: str, text: str) -> tuple[dict[str, bool], lis
         ("todo", re.compile(r"\b(TODO|FIXME|HACK)\b")),
         ("console-log", re.compile(r"\bconsole\.(log|debug|warn)\s*\(")),
         ("placeholder", _PLACEHOLDER_RE),
+        ("starter-residue", re.compile(r"\b(vite|react \+ vite|seeded template|lorem ipsum|template starter)\b", re.IGNORECASE)),
+        ("inline-style", re.compile(r"\bstyle=\{\{")),
         ("unlabeled-button", re.compile(r"<button(?![^>]*(aria-label|aria-labelledby|title=|>[^<A-Za-z0-9]*[A-Za-z0-9]))", re.IGNORECASE)),
         ("dangerous-html", re.compile(r"dangerouslySetInnerHTML")),
         ("any-type", re.compile(r":\s*any\b|as\s+any\b")),
@@ -357,6 +403,29 @@ def _quality_signals_for_file(rel: str, text: str) -> tuple[dict[str, bool], lis
             risks.append({"path": rel, "line": line, "risk": risk, "text": _line_at(text, line)})
             if len(risks) >= 24:
                 return signals, risks
+    for match in re.finditer(r"(?<![-\w])(?:min-)?width\s*:\s*(\d{3,4})px", text, re.IGNORECASE):
+        try:
+            width = int(match.group(1))
+        except ValueError:
+            continue
+        if width >= 390:
+            line = _line_number(text, match.start())
+            risks.append({"path": rel, "line": line, "risk": "mobile-overflow-width", "text": _line_at(text, line)})
+            if len(risks) >= 24:
+                return signals, risks
+    for risk, pattern in (
+        ("mobile-overflow-100vw", re.compile(r"(?<![-\w])width\s*:\s*100vw\b", re.IGNORECASE)),
+        ("mobile-overflow-max-content", re.compile(r"(?<![-\w])(?:min-)?width\s*:\s*(?:max-content|fit-content)\b", re.IGNORECASE)),
+        ("mobile-overflow-nowrap", re.compile(r"\bwhite-space\s*:\s*nowrap\b", re.IGNORECASE)),
+    ):
+        for match in pattern.finditer(text):
+            line = _line_number(text, match.start())
+            risks.append({"path": rel, "line": line, "risk": risk, "text": _line_at(text, line)})
+            if len(risks) >= 24:
+                return signals, risks
+    emoji_count = _count_emoji_chars(text)
+    if emoji_count > 4:
+        risks.append({"path": rel, "line": 1, "risk": "emoji-heavy-ui", "text": f"{emoji_count} emoji-like characters detected"})
     if "onclick=" in lowered and rel.endswith(".html"):
         risks.append({"path": rel, "line": 1, "risk": "inline-handler", "text": "HTML contains inline event handlers"})
     return signals, risks
@@ -654,11 +723,104 @@ def execute_local_tool(ws_root: Path, project_dir: Path, *, tool_name: str, argu
                 "files_scanned": scanned,
                 "signals": aggregate,
                 "missing_signals": [key for key, value in aggregate.items() if not value],
+                "risk_counts": dict(Counter(str(item.get("risk") or "unknown") for item in risks)),
                 "risks": risks[:80],
             }
             text = json.dumps(payload, ensure_ascii=False, indent=2)
             duration_ms = int((time.perf_counter() - started) * 1000)
             return LocalToolCallResult(tool=name, arguments=args, ok=True, text=text[:14000], raw=payload, duration_ms=duration_ms)
+
+        if name == "memory_overview":
+            from api.agent_memory import get_agent_memory_overview, get_agent_memory_chunks_table_status, has_supabase
+
+            req_root = str(args.get("project_root") or ".").strip() or "."
+            overview = get_agent_memory_overview(ws_root, project_root=req_root)
+            supabase_enabled = has_supabase()
+            supabase_rag_status = get_agent_memory_chunks_table_status() if supabase_enabled else "unconfigured"
+            payload = {
+                "project_root": req_root,
+                "session_entries": overview.session_entries,
+                "project_entries": overview.project_entries,
+                "latest_session_ts": overview.latest_session_ts,
+                "latest_project_ts": overview.latest_project_ts,
+                "has_project_profile": overview.has_project_profile,
+                "project_profile_updated_at": overview.project_profile_updated_at,
+                "retrieval_backend": "supabase-hash-vector-chunks" if supabase_rag_status == "ready" else "local-hash-vector-chunks",
+                "supabase_enabled": supabase_enabled,
+                "supabase_rag_status": supabase_rag_status,
+            }
+            text = json.dumps(payload, ensure_ascii=False, indent=2)
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            return LocalToolCallResult(tool=name, arguments=args, ok=True, text=text[:8000], raw=payload, duration_ms=duration_ms)
+
+        if name == "mcp_status":
+            from api.agent_mcp import discover_mcp_servers, list_mcp_tools
+
+            req_root = str(args.get("project_root") or ".").strip() or "."
+            include_live_tools = bool(args.get("include_live_tools") or False)
+            proj = _safe_project_dir(ws_root, req_root)
+            warnings: list[str] = []
+            servers = discover_mcp_servers(ws_root, proj, warnings=warnings)
+            tool_catalog = list_mcp_tools(ws_root, proj, refresh=False, warnings=warnings) if include_live_tools and servers else {}
+            payload = {
+                "project_root": req_root,
+                "servers": [
+                    {
+                        "name": server.name,
+                        "transport": server.transport,
+                        "target": server.target,
+                        "tools_declared": list(server.tools or [])[:24],
+                        "source": server.source,
+                        "live_tools": [
+                            {"name": tool.name, "description": tool.description[:180]}
+                            for tool in (tool_catalog.get(server.name) or [])[:24]
+                        ],
+                    }
+                    for server in servers
+                ],
+                "warnings": warnings[:8],
+            }
+            text = json.dumps(payload, ensure_ascii=False, indent=2)
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            return LocalToolCallResult(tool=name, arguments=args, ok=True, text=text[:10000], raw=payload, duration_ms=duration_ms)
+
+        if name == "preview_capabilities":
+            req_root = str(args.get("project_root") or ".").strip() or "."
+            proj = _safe_project_dir(ws_root, req_root)
+            package_json = _read_package_json(proj)
+            scripts = package_json.get("scripts") if isinstance(package_json.get("scripts"), dict) else {}
+            preview_scripts = [name for name in ["dev", "preview", "start", "build"] if name in scripts]
+            entries = [
+                rel
+                for rel in ["index.html", "src/main.tsx", "src/main.jsx", "src/App.tsx", "src/App.jsx", "vite.config.ts", "vite.config.js"]
+                if (proj / rel).exists()
+            ]
+            deps = {}
+            for bucket in ("dependencies", "devDependencies"):
+                raw = package_json.get(bucket)
+                if isinstance(raw, dict):
+                    deps.update(raw)
+            dep_names = {str(name) for name in deps.keys()}
+            payload = {
+                "project_root": req_root,
+                "has_package_json": bool(package_json),
+                "package_manager": _package_manager_hint(proj, package_json),
+                "preview_scripts": preview_scripts,
+                "scripts": scripts,
+                "entry_candidates": entries,
+                "has_static_index": (proj / "index.html").exists(),
+                "likely_vite": "vite" in dep_names or (proj / "vite.config.ts").exists() or (proj / "vite.config.js").exists(),
+                "likely_next": "next" in dep_names,
+                "can_attempt_preview": bool(preview_scripts or (proj / "index.html").exists()),
+                "recommended_action": (
+                    "Use Appora preview start/audit after file changes."
+                    if preview_scripts or (proj / "index.html").exists()
+                    else "No obvious preview surface yet; create package scripts or index.html first."
+                ),
+            }
+            text = json.dumps(payload, ensure_ascii=False, indent=2)
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            return LocalToolCallResult(tool=name, arguments=args, ok=True, text=text[:10000], raw=payload, duration_ms=duration_ms)
 
         raise RuntimeError(f"Unknown local tool: {name}")
 

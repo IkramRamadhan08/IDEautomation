@@ -122,6 +122,10 @@ try {
       .map((node) => `${cssPath(node)} "${clean(node.textContent || node.getAttribute('value') || '').slice(0, 60)}"`)
       .filter(Boolean)
       .slice(0, 8);
+    const productSurfaceNodes = Array.from(document.querySelectorAll(
+      '[class*="dashboard" i], [class*="panel" i], [class*="metric" i], [class*="chart" i], [class*="table" i], [class*="workflow" i], [class*="preview" i], table, [role="table"]'
+    ));
+    const cardLikeNodes = Array.from(document.querySelectorAll('article, [class*="card" i], [class*="panel" i], [class*="tile" i]'));
 
     return {
       title: clean(document.title || ''),
@@ -133,6 +137,11 @@ try {
       buttons: buttonText,
       links: linkText,
       form_count: document.querySelectorAll('form').length,
+      section_count: document.querySelectorAll('section, article').length,
+      nav_count: document.querySelectorAll('nav, [role="navigation"]').length,
+      table_count: document.querySelectorAll('table, [role="table"]').length,
+      card_like_count: cardLikeNodes.length,
+      product_surface_count: productSurfaceNodes.length,
       input_count: formFields.length,
       labeled_input_count: labeledInputCount,
       landmark_count: document.querySelectorAll('main, nav, header, footer, aside, section[aria-label], [role="main"], [role="navigation"], [role="contentinfo"]').length,

@@ -181,6 +181,7 @@ Rules:
 - `patches` must be standard unified diff hunks and must apply cleanly to the provided file content. Do not use snippets.
 - The runtime target is Vercel serverless + Supabase. Direct file changes are durable, and shell actions are available when project tooling, installs, validation, or inspection are useful.
 - The user accepts terminal risk. Use shell actions when they materially help the build, while keeping commands project-scoped unless the user asks otherwise.
+- Do not skip build/test/validation because of the guarded-autonomy allowlist. Return the needed project-scoped shell action or a safer equivalent; the backend harness decides whether it can run.
 - Respect the provided mode/context block. If it says hybrid/IDE mode, keep the scope surgical and preserve the existing architecture.
 - If current content is marked as coming from the editor buffer, trust it over on-disk file contents.
 - When the request is UI/UX/product polish, improve hierarchy, spacing, consistency, copy clarity, visual rhythm, responsiveness, and accessible states.

@@ -60,6 +60,9 @@ type BackendExecutionResult = {
   auto_execute?: boolean;
   skipped?: boolean;
   reason?: unknown;
+  ok?: unknown;
+  completion_report?: unknown;
+  failure_analysis?: unknown;
   steps?: Array<{
     id?: unknown;
     kind?: unknown;
@@ -157,8 +160,11 @@ const PHASE_LABELS: Record<string, string> = {
   executing_shell: "Backend harness menjalankan command…",
   executing_validation: "Backend harness memvalidasi hasil…",
   executing_preview_audit: "Backend harness mengaudit preview…",
+  verifier_repair: "Verifier gagal, agent memperbaiki output…",
   autonomous_loop: "Agent lanjut autonomous pass…",
   diffing: "Lagi nyusun patch yang rapi…",
+  repair_stop: "Repair budget habis, agent mencatat blocker…",
+  completion: "Agent menyusun completion report…",
 };
 
 function mergeBuffersWithChanges(currentBuffers: Record<string, FileBuffer>, changes: AgentChange[]) {
@@ -471,8 +477,11 @@ const LIVE_LEDGER_PHASES: Record<string, { phase: string; kind: string; label: s
   executing_shell: { phase: "run", kind: "shell", label: "Backend shell harness" },
   executing_validation: { phase: "verify", kind: "validation", label: "Backend validation" },
   executing_preview_audit: { phase: "inspect", kind: "preview_audit", label: "Backend preview audit" },
+  verifier_repair: { phase: "repair", kind: "verifier_repair", label: "Verifier repair" },
   executing_repair: { phase: "repair", kind: "repair", label: "Backend repair pass" },
   executing_replay: { phase: "verify", kind: "replay", label: "Backend repair replay" },
+  repair_stop: { phase: "blocked", kind: "repair_stop", label: "Backend repair budget" },
+  completion: { phase: "complete", kind: "completion", label: "Backend completion report" },
   autonomous_loop: { phase: "repair", kind: "autonomous_loop", label: "Autonomous continuation" },
 };
 
@@ -1680,6 +1689,13 @@ export async function runAgentWorkflow({
     let changes: AgentChange[] = res.changes || [];
     let actions: AgentAction[] = res.actions || [];
     const backendAutoExecuted = res.execution?.auto_execute === true && !res.execution?.skipped;
+    const backendCompletionReport = backendAutoExecuted && res.execution?.completion_report && typeof res.execution.completion_report === "object"
+      ? res.execution.completion_report as Record<string, unknown>
+      : null;
+    const backendExecutionBlocked = backendAutoExecuted && (
+      res.execution?.ok === false
+      || backendCompletionReport?.state === "blocked"
+    );
     const resolvedIntent = res.intent || inputIntent;
 
     pushAgentLiveItem({
@@ -1824,7 +1840,7 @@ export async function runAgentWorkflow({
 
     if ((resolvedIntent.kind === "conversation" || resolvedIntent.kind === "inspection") && changes.length === 0 && actions.length === 0) {
       // pure read-only run, nothing else to do
-    } else if (needsRepair() && (changes.length > 0 || actions.length > 0)) {
+    } else if (!backendAutoExecuted && needsRepair() && (changes.length > 0 || actions.length > 0)) {
       let repairedPreviewUrl = auditedPreviewUrl;
 
       for (let pass = 1; pass <= maxRepairPasses && needsRepair(); pass += 1) {
@@ -1948,6 +1964,12 @@ export async function runAgentWorkflow({
               : "Validation still failing";
         finalToast = { kind: "warning", message: "Perubahan diterapkan, tapi masih ada temuan command/verifier/audit yang perlu dicek" };
       }
+    } else if (backendExecutionBlocked) {
+      finalStatus = "Backend execution blocked after autonomous repair loop";
+      finalToast = {
+        kind: "warning",
+        message: "Agent sudah eksekusi, tapi backend masih nemu blocker",
+      };
     } else if (!hasValidationIssues && !hasPreviewIssues && (validation || previewAudit)) {
       finalStatus = previewAudit ? "Agent task finished, validated, and preview-audited" : "Agent task finished and validated";
       finalToast = {

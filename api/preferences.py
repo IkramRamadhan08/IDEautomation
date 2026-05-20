@@ -34,6 +34,7 @@ class ProjectPreferencesRecord(BaseModel):
     build_mode: str | None = None
     preview_entry: str | None = None
     default_prompt_style: str | None = None
+    agent_access_mode: str | None = None
 
 
 class UserPreferencesUpdateReq(BaseModel):
@@ -54,6 +55,7 @@ class ProjectPreferencesUpdateReq(BaseModel):
     build_mode: str | None = None
     preview_entry: str | None = None
     default_prompt_style: str | None = None
+    agent_access_mode: str | None = None
 
 
 class UserPreferencesResp(BaseModel):
@@ -152,7 +154,14 @@ def get_project_preferences(*, project_id: str) -> ProjectPreferencesRecord:
     res = client.table(PROJECT_PREFERENCES_TABLE).select("*").eq("project_id", project_id).limit(1).execute()
     data = getattr(res, "data", None) or []
     if data:
-        return ProjectPreferencesRecord(**data[0])
+        row = data[0] if isinstance(data[0], dict) else {}
+        return ProjectPreferencesRecord(
+            project_id=project_id,
+            build_mode=row.get("build_mode"),
+            preview_entry=row.get("preview_entry"),
+            default_prompt_style=row.get("default_prompt_style"),
+            agent_access_mode=row.get("agent_access_mode"),
+        )
     return ProjectPreferencesRecord(project_id=project_id)
 
 
@@ -163,14 +172,29 @@ def upsert_project_preferences(*, project_id: str, req: ProjectPreferencesUpdate
             build_mode=req.build_mode,
             preview_entry=req.preview_entry,
             default_prompt_style=req.default_prompt_style,
+            agent_access_mode=req.agent_access_mode,
         )
     client = _require_supabase()
     payload = {
         "project_id": project_id,
         **req.model_dump(),
     }
-    res = client.table(PROJECT_PREFERENCES_TABLE).upsert(payload).execute()
+    try:
+        res = client.table(PROJECT_PREFERENCES_TABLE).upsert(payload).execute()
+    except Exception as exc:
+        if "PGRST204" not in str(exc) or "agent_access_mode" not in str(exc):
+            raise
+        fallback_payload = {key: value for key, value in payload.items() if key != "agent_access_mode"}
+        res = client.table(PROJECT_PREFERENCES_TABLE).upsert(fallback_payload).execute()
+        payload = fallback_payload
     data = getattr(res, "data", None) or []
     if not data:
         raise HTTPException(500, "Failed to save project preferences")
-    return ProjectPreferencesRecord(**data[0])
+    row = data[0] if isinstance(data[0], dict) else payload
+    return ProjectPreferencesRecord(
+        project_id=project_id,
+        build_mode=row.get("build_mode"),
+        preview_entry=row.get("preview_entry"),
+        default_prompt_style=row.get("default_prompt_style"),
+        agent_access_mode=row.get("agent_access_mode") or req.agent_access_mode,
+    )

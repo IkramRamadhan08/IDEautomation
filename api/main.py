@@ -48,11 +48,17 @@ from api.auth_identity import CURRENT_REQUEST_USER, resolve_request_user, saniti
 from api.oauth_runtime import CURRENT_PROFILE_ID
 from api.projects_router import build_projects_router
 from api.preferences_router import build_preferences_router
+from api.preferences import get_project_preferences
 from api.settings_router import build_settings_router
 from api.fs import list_tree, read_text, write_text, diff_text, safe_join
 from api.agent_mcp import discover_mcp_servers, list_mcp_tools
 from api.agent_memory import get_agent_memory_overview, sync_project_docs_to_supabase
-from api.agent_runtime import _remember_project_work_state, run_agent_pipeline
+from api.agent_runtime import (
+    APPORA_AUTO_SAFE_SHELL_COMMANDS,
+    APPORA_BLOCKED_OR_APPROVAL_SHELL_COMMANDS,
+    _remember_project_work_state,
+    run_agent_pipeline,
+)
 from api.agent_skills import detect_project_stack
 from api.agent_tools import list_local_tools
 
@@ -808,6 +814,50 @@ def _clean_html_text(fragment: str) -> str:
     return re.sub(r"\s+", " ", unescape(text)).strip()
 
 
+def _count_emoji_chars(text: str) -> int:
+    count = 0
+    for char in str(text or ""):
+        code = ord(char)
+        if (
+            0x1F300 <= code <= 0x1FAFF
+            or 0x2600 <= code <= 0x27BF
+            or 0x2300 <= code <= 0x23FF
+        ):
+            count += 1
+    return count
+
+
+_STARTER_RESIDUE_RE = re.compile(r"\b(vite|react \+ vite|seeded template|lorem ipsum|template starter|placeholder)\b", re.IGNORECASE)
+_GENERIC_SAAS_COPY_RE = re.compile(
+    r"\b(streamline|seamless|reimagined|next[- ]generation|supercharge|unlock|scale faster|all[- ]in[- ]one|boost productivity|transform your workflow)\b",
+    re.IGNORECASE,
+)
+
+
+def _starter_residue_terms(text: str, *, limit: int = 8) -> list[str]:
+    terms: list[str] = []
+    for match in _STARTER_RESIDUE_RE.finditer(str(text or "")):
+        term = match.group(0)
+        if term.lower() in {item.lower() for item in terms}:
+            continue
+        terms.append(term)
+        if len(terms) >= limit:
+            break
+    return terms
+
+
+def _generic_copy_terms(text: str, *, limit: int = 8) -> list[str]:
+    terms: list[str] = []
+    for match in _GENERIC_SAAS_COPY_RE.finditer(str(text or "")):
+        term = match.group(0)
+        if term.lower() in {item.lower() for item in terms}:
+            continue
+        terms.append(term)
+        if len(terms) >= limit:
+            break
+    return terms
+
+
 def _extract_text_matches(pattern: str, html: str, limit: int) -> list[str]:
     values: list[str] = []
     for match in re.findall(pattern, html, flags=re.IGNORECASE | re.DOTALL):
@@ -819,7 +869,7 @@ def _extract_text_matches(pattern: str, html: str, limit: int) -> list[str]:
     return values
 
 
-def _scan_project_quality_signals(project_dir: Path) -> dict[str, bool]:
+def _scan_project_quality_signals(project_dir: Path) -> dict[str, object]:
     patterns = {
         "responsive": [r"@media\b", r"\bsm:", r"\bmd:", r"\blg:", r"clamp\(", r"minmax\(", r"grid-template", r"useMediaQuery", r"matchMedia\("],
         "loading": [r"\bloading\b", r"isLoading", r"pending", r"skeleton", r"spinner"],
@@ -828,6 +878,15 @@ def _scan_project_quality_signals(project_dir: Path) -> dict[str, bool]:
         "labels": [r"<label\b", r"htmlFor=", r"aria-label=", r"aria-labelledby="],
     }
     hits = {key: False for key in patterns}
+    metrics: dict[str, int] = {
+        "inline_style_count": 0,
+        "any_cast_count": 0,
+        "emoji_count": 0,
+        "starter_residue_count": 0,
+        "layout_overflow_risk_count": 0,
+        "generic_copy_count": 0,
+    }
+    layout_overflow_risks: list[str] = []
     candidates: list[Path] = []
     for rel in ("index.html",):
         path = project_dir / rel
@@ -849,12 +908,30 @@ def _scan_project_quality_signals(project_dir: Path) -> dict[str, bool]:
                 continue
             if any(re.search(variant, text, flags=re.IGNORECASE) for variant in variants):
                 hits[key] = True
-        if all(hits.values()):
+        metrics["inline_style_count"] += len(re.findall(r"\bstyle=\{\{", text))
+        metrics["any_cast_count"] += len(re.findall(r"\bas\s+any\b|:\s*any\b", text))
+        metrics["emoji_count"] += _count_emoji_chars(text)
+        metrics["starter_residue_count"] += len(_starter_residue_terms(text, limit=20))
+        metrics["generic_copy_count"] += len(_generic_copy_terms(text, limit=20))
+        for match in re.finditer(r"(?<![-\w])(?:min-)?width\s*:\s*(\d{3,4})px|(?<![-\w])width\s*:\s*100vw\b|(?<![-\w])(?:min-)?width\s*:\s*(?:max-content|fit-content)\b|\bwhite-space\s*:\s*nowrap\b", text, re.IGNORECASE):
+            width = match.group(1)
+            if width:
+                try:
+                    if int(width) < 390:
+                        continue
+                except ValueError:
+                    continue
+            metrics["layout_overflow_risk_count"] += 1
+            if len(layout_overflow_risks) < 8:
+                line = text.count("\n", 0, max(0, match.start())) + 1
+                snippet = next((item.strip() for item in text.splitlines()[max(0, line - 1):line] if item.strip()), "")
+                layout_overflow_risks.append(f"{path.relative_to(project_dir).as_posix()}:{line}: {snippet[:140]}")
+        if all(hits.values()) and all(value > 0 for value in metrics.values()):
             break
-    return hits
+    return {**hits, **metrics, "layout_overflow_risks": layout_overflow_risks}
 
 
-def _build_quality_checks(snapshot: dict, *, project_signals: dict[str, bool] | None = None) -> list[dict[str, str | bool]]:
+def _build_quality_checks(snapshot: dict, *, project_signals: dict[str, object] | None = None) -> list[dict[str, str | bool]]:
     project_signals = project_signals or {}
     viewport_meta = bool(snapshot.get("viewport_meta"))
     document_lang = str(snapshot.get("document_lang") or "").strip()
@@ -868,6 +945,27 @@ def _build_quality_checks(snapshot: dict, *, project_signals: dict[str, bool] | 
     mobile_text_overflow_nodes = [str(item) for item in (snapshot.get("mobile_text_overflow_nodes") or snapshot.get("text_overflow_nodes") or []) if str(item).strip()]
     broken_images = [str(item) for item in (snapshot.get("broken_images") or []) if str(item).strip()]
     fixed_overlays = [str(item) for item in (snapshot.get("mobile_fixed_overlays") or snapshot.get("fixed_overlays") or []) if str(item).strip()]
+    section_count = max(0, int(snapshot.get("section_count") or 0))
+    card_like_count = max(0, int(snapshot.get("card_like_count") or 0))
+    product_surface_count = max(0, int(snapshot.get("product_surface_count") or 0))
+    table_count = max(0, int(snapshot.get("table_count") or 0))
+    rendered_text = " ".join(
+        [
+            str(snapshot.get("title") or ""),
+            " ".join(str(item) for item in (snapshot.get("headings") or [])),
+            " ".join(str(item) for item in (snapshot.get("subheadings") or [])),
+            " ".join(str(item) for item in (snapshot.get("buttons") or [])),
+            " ".join(str(item) for item in (snapshot.get("links") or [])),
+            str(snapshot.get("excerpt") or ""),
+        ]
+    )
+    starter_terms = _starter_residue_terms(rendered_text)
+    rendered_emoji_count = _count_emoji_chars(rendered_text)
+    inline_style_count = max(0, int(project_signals.get("inline_style_count") or 0))
+    any_cast_count = max(0, int(project_signals.get("any_cast_count") or 0))
+    source_emoji_count = max(0, int(project_signals.get("emoji_count") or 0))
+    layout_overflow_risk_count = max(0, int(project_signals.get("layout_overflow_risk_count") or 0))
+    generic_copy_count = len(_generic_copy_terms(rendered_text)) + max(0, int(project_signals.get("generic_copy_count") or 0))
     checks: list[dict[str, str | bool]] = []
     checks.append({
         "id": "responsive-foundation",
@@ -930,6 +1028,52 @@ def _build_quality_checks(snapshot: dict, *, project_signals: dict[str, bool] | 
         "detail": "Tidak ada overlay fixed besar yang terlihat memblokir viewport." if not fixed_overlays else f"Overlay fixed besar terdeteksi: {', '.join(fixed_overlays[:3])}.",
     })
     checks.append({
+        "id": "starter-residue",
+        "label": "Starter residue",
+        "ok": len(starter_terms) == 0,
+        "detail": "Tidak ada sisa branding/template starter yang terlihat." if not starter_terms else f"Sisa template/starter masih terlihat: {', '.join(starter_terms[:4])}.",
+    })
+    checks.append({
+        "id": "source-type-discipline",
+        "label": "Type discipline",
+        "ok": any_cast_count == 0,
+        "detail": "Tidak ada `as any`/tipe any yang ke-detect di source." if any_cast_count == 0 else f"Masih ada {any_cast_count} penggunaan any/as any di source.",
+    })
+    checks.append({
+        "id": "source-style-discipline",
+        "label": "Style discipline",
+        "ok": inline_style_count <= 8,
+        "detail": "Inline style masih wajar atau styling sudah dipindah ke class/CSS." if inline_style_count <= 8 else f"Inline style terlalu banyak ({inline_style_count}); pindahkan styling berulang ke CSS/class.",
+    })
+    checks.append({
+        "id": "emoji-polish",
+        "label": "Emoji polish",
+        "ok": rendered_emoji_count <= 2 and source_emoji_count <= 4,
+        "detail": "Emoji decoration tidak dominan." if (rendered_emoji_count <= 2 and source_emoji_count <= 4) else f"Emoji decoration terlalu dominan (rendered={rendered_emoji_count}, source={source_emoji_count}).",
+    })
+    checks.append({
+        "id": "source-overflow-risk",
+        "label": "Overflow-prone CSS",
+        "ok": layout_overflow_risk_count == 0,
+        "detail": "Tidak ada pola CSS yang sering bikin overflow mobile." if layout_overflow_risk_count == 0 else f"Ada {layout_overflow_risk_count} pola CSS rawan overflow mobile seperti min-width besar, 100vw, max-content, atau nowrap.",
+    })
+    checks.append({
+        "id": "product-depth",
+        "label": "Product depth",
+        "ok": section_count >= 5 and (product_surface_count >= 2 or table_count >= 1 or card_like_count >= 4),
+        "detail": (
+            "Struktur halaman punya kedalaman produk: section cukup, surface/mock/card/dashboard terlihat."
+            if section_count >= 5 and (product_surface_count >= 2 or table_count >= 1 or card_like_count >= 4)
+            else f"Kedalaman produk masih tipis (sections={section_count}, surfaces={product_surface_count}, cards={card_like_count}, tables={table_count})."
+        ),
+    })
+    checks.append({
+        "id": "copy-specificity",
+        "label": "Copy specificity",
+        "ok": generic_copy_count <= 2,
+        "detail": "Copy tidak didominasi frasa SaaS generik." if generic_copy_count <= 2 else f"Copy masih memakai terlalu banyak frasa SaaS generik ({generic_copy_count}).",
+    })
+    checks.append({
         "id": "state-loading",
         "label": "Loading state",
         "ok": bool(project_signals.get("loading")),
@@ -957,7 +1101,7 @@ def _build_preview_audit_result(
     audit_mode: str,
     max_excerpt_chars: int = 800,
     runtime_warnings: list[str] | None = None,
-    project_signals: dict[str, bool] | None = None,
+    project_signals: dict[str, object] | None = None,
 ) -> dict:
     def list_field(name: str, limit: int = 8, chars: int = 180) -> list[str]:
         return [str(item).strip()[:chars] for item in (snapshot.get(name) or []) if str(item).strip()][:limit]
@@ -971,6 +1115,10 @@ def _build_preview_audit_result(
     excerpt = str(snapshot.get("excerpt") or "").strip()[:max_excerpt_chars]
     form_count = max(0, int(snapshot.get("form_count") or 0))
     input_count = max(0, int(snapshot.get("input_count") or 0))
+    section_count = max(0, int(snapshot.get("section_count") or 0))
+    card_like_count = max(0, int(snapshot.get("card_like_count") or 0))
+    product_surface_count = max(0, int(snapshot.get("product_surface_count") or 0))
+    table_count = max(0, int(snapshot.get("table_count") or 0))
     word_count = max(0, int(snapshot.get("word_count") or 0))
     image_count = max(0, int(snapshot.get("image_count") or 0))
     images_missing_alt = max(0, int(snapshot.get("images_missing_alt") or 0))
@@ -984,6 +1132,16 @@ def _build_preview_audit_result(
     mobile_fixed_overlays = list_field("mobile_fixed_overlays", 4)
     console_errors = [str(item).strip()[:240] for item in (snapshot.get("console_errors") or []) if str(item).strip()][:8]
     page_errors = [str(item).strip()[:240] for item in (snapshot.get("page_errors") or []) if str(item).strip()][:6]
+    rendered_text = " ".join([title, " ".join(headings), " ".join(subheadings), " ".join(buttons), " ".join(links), excerpt])
+    starter_terms = _starter_residue_terms(rendered_text)
+    rendered_emoji_count = _count_emoji_chars(rendered_text)
+    source_emoji_count = max(0, int((project_signals or {}).get("emoji_count") or 0))
+    inline_style_count = max(0, int((project_signals or {}).get("inline_style_count") or 0))
+    any_cast_count = max(0, int((project_signals or {}).get("any_cast_count") or 0))
+    layout_overflow_risk_count = max(0, int((project_signals or {}).get("layout_overflow_risk_count") or 0))
+    layout_overflow_risks = [str(item).strip()[:180] for item in ((project_signals or {}).get("layout_overflow_risks") or []) if str(item).strip()][:6]
+    generic_copy_terms = _generic_copy_terms(rendered_text)
+    generic_copy_count = len(generic_copy_terms) + max(0, int((project_signals or {}).get("generic_copy_count") or 0))
     quality_checks = _build_quality_checks(snapshot, project_signals=project_signals)
     quality_failures = [check for check in quality_checks if not check.get("ok")]
     issue_details: list[dict[str, str]] = []
@@ -1037,6 +1195,35 @@ def _build_preview_audit_result(
         detail = "Preview has large fixed overlay(s) that may block interaction."
         issues.append(detail)
         add_issue("blocking", "responsive", detail, "Pastikan fixed layer tidak menutup konten/aksi penting di mobile.")
+    if starter_terms:
+        detail = f"Preview still exposes starter/template residue: {', '.join(starter_terms[:4])}."
+        issues.append(detail)
+        add_issue("blocking", "production-polish", detail, "Hapus branding/footer/copy starter seperti Vite, seeded template, lorem ipsum, atau placeholder.")
+    if any_cast_count:
+        detail = f"Source still contains {any_cast_count} loose any/as any usage(s)."
+        issues.append(detail)
+        add_issue("warning", "source-quality", detail, "Ganti dengan tipe data eksplisit supaya hasil lebih production-ready.")
+    if inline_style_count > 8:
+        detail = f"Source contains {inline_style_count} inline style block(s), which makes the UI harder to polish consistently."
+        issues.append(detail)
+        add_issue("warning", "source-quality", detail, "Pindahkan styling berulang ke CSS class, token, atau component variants.")
+    if rendered_emoji_count > 2 or source_emoji_count > 4:
+        detail = f"UI relies heavily on emoji decoration (rendered={rendered_emoji_count}, source={source_emoji_count})."
+        issues.append(detail)
+        add_issue("warning", "visual-polish", detail, "Untuk UI profesional, pakai ikon library/CSS/typographic hierarchy daripada emoji dekoratif.")
+    if layout_overflow_risk_count:
+        detail = f"Source has {layout_overflow_risk_count} CSS pattern(s) commonly causing mobile overflow."
+        issues.append(detail)
+        suffix = f" Examples: {' | '.join(layout_overflow_risks[:3])}" if layout_overflow_risks else ""
+        add_issue("warning", "responsive", f"{detail}{suffix}", "Ganti fixed/min-width besar, 100vw, max-content, atau nowrap dengan max-width:100%, overflow wrappers, dan responsive grid.")
+    if section_count < 5 or (product_surface_count < 2 and table_count < 1 and card_like_count < 4):
+        detail = f"Product surface feels thin for a professional build (sections={section_count}, surfaces={product_surface_count}, cards={card_like_count}, tables={table_count})."
+        issues.append(detail)
+        add_issue("warning", "product-depth", detail, "Tambahkan product mock/workflow/security/pricing/detail section yang spesifik dan terlihat usable.")
+    if generic_copy_count > 2:
+        detail = f"Copy uses generic SaaS phrasing too often ({generic_copy_count} hit(s): {', '.join(generic_copy_terms[:4])})."
+        issues.append(detail)
+        add_issue("warning", "copy-specificity", detail, "Ganti frasa generik dengan detail domain, metrik, workflow, dan manfaat yang konkret.")
     if page_errors:
         detail = f"Preview threw {len(page_errors)} runtime browser error(s)."
         issues.append(detail)
@@ -1050,7 +1237,7 @@ def _build_preview_audit_result(
         issues.append(detail)
         for check in quality_failures:
             check_id = str(check.get("id") or "")
-            severity = "blocking" if check_id in {"responsive-overflow", "a11y-interactive-labels", "mobile-text-fit", "image-loads", "blocking-overlays"} else "warning"
+            severity = "blocking" if check_id in {"responsive-overflow", "a11y-interactive-labels", "mobile-text-fit", "image-loads", "blocking-overlays", "starter-residue"} else "warning"
             add_issue(severity, check_id or "quality", str(check.get("detail") or detail), "Perbaiki area quality check terkait.")
 
     blocking_count = sum(1 for issue in issue_details if issue.get("severity") == "blocking")
@@ -1063,6 +1250,8 @@ def _build_preview_audit_result(
         f"buttons={len(buttons)}",
         f"links={len(links)}",
         f"forms={form_count}",
+        f"sections={section_count}",
+        f"surfaces={product_surface_count}",
         f"interactive={interactive_count}",
         f"words={word_count}",
         f"blocking={blocking_count}",
@@ -1080,11 +1269,23 @@ def _build_preview_audit_result(
         "mobile_overflow_x": bool(snapshot.get("mobile_overflow_x")),
         "word_count": word_count,
         "interactive_count": interactive_count,
+        "section_count": section_count,
+        "card_like_count": card_like_count,
+        "product_surface_count": product_surface_count,
+        "table_count": table_count,
         "button_labels": buttons[:6],
         "link_labels": links[:6],
         "top_blockers": [item for item in issue_details if item.get("severity") == "blocking"][:6],
         "top_warnings": [item for item in issue_details if item.get("severity") == "warning"][:6],
         "runtime_errors": [*page_errors, *console_errors][:8],
+        "starter_residue": starter_terms,
+        "inline_style_count": inline_style_count,
+        "any_cast_count": any_cast_count,
+        "layout_overflow_risk_count": layout_overflow_risk_count,
+        "layout_overflow_risks": layout_overflow_risks,
+        "generic_copy_count": generic_copy_count,
+        "generic_copy_terms": generic_copy_terms,
+        "emoji_count": {"rendered": rendered_emoji_count, "source": source_emoji_count},
         "excerpt": excerpt[:600],
     }
     repair_brief_parts = [
@@ -1092,7 +1293,11 @@ def _build_preview_audit_result(
         f"Title: {title or '(missing)'}; H1: {headings[0] if headings else '(missing)'}.",
     ]
     if bool(snapshot.get("mobile_overflow_x")):
-        repair_brief_parts.append("Mobile viewport has horizontal overflow.")
+        mobile_scroll = snapshot.get("mobile_scroll_width")
+        mobile_width = snapshot.get("mobile_viewport_width")
+        repair_brief_parts.append(f"Mobile viewport has horizontal overflow (scroll_width={mobile_scroll}, viewport_width={mobile_width}).")
+    if layout_overflow_risks:
+        repair_brief_parts.append("Overflow-prone source patterns: " + " | ".join(layout_overflow_risks[:3]))
     if page_errors or console_errors:
         repair_brief_parts.append(f"Runtime messages: {' | '.join([*page_errors, *console_errors][:3])}")
     if issue_details:
@@ -1112,6 +1317,10 @@ def _build_preview_audit_result(
         "buttons": buttons,
         "links": links,
         "form_count": form_count,
+        "section_count": section_count,
+        "card_like_count": card_like_count,
+        "product_surface_count": product_surface_count,
+        "table_count": table_count,
         "input_count": input_count,
         "interactive_count": interactive_count,
         "word_count": word_count,
@@ -1159,6 +1368,8 @@ def _extract_preview_snapshot_from_html(html: str, max_excerpt_chars: int = 800)
     excerpt = body_text[:max_excerpt_chars]
 
     image_tags = re.findall(r"<img\b[^>]*>", html, flags=re.IGNORECASE)
+    class_text = " ".join(re.findall(r"class\s*=\s*['\"]([^'\"]+)['\"]", html, flags=re.IGNORECASE | re.DOTALL))
+    product_surface_count = len(re.findall(r"\b(dashboard|panel|metric|chart|table|workflow|preview)\b", class_text, flags=re.IGNORECASE))
     images_missing_alt = 0
     for tag in image_tags:
         alt_match = re.search(r"alt\s*=\s*['\"](.*?)['\"]", tag, flags=re.IGNORECASE | re.DOTALL)
@@ -1182,6 +1393,10 @@ def _extract_preview_snapshot_from_html(html: str, max_excerpt_chars: int = 800)
         "buttons": buttons,
         "links": links,
         "form_count": len(re.findall(r"<form\b", html, flags=re.IGNORECASE)),
+        "section_count": len(re.findall(r"<(section|article)\b", html, flags=re.IGNORECASE)),
+        "card_like_count": len(re.findall(r"<article\b|\b(card|panel|tile)\b", html + " " + class_text, flags=re.IGNORECASE)),
+        "product_surface_count": product_surface_count + len(re.findall(r"<table\b|role=['\"]table['\"]", html, flags=re.IGNORECASE)),
+        "table_count": len(re.findall(r"<table\b|role=['\"]table['\"]", html, flags=re.IGNORECASE)),
         "input_count": len(re.findall(r"<(input|textarea|select)\b", html, flags=re.IGNORECASE)),
         "labeled_input_count": labeled_input_count,
         "landmark_count": len(re.findall(r"<(main|nav|header|footer|aside)\b", html, flags=re.IGNORECASE)),
@@ -1234,7 +1449,7 @@ def _run_playwright_preview_audit(
     project_dir: Path,
     max_excerpt_chars: int = 800,
     *,
-    project_signals: dict[str, bool] | None = None,
+    project_signals: dict[str, object] | None = None,
 ) -> tuple[dict | None, str | None]:
     if not _browser_preview_audit_ready(project_dir):
         return None, "Playwright browser audit is not ready in this project/runtime yet, so preview audit fell back to HTML inspection."
@@ -1291,7 +1506,7 @@ def _audit_preview_html(
     html: str,
     max_excerpt_chars: int = 800,
     *,
-    project_signals: dict[str, bool] | None = None,
+    project_signals: dict[str, object] | None = None,
 ) -> dict:
     snapshot = _extract_preview_snapshot_from_html(html, max_excerpt_chars=max_excerpt_chars)
     return _build_preview_audit_result(
@@ -1447,6 +1662,22 @@ _SAFE_COMMAND_PREFIXES = (
     ("bun", "add"),
     ("python3", "-m", "compileall"),
     ("python", "-m", "compileall"),
+    ("python3", "-m", "pytest"),
+    ("python", "-m", "pytest"),
+    ("python3", "-m", "unittest"),
+    ("python", "-m", "unittest"),
+    ("tsc",),
+    ("vite", "build"),
+    ("vitest",),
+    ("jest",),
+    ("eslint",),
+    ("prettier", "--check"),
+    ("playwright", "test"),
+    ("git", "status"),
+    ("git", "diff"),
+    ("git", "log"),
+    ("git", "show"),
+    ("git", "branch"),
 )
 
 _APPROVAL_COMMANDS = {"git", "npx", "pnpm", "yarn", "bun", "npm"}
@@ -1454,9 +1685,45 @@ _BLOCKED_COMMANDS = {"rm", "sudo", "su", "dd", "mkfs", "mount", "umount", "shutd
 _DESTRUCTIVE_GIT_ARGS = {"reset", "clean", "checkout", "restore", "rebase"}
 _SHELL_CHAIN_OPERATORS = {"&&"}
 _SHELL_UNSAFE_TOKENS = {";", "|", "||", "&", ">", ">>", "<", "<<", "$(", "`"}
+_SAFE_READ_COMMANDS = {"pwd", "ls", "find", "cat", "head", "tail", "wc"}
 
 
-def _command_policy_decision_for_parts(clean: str, parts: list[str]) -> CommandPolicyDecision:
+def _is_safe_cd_command(parts: list[str]) -> bool:
+    if len(parts) != 2 or parts[0] != "cd":
+        return False
+    target = str(parts[1] or "").strip()
+    if not target or target in {".", "-"}:
+        return target == "."
+    if target.startswith(("/", "~")):
+        return False
+    pure = PurePosixPath(target.replace("\\", "/"))
+    if pure.is_absolute() or any(part in {"", ".", ".."} for part in pure.parts):
+        return False
+    return True
+
+
+def _is_safe_read_command(parts: list[str]) -> bool:
+    if not parts:
+        return False
+    executable = Path(parts[0]).name
+    if executable == "sed":
+        if any(part == "-i" or part.startswith("-i") for part in parts[1:]):
+            return False
+    elif executable not in _SAFE_READ_COMMANDS:
+        return False
+    for part in parts[1:]:
+        value = str(part or "").strip()
+        if not value or value.startswith("-"):
+            continue
+        if value.startswith(("/", "~")):
+            return False
+        pure = PurePosixPath(value.replace("\\", "/"))
+        if pure.is_absolute() or any(piece == ".." for piece in pure.parts):
+            return False
+    return True
+
+
+def _command_policy_decision_for_parts(clean: str, parts: list[str], *, access_mode: str = "safe") -> CommandPolicyDecision:
     if not parts:
         return CommandPolicyDecision(ok=False, command=clean, risk_level="blocked", reason="Command kosong.", requires_approval=True)
 
@@ -1470,6 +1737,18 @@ def _command_policy_decision_for_parts(clean: str, parts: list[str]) -> CommandP
     tuple_parts = tuple(parts)
     if any(tuple_parts[:len(prefix)] == prefix for prefix in _SAFE_COMMAND_PREFIXES):
         return CommandPolicyDecision(ok=True, command=clean, risk_level="safe", reason="Command validasi/install project-scoped yang boleh auto-run.", requires_approval=False)
+
+    if _is_safe_cd_command(parts):
+        return CommandPolicyDecision(ok=True, command=clean, risk_level="safe", reason="cd relatif di dalam workspace boleh untuk chain command project-scoped.", requires_approval=False)
+
+    if _is_safe_read_command(parts):
+        return CommandPolicyDecision(ok=True, command=clean, risk_level="safe", reason="Command baca/inspect relatif workspace boleh auto-run.", requires_approval=False)
+
+    if access_mode == "trusted":
+        if executable in {"npm", "pnpm", "yarn", "bun", "npx", "node", "python", "python3", "pip", "pip3", "tsx", "ts-node", "vite", "vitest", "jest", "eslint", "prettier", "playwright"}:
+            return CommandPolicyDecision(ok=True, command=clean, risk_level="safe", reason="Trusted Project mode: command project-scoped boleh auto-run.", requires_approval=False)
+        if executable == "git":
+            return CommandPolicyDecision(ok=True, command=clean, risk_level="safe", reason="Trusted Project mode: git non-destruktif boleh auto-run.", requires_approval=False)
 
     if executable in _APPROVAL_COMMANDS:
         return CommandPolicyDecision(ok=False, command=clean, risk_level="approval_required", reason="Command package/git di luar allowlist safe butuh approval eksplisit.", requires_approval=True)
@@ -1496,8 +1775,27 @@ def _split_safe_shell_chain(parts: list[str]) -> list[list[str]] | None:
     return segments
 
 
-def _command_policy_decision(command: str) -> CommandPolicyDecision:
+def _agent_access_mode_for_project(project_root: str | None) -> str:
+    raw_project = str(project_root or "").strip()
+    if not raw_project or raw_project == ".":
+        return "safe"
+    try:
+        projects = supabase_list_projects(owner_id=CURRENT_USER_ID.get(), include_archived=True)
+        match = next((project for project in projects if str(project.get("root") or "") == raw_project), None)
+        if not match:
+            return "safe"
+        prefs = get_project_preferences(project_id=str(match.get("id") or ""))
+        mode = str(prefs.agent_access_mode or "safe").strip().lower()
+        return "trusted" if mode == "trusted" else "safe"
+    except Exception:
+        return "safe"
+
+
+def _command_policy_decision(command: str, *, access_mode: str | None = None, project_root: str | None = None) -> CommandPolicyDecision:
     clean = str(command or "").strip()
+    resolved_access_mode = str(access_mode or _agent_access_mode_for_project(project_root)).strip().lower()
+    if resolved_access_mode not in {"safe", "trusted"}:
+        resolved_access_mode = "safe"
     if not clean:
         return CommandPolicyDecision(ok=False, command=clean, risk_level="blocked", reason="Command kosong.", requires_approval=True)
 
@@ -1540,15 +1838,16 @@ def _command_policy_decision(command: str) -> CommandPolicyDecision:
         if not segments:
             return CommandPolicyDecision(ok=False, command=clean, risk_level="approval_required", reason="Shell chain mengandung operator yang butuh approval eksplisit.", requires_approval=True)
         for segment in segments:
-            decision = _command_policy_decision_for_parts(" ".join(segment), segment)
+            decision = _command_policy_decision_for_parts(" ".join(segment), segment, access_mode=resolved_access_mode)
             if not decision.ok:
                 return CommandPolicyDecision(ok=False, command=clean, risk_level=decision.risk_level, reason=f"Shell chain ditahan: {decision.reason}", requires_approval=True)
-        return CommandPolicyDecision(ok=True, command=clean, risk_level="safe", reason="Semua command dalam chain project-scoped dan boleh auto-run.", requires_approval=False)
+        reason = "Trusted Project mode: semua command chain project-scoped boleh auto-run." if resolved_access_mode == "trusted" else "Semua command dalam chain project-scoped dan boleh auto-run."
+        return CommandPolicyDecision(ok=True, command=clean, risk_level="safe", reason=reason, requires_approval=False)
 
     if any(part in _SHELL_UNSAFE_TOKENS or any(token in part for token in ("$(", "`")) for part in parts):
         return CommandPolicyDecision(ok=False, command=clean, risk_level="approval_required", reason="Command memakai operator shell yang butuh approval eksplisit.", requires_approval=True)
 
-    return _command_policy_decision_for_parts(clean, parts)
+    return _command_policy_decision_for_parts(clean, parts, access_mode=resolved_access_mode)
 
 
 def _infer_validation_commands(project_dir: Path) -> list[str]:
@@ -1613,7 +1912,7 @@ class CommandPolicyReq(BaseModel):
 
 @app.post("/api/agent/command-policy/check", response_model=CommandPolicyDecision)
 def command_policy_check(req: CommandPolicyReq):
-    return _command_policy_decision(req.command)
+    return _command_policy_decision(req.command, project_root=req.cwd)
 
 
 @app.post("/api/terminal/run")
@@ -1627,7 +1926,7 @@ def terminal_run(req: TerminalRunReq):
         cwd = safe_join(ws_root, req.cwd)
 
     try:
-        policy = _command_policy_decision(req.command)
+        policy = _command_policy_decision(req.command, project_root=req.cwd)
         if not policy.ok:
             raise HTTPException(403, {"message": policy.reason, "policy": policy.model_dump()})
         result = _run_shell_command(req.command, cwd)
@@ -2902,6 +3201,11 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "context_budget_chars": context_budget,
             "provider_fallback_routing": True,
         },
+        "shell_policy": {
+            "auto_safe": APPORA_AUTO_SAFE_SHELL_COMMANDS,
+            "approval_or_blocked": APPORA_BLOCKED_OR_APPROVAL_SHELL_COMMANDS,
+            "principle": "Agent should request project-scoped shell actions when useful; backend guarded autonomy decides allow/block and reports evidence.",
+        },
         "boundaries": {
             "project_root": proj_root,
             "memory_store": ".voiceide/agent-memory",
@@ -3235,6 +3539,24 @@ def _execution_needs_repair(execution: dict[str, object]) -> bool:
     return False
 
 
+def _preview_audit_failed(execution: dict[str, object]) -> bool:
+    preview_audit = execution.get("preview_audit")
+    return isinstance(preview_audit, dict) and preview_audit.get("ok") is False and not preview_audit.get("skipped")
+
+
+def _repair_resolves_parent_execution(parent_execution: dict[str, object], repair_execution: dict[str, object] | None) -> bool:
+    if not isinstance(repair_execution, dict) or not bool(repair_execution.get("ok")):
+        return False
+
+    # A successful build/install replay does not prove that an earlier visual
+    # preview failure is gone. Require the repair pass to rerun and pass preview.
+    if _preview_audit_failed(parent_execution):
+        repair_preview = repair_execution.get("preview_audit")
+        return isinstance(repair_preview, dict) and repair_preview.get("ok") is True and not repair_preview.get("skipped")
+
+    return True
+
+
 def _failure_text_marker(text: object) -> str:
     raw = str(text or "").strip()
     if not raw:
@@ -3275,22 +3597,59 @@ def _failure_evidence_excerpt(*values: object, max_chars: int = 700) -> str:
     return "\n".join(lines)[:max_chars]
 
 
-def _failed_command_signatures(container: object, *, kind: str) -> list[dict[str, object]]:
+def _passed_commands(container: object) -> set[str]:
+    if not isinstance(container, dict):
+        return set()
+    commands: set[str] = set()
+    for result in list(container.get("results") or []):
+        if not isinstance(result, dict) or result.get("ok") is not True:
+            continue
+        command = str(result.get("command") or "").strip()
+        if command:
+            commands.add(command)
+    return commands
+
+
+def _resolved_failure_commands(execution: dict[str, object]) -> set[str]:
+    commands: set[str] = set()
+    repairs = execution.get("repairs")
+    if not isinstance(repairs, list):
+        return commands
+    for repair in repairs:
+        if not isinstance(repair, dict):
+            continue
+        repair_execution = repair.get("execution")
+        if not isinstance(repair_execution, dict):
+            continue
+        commands.update(_passed_commands(repair_execution.get("shell")))
+        commands.update(_passed_commands(repair_execution.get("validation")))
+        commands.update(_passed_commands(repair_execution.get("replay")))
+    return commands
+
+
+def _failed_command_signatures(container: object, *, kind: str, resolved_commands: set[str] | None = None) -> list[dict[str, object]]:
     if not isinstance(container, dict):
         return []
+    resolved_commands = resolved_commands or set()
     signatures: list[dict[str, object]] = []
     for result in list(container.get("results") or []):
         if not isinstance(result, dict) or result.get("ok") is not False:
             continue
         command = str(result.get("command") or "").strip()
+        if command and command in resolved_commands:
+            continue
         stderr = result.get("stderr")
         stdout = result.get("stdout")
         marker = _failure_text_marker(stderr) or _failure_text_marker(stdout) or f"returncode-{result.get('returncode')}"
         excerpt = _failure_evidence_excerpt(stderr, stdout)
+        policy = result.get("policy") if isinstance(result.get("policy"), dict) else {}
+        policy_blocked = result.get("returncode") == 126 and bool(policy)
         signatures.append({
             "kind": kind,
             "command": command[:180],
             "returncode": result.get("returncode"),
+            "policy_blocked": policy_blocked,
+            "risk_level": policy.get("risk_level") if policy_blocked else None,
             "marker": marker,
             "excerpt": excerpt,
             "signature": f"{kind}:{command}:{marker}",
@@ -3312,6 +3671,7 @@ def _failure_analysis_summary(signatures: list[dict[str, object]], *, repeated_f
     command = str(first.get("command") or "").strip()
     category = str(first.get("category") or "").strip()
     path = str(first.get("path") or "").strip()
+    policy_blocked = bool(first.get("policy_blocked"))
 
     if kind == "validation":
         primary = f"validation failed: {marker}"
@@ -3319,10 +3679,14 @@ def _failure_analysis_summary(signatures: list[dict[str, object]], *, repeated_f
             primary = f"{primary} in `{command}`"
         next_move = "Read the failing validation output, edit the source that causes it, then rerun the same validation command."
     elif kind == "shell":
-        primary = f"shell action failed: {marker}"
+        primary = f"shell action {'blocked by command policy' if policy_blocked else 'failed'}: {marker}"
         if command:
             primary = f"{primary} in `{command}`"
-        next_move = "Fix the command precondition or project files before rerunning the shell action."
+        next_move = (
+            "Do not skip validation. Replace the blocked command with a safe project-scoped equivalent, or produce the file fix and leave this command policy blocker explicit."
+            if policy_blocked
+            else "Fix the command precondition or project files before rerunning the shell action."
+        )
     elif kind == "apply":
         primary = f"apply failed: {marker}"
         if path:
@@ -3347,6 +3711,14 @@ def _failure_analysis_summary(signatures: list[dict[str, object]], *, repeated_f
 
 def _execution_failure_analysis(execution: dict[str, object]) -> dict[str, object]:
     signatures: list[dict[str, object]] = []
+    resolved_commands = _resolved_failure_commands(execution)
+    resolved_command_failures: list[dict[str, object]] = []
+    if resolved_commands:
+        for kind, container in (("shell", execution.get("shell")), ("validation", execution.get("validation"))):
+            for item in _failed_command_signatures(container, kind=kind):
+                command = str(item.get("command") or "").strip()
+                if command and command in resolved_commands:
+                    resolved_command_failures.append(item)
     apply_result = execution.get("apply")
     if isinstance(apply_result, dict) and apply_result.get("ok") is False:
         conflicts = list(apply_result.get("conflicts") or [])
@@ -3366,8 +3738,8 @@ def _execution_failure_analysis(execution: dict[str, object]) -> dict[str, objec
         else:
             signatures.append({"kind": "apply", "marker": "apply-failed", "excerpt": "Apply harness reported failure without conflict details.", "signature": "apply:failed"})
 
-    signatures.extend(_failed_command_signatures(execution.get("shell"), kind="shell"))
-    signatures.extend(_failed_command_signatures(execution.get("validation"), kind="validation"))
+    signatures.extend(_failed_command_signatures(execution.get("shell"), kind="shell", resolved_commands=resolved_commands))
+    signatures.extend(_failed_command_signatures(execution.get("validation"), kind="validation", resolved_commands=resolved_commands))
     signatures.extend(_failed_command_signatures(execution.get("replay"), kind="replay"))
 
     preview_audit = execution.get("preview_audit")
@@ -3413,7 +3785,10 @@ def _execution_failure_analysis(execution: dict[str, object]) -> dict[str, objec
     return {
         "current_signature": current_signature,
         "failure_count": len(signatures),
+        "active_failure_count": len(signatures),
+        "resolved_failure_count": len(resolved_command_failures),
         "failures": signatures[:12],
+        "resolved_failures": resolved_command_failures[:12],
         "evidence_excerpt": "\n---\n".join(
             str(item.get("excerpt") or "").strip()
             for item in signatures[:4]
@@ -3432,8 +3807,9 @@ def _execution_final_failure_analysis(execution: dict[str, object]) -> dict[str,
     raw = _execution_failure_analysis(execution)
     if not bool(execution.get("ok")):
         return raw
-    resolved_failures = list(raw.get("failures") or [])
-    if not resolved_failures:
+    resolved_failures = list(raw.get("failures") or []) or list(raw.get("resolved_failures") or [])
+    resolved_count = len(resolved_failures) or int(raw.get("resolved_failure_count") or 0)
+    if not resolved_count:
         return raw
     repairs = execution.get("repairs")
     repair_attempts = len(repairs) if isinstance(repairs, list) else 0
@@ -3441,12 +3817,12 @@ def _execution_final_failure_analysis(execution: dict[str, object]) -> dict[str,
         "current_signature": "",
         "failure_count": 0,
         "active_failure_count": 0,
-        "resolved_failure_count": len(resolved_failures),
+        "resolved_failure_count": resolved_count,
         "failures": [],
         "resolved_failures": resolved_failures[:12],
         "evidence_excerpt": "",
         "primary_failure": "",
-        "summary": f"Resolved: {len(resolved_failures)} previous failure signal(s) were superseded by successful execution.",
+        "summary": f"Resolved: {resolved_count} previous failure signal(s) were superseded by successful execution.",
         "suggested_next_move": "No active backend failure remains. Continue with user-facing verification or the next task.",
         "prior_signatures": list(raw.get("prior_signatures") or [])[-5:],
         "repeated_failure": False,
@@ -3860,7 +4236,7 @@ def _run_repair_replay(project_root: str, previous_execution: dict[str, object],
         command = str(item.get("command") or "").strip()
         if not command or command in already_requested:
             continue
-        policy = _command_policy_decision(command)
+        policy = _command_policy_decision(command, project_root=project_root)
         if not policy.ok:
             skipped_commands.append({
                 "command": command,
@@ -4030,6 +4406,32 @@ def _emit_command_end_events(emit, *, tool: str, phase: str, project_root: str, 
         })
 
 
+def _normalize_project_scoped_shell_command(command: str, *, cwd_label: str, project_root: str) -> tuple[str, str, str | None]:
+    clean = str(command or "").strip()
+    current_cwd = str(cwd_label or ".").strip().strip("/") or "."
+    root = str(project_root or ".").strip().strip("/") or "."
+    try:
+        parts = shlex.split(clean)
+    except Exception:
+        return clean, current_cwd, None
+    if len(parts) < 4 or parts[0] != "cd" or parts[2] not in _SHELL_CHAIN_OPERATORS:
+        return clean, current_cwd, None
+    target = str(parts[1] or "").strip().strip("/")
+    if not target or target.startswith(("/", "~")) or ".." in PurePosixPath(target.replace("\\", "/")).parts:
+        return clean, current_cwd, None
+    root_name = PurePosixPath(root).name
+    target_is_project = target in {root, f"./{root}", root_name, f"./{root_name}", "."}
+    if not target_is_project:
+        return clean, current_cwd, None
+    next_parts = parts[3:]
+    if not next_parts:
+        return clean, current_cwd, None
+    next_command = shlex.join(next_parts)
+    next_cwd = root if current_cwd == "." and target not in {".", "./."} else current_cwd
+    note = f"Normalized redundant `cd {target} &&` because backend already runs shell commands inside the project cwd."
+    return next_command, next_cwd, note
+
+
 def _run_harness_shell_actions_internal(
     *,
     ws_root_path: Path,
@@ -4042,12 +4444,15 @@ def _run_harness_shell_actions_internal(
 ) -> dict[str, object]:
     results: list[dict] = []
     for index, action in enumerate(actions[:8]):
-        command = str(action.command or "").strip()
+        original_command = str(action.command or "").strip()
+        command = original_command
         cwd_label = str(action.cwd or project_root or ".").strip().strip("/") or "."
-        policy = _command_policy_decision(command)
+        command, cwd_label, normalization_note = _normalize_project_scoped_shell_command(command, cwd_label=cwd_label, project_root=project_root)
+        policy = _command_policy_decision(command, project_root=project_root)
         if not policy.ok:
             result = {
                 "command": command,
+                "original_command": original_command if original_command != command else None,
                 "ok": False,
                 "stdout": "",
                 "stderr": policy.reason,
@@ -4055,6 +4460,7 @@ def _run_harness_shell_actions_internal(
                 "policy": policy.model_dump(),
                 "synced_files": 0,
                 "reason": action.reason,
+                "normalization": normalization_note,
             }
             results.append(result)
             if emit:
@@ -4066,6 +4472,7 @@ def _run_harness_shell_actions_internal(
         except ValueError as exc:
             result = {
                 "command": command,
+                "original_command": original_command if original_command != command else None,
                 "ok": False,
                 "stdout": "",
                 "stderr": str(exc),
@@ -4073,6 +4480,7 @@ def _run_harness_shell_actions_internal(
                 "policy": policy.model_dump(),
                 "synced_files": 0,
                 "reason": action.reason,
+                "normalization": normalization_note,
             }
             results.append(result)
             if emit:
@@ -4098,9 +4506,11 @@ def _run_harness_shell_actions_internal(
 
         result = _run_shell_command_streaming(command, cwd, emit_chunk) if emit else _run_shell_command(command, cwd)
         result["command"] = command
+        result["original_command"] = original_command if original_command != command else None
         result["policy"] = policy.model_dump()
         result["synced_files"] = _sync_hosted_project_text_files_after_shell(ws_root_path, cwd)
         result["reason"] = action.reason
+        result["normalization"] = normalization_note
         results.append(result)
         if emit:
             _emit_command_end_events(emit, tool=tool, phase=phase, project_root=project_root, results=[result], group=group)
@@ -4293,6 +4703,8 @@ def _run_backend_repair_pass(req: AgentReq, execution: dict[str, object], emit, 
         "If earlier repair passes failed, use their evidence and choose a different concrete fix.",
         "Use the failure_analysis signature to detect repeated failures. If repeated_failure is true, change strategy instead of making the same local edit again.",
         "Use failure_analysis.summary and failure_analysis.suggested_next_move as the repair objective.",
+        "If command failures were already replayed successfully by earlier repairs, focus the remaining preview, responsive, source-quality, or apply blockers.",
+        "If the active failure is preview_audit/responsive/visual quality, return CSS/layout/component changes; install-only shell actions do not resolve preview blockers.",
         "Do not repeat the same failing command blindly unless your changes address the failure.",
         f"Original user request:\n{req.input}",
         f"Failure analysis:\n{json.dumps(failure_analysis, ensure_ascii=False, indent=2)}",
@@ -4578,21 +4990,75 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
                 ))
             emit(
                 "tool_output",
-                {
-                    "kind": "agent_harness",
-                    "tool": "preview-audit",
-                    "ok": bool(preview_result.get("ok")) or bool(preview_result.get("skipped")),
-                    "phase": "executing_preview_audit",
-                    "text": json.dumps({
+                _harness_tool_output_payload(
+                    "preview-audit",
+                    "executing_preview_audit",
+                    project_root=project_root,
+                    ok=bool(preview_result.get("ok")) or bool(preview_result.get("skipped")),
+                    summary=str(preview_result.get("summary") or "Preview audit finished."),
+                    audit_mode=preview_result.get("audit_mode"),
+                    skipped=preview_result.get("skipped"),
+                    result={
+                        "ok": preview_result.get("ok"),
+                        "skipped": preview_result.get("skipped"),
+                        "audit_mode": preview_result.get("audit_mode"),
+                        "summary": preview_result.get("summary"),
+                    },
+                    text=json.dumps({
                         "ok": preview_result.get("ok"),
                         "skipped": preview_result.get("skipped"),
                         "audit_mode": preview_result.get("audit_mode"),
                         "summary": preview_result.get("summary"),
                     }, ensure_ascii=False)[:1200],
-                },
+                ),
             )
 
     execution["failure_analysis"] = _execution_failure_analysis(execution)
+    for quick_repair_fn in (_try_quick_missing_package_repair, _try_quick_ts6133_repair):
+        if bool(execution.get("ok")):
+            break
+        quick_repair = quick_repair_fn(req, execution, emit)
+        if not isinstance(quick_repair, dict):
+            continue
+        execution["quick_repair"] = quick_repair
+        if quick_repair.get("ok"):
+            quick_shell = quick_repair.get("shell") if isinstance(quick_repair.get("shell"), dict) else {}
+            commands = list(quick_repair.get("commands") or [])
+            validation = {
+                "ok": True,
+                "project_root": project_root,
+                "commands": commands,
+                "results": list(quick_shell.get("results") or []),
+                "ran": len(list(quick_shell.get("results") or [])),
+                "passed": sum(1 for item in list(quick_shell.get("results") or []) if isinstance(item, dict) and item.get("ok")),
+                "failed": sum(1 for item in list(quick_shell.get("results") or []) if isinstance(item, dict) and not item.get("ok")),
+                "quick_repair": str(quick_repair.get("kind") or "ts6133-unused-symbol"),
+            }
+            execution["validation"] = validation
+            if isinstance(execution.get("shell"), dict) and not execution["shell"].get("ok"):
+                failed_shell_commands = {
+                    str(item.get("command") or "").strip()
+                    for item in list(execution["shell"].get("results") or [])
+                    if isinstance(item, dict) and item.get("ok") is False
+                }
+                if failed_shell_commands and failed_shell_commands.issubset({str(item).strip() for item in commands}):
+                    execution["shell"] = quick_shell
+            preview_ok = True
+            preview_audit = execution.get("preview_audit")
+            if isinstance(preview_audit, dict) and not preview_audit.get("skipped"):
+                preview_ok = bool(preview_audit.get("ok"))
+            execution["ok"] = bool((execution.get("apply") or {}).get("ok", True)) and bool((execution.get("shell") or {}).get("ok", True)) and bool(validation.get("ok")) and preview_ok
+            execution["failure_analysis"] = _execution_failure_analysis(execution)
+            steps = execution.setdefault("steps", [])
+            if isinstance(steps, list):
+                steps.append(_execution_step(
+                    "quick_repair",
+                    "Backend quick repair",
+                    True,
+                    str(quick_repair.get("summary") or ""),
+                    paths=quick_repair.get("changed_paths") or [],
+                    commands=commands,
+                ))
     if allow_repair:
         for repair_index in range(1, max_repair_passes + 1):
             if not _execution_needs_repair(execution) or bool(execution.get("ok")):
@@ -4617,8 +5083,25 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
                     failure_analysis=repair_failure_analysis or {},
                     repeated_failure=bool(pre_repair_failure_analysis.get("repeated_failure")) if isinstance(pre_repair_failure_analysis, dict) else False,
                 ))
+            repair_ok = _repair_resolves_parent_execution(execution, repair_execution if isinstance(repair_execution, dict) else None)
+            repair_failure_analysis = repair_execution.get("failure_analysis") if isinstance(repair_execution, dict) else None
+            emit("tool_output", _harness_tool_output_payload(
+                "repair",
+                "executing_repair",
+                project_root=project_root,
+                ok=repair_ok,
+                summary=(
+                    f"Repair pass {repair_index} {'completed' if repair_ok else 'still failing'}: "
+                    f"changes={len(list(repair.get('changes') or [])) if isinstance(repair, dict) else 0} "
+                    f"actions={len(list(repair.get('actions') or [])) if isinstance(repair, dict) else 0}."
+                ),
+                repair_index=repair_index,
+                changes=len(list(repair.get("changes") or [])) if isinstance(repair, dict) else 0,
+                actions=len(list(repair.get("actions") or [])) if isinstance(repair, dict) else 0,
+                failure_analysis=repair_failure_analysis if isinstance(repair_failure_analysis, dict) else {},
+            ))
             if isinstance(repair_execution, dict):
-                execution["ok"] = bool(repair_execution.get("ok"))
+                execution["ok"] = repair_ok
                 execution["failure_analysis"] = _execution_failure_analysis(execution)
             if bool(execution.get("ok")):
                 break
@@ -4639,11 +5122,25 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
                     next_action=repair_stop.get("next_action"),
                     failure_analysis=repair_stop.get("failure_analysis") or {},
                 ))
+            emit("status", {"phase": "repair_stop", "message": str(repair_stop.get("summary") or "Backend repair budget exhausted.")})
+            emit("tool_output", _harness_tool_output_payload(
+                "repair-stop",
+                "repair_stop",
+                project_root=project_root,
+                ok=False,
+                summary=str(repair_stop.get("summary") or "Backend repair budget exhausted."),
+                reason=repair_stop.get("reason"),
+                attempts=repair_stop.get("attempts"),
+                max_repair_passes=repair_stop.get("max_repair_passes"),
+                next_action=repair_stop.get("next_action"),
+                failure_analysis=repair_stop.get("failure_analysis") or {},
+            ))
 
     if bool(execution.get("ok")):
         execution["failure_analysis"] = _execution_final_failure_analysis(execution)
 
     completion_report = _execution_completion_report(execution)
+    emit("status", {"phase": "completion", "message": str(completion_report.get("summary") or "Backend completion report ready.")})
     execution["completion_report"] = completion_report
     steps = execution.setdefault("steps", [])
     if isinstance(steps, list):
@@ -4656,6 +5153,16 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
             residual_risks=completion_report.get("residual_risks") or [],
             state=completion_report.get("state"),
         ))
+    emit("tool_output", _harness_tool_output_payload(
+        "completion",
+        "completion",
+        project_root=project_root,
+        ok=bool(completion_report.get("ok")),
+        summary=str(completion_report.get("summary") or ""),
+        state=completion_report.get("state"),
+        criteria=completion_report.get("criteria") or [],
+        residual_risks=completion_report.get("residual_risks") or [],
+    ))
     execution["run_ledger"] = _execution_run_ledger(execution)
 
     return execution
@@ -4730,6 +5237,279 @@ def _run_backend_verifier_repair_pass(req: AgentReq, ws_root: Path, trace: dict,
         "ok": not _trace_has_blocking_verifier_failures(repair_trace),
         "failure_summary": _trace_verifier_failure_summary(repair_trace) if _trace_has_blocking_verifier_failures(repair_trace) else "",
     }
+
+
+_TS6133_RE = re.compile(r"(?P<path>[^\s:(]+\.tsx?)\((?P<line>\d+),(?P<col>\d+)\):\s+error TS6133:\s+'(?P<name>[A-Za-z_$][\w$]*)'\s+is declared but its value is never read\.")
+_TS2307_MODULE_RE = re.compile(r"error TS2307:\s+Cannot find module ['\"](?P<module>[^'\"]+)['\"]")
+_VITE_IMPORT_RESOLVE_RE = re.compile(r"Failed to resolve import ['\"](?P<module>[^'\"]+)['\"]")
+_QUICK_INSTALL_PACKAGE_ALLOWLIST = {
+    "@supabase/supabase-js",
+    "axios",
+    "chart.js",
+    "class-variance-authority",
+    "clsx",
+    "date-fns",
+    "embla-carousel-react",
+    "framer-motion",
+    "gsap",
+    "lucide-react",
+    "react-hook-form",
+    "react-markdown",
+    "recharts",
+    "sonner",
+    "tailwind-merge",
+    "three",
+    "zod",
+    "zustand",
+}
+_QUICK_INSTALL_PACKAGE_PREFIXES = (
+    "@radix-ui/react-",
+    "@react-three/",
+    "@tanstack/",
+)
+
+
+def _ts6133_issues_from_execution(execution: dict[str, object]) -> list[dict[str, object]]:
+    issues: list[dict[str, object]] = []
+    seen: set[tuple[str, int, str]] = set()
+    for container_name in ("shell", "validation", "replay"):
+        container = execution.get(container_name)
+        if not isinstance(container, dict):
+            continue
+        for result in list(container.get("results") or []):
+            if not isinstance(result, dict):
+                continue
+            text = f"{result.get('stdout') or ''}\n{result.get('stderr') or ''}"
+            for match in _TS6133_RE.finditer(text):
+                path = str(match.group("path") or "").strip()
+                line = int(match.group("line") or 0)
+                name = str(match.group("name") or "").strip()
+                key = (path, line, name)
+                if not path or not name or key in seen:
+                    continue
+                seen.add(key)
+                issues.append({"path": path, "line": line, "name": name})
+    return issues[:16]
+
+
+def _external_package_from_module_spec(module_spec: str) -> str:
+    module_spec = str(module_spec or "").strip()
+    if not module_spec or module_spec.startswith((".", "/", "#")):
+        return ""
+    if re.match(r"^[a-zA-Z][a-zA-Z\d+.-]*:", module_spec):
+        return ""
+    parts = [part for part in module_spec.split("/") if part]
+    if not parts:
+        return ""
+    if parts[0].startswith("@"):
+        if len(parts) < 2:
+            return ""
+        return f"{parts[0]}/{parts[1]}"
+    return parts[0]
+
+
+def _quick_install_allowed_package(package_name: str) -> bool:
+    package_name = str(package_name or "").strip()
+    if package_name in _QUICK_INSTALL_PACKAGE_ALLOWLIST:
+        return True
+    return any(package_name.startswith(prefix) for prefix in _QUICK_INSTALL_PACKAGE_PREFIXES)
+
+
+def _declared_package_names(project_dir: Path) -> set[str]:
+    package_json = project_dir / "package.json"
+    try:
+        parsed = json.loads(package_json.read_text(encoding="utf-8"))
+    except Exception:
+        return set()
+    if not isinstance(parsed, dict):
+        return set()
+    names: set[str] = set()
+    for key in ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies"):
+        deps = parsed.get(key)
+        if isinstance(deps, dict):
+            names.update(str(name) for name in deps.keys())
+    return names
+
+
+def _missing_external_packages_from_execution(execution: dict[str, object], project_dir: Path) -> list[str]:
+    declared = _declared_package_names(project_dir)
+    packages: list[str] = []
+    seen: set[str] = set()
+    for container_name in ("shell", "validation", "replay"):
+        container = execution.get(container_name)
+        if not isinstance(container, dict):
+            continue
+        for result in list(container.get("results") or []):
+            if not isinstance(result, dict):
+                continue
+            text = f"{result.get('stdout') or ''}\n{result.get('stderr') or ''}"
+            module_specs = [match.group("module") for match in _TS2307_MODULE_RE.finditer(text)]
+            module_specs.extend(match.group("module") for match in _VITE_IMPORT_RESOLVE_RE.finditer(text))
+            for module_spec in module_specs:
+                package_name = _external_package_from_module_spec(str(module_spec))
+                if not package_name or package_name in declared or package_name in seen:
+                    continue
+                if not _quick_install_allowed_package(package_name):
+                    continue
+                seen.add(package_name)
+                packages.append(package_name)
+    return packages[:8]
+
+
+def _insert_void_usage_for_unused_symbols(project_dir: Path, issues: list[dict[str, object]]) -> list[str]:
+    grouped: dict[str, list[dict[str, object]]] = {}
+    for issue in issues:
+        rel = str(issue.get("path") or "").strip().lstrip("/")
+        if not rel or ".." in rel.split("/"):
+            continue
+        grouped.setdefault(rel, []).append(issue)
+
+    changed: list[str] = []
+    for rel, file_issues in grouped.items():
+        path = (project_dir / rel).resolve()
+        try:
+            if project_dir != path and project_dir not in path.parents:
+                continue
+            text = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        lines = text.splitlines()
+        insertions: dict[int, list[str]] = {}
+        for issue in file_issues:
+            name = str(issue.get("name") or "").strip()
+            if not re.match(r"^[A-Za-z_$][\w$]*$", name):
+                continue
+            if re.search(rf"\bvoid\s+{re.escape(name)}\s*;", text):
+                continue
+            line_no = max(1, int(issue.get("line") or 1))
+            idx = min(max(line_no - 1, 0), max(len(lines) - 1, 0))
+            target = idx
+            if "{" not in lines[target]:
+                for probe in range(idx, min(len(lines), idx + 8)):
+                    if "{" in lines[probe]:
+                        target = probe
+                        break
+            indent_match = re.match(r"^(\s*)", lines[target] if target < len(lines) else "")
+            indent = (indent_match.group(1) if indent_match else "") + "  "
+            insertions.setdefault(target + 1, []).append(f"{indent}void {name};")
+        if not insertions:
+            continue
+        next_lines: list[str] = []
+        for index, line in enumerate(lines):
+            next_lines.append(line)
+            for insertion in insertions.get(index + 1, []):
+                next_lines.append(insertion)
+        path.write_text("\n".join(next_lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
+        changed.append(rel)
+    return changed
+
+
+def _try_quick_ts6133_repair(req: AgentReq, execution: dict[str, object], emit) -> dict[str, object] | None:
+    issues = _ts6133_issues_from_execution(execution)
+    if not issues:
+        return None
+    project_root = str(req.project_root or ".").strip().strip("/") or "."
+    try:
+        project_dir = safe_join(_ws(), project_root)
+    except Exception:
+        return None
+    changed_paths = _insert_void_usage_for_unused_symbols(project_dir, issues)
+    if not changed_paths:
+        return None
+
+    commands = list(dict.fromkeys(
+        str(command)
+        for command in list((execution.get("validation") or {}).get("commands") or [])
+        if str(command).strip()
+    ))
+    if not commands:
+        commands = _infer_validation_commands(project_dir)[:4]
+    if not commands:
+        return {"ok": False, "changed_paths": changed_paths, "summary": "Quick TS6133 repair edited files but found no validation command."}
+
+    emit("status", {"phase": "quick_repair", "message": "Backend quick repair fixed unused TypeScript symbols before LLM repair..."})
+    _emit_command_start_events(emit, tool="quick-repair", phase="quick_repair", project_root=project_root, commands=commands, group="quick repair")
+    shell = _run_harness_shell_actions_internal(
+        ws_root_path=_ws(),
+        project_root=project_root,
+        actions=[AgentHarnessShellAction(command=command, cwd=project_root, reason="Quick TS6133 repair validation") for command in commands],
+        emit=emit,
+        tool="quick-repair",
+        phase="quick_repair",
+        group="quick repair",
+    )
+    result = {
+        "ok": bool(shell.get("ok")),
+        "changed_paths": changed_paths,
+        "issues": issues,
+        "commands": commands,
+        "shell": shell,
+        "summary": f"Quick TS6133 repair changed {len(changed_paths)} file(s), validation ok={bool(shell.get('ok'))}.",
+    }
+    emit("tool_output", _harness_tool_output_payload(
+        "quick-repair",
+        "quick_repair",
+        project_root=project_root,
+        ok=bool(shell.get("ok")),
+        summary=str(result["summary"]),
+        paths=changed_paths,
+        commands=commands,
+        results=_shell_event_results(shell.get("results")),
+    ))
+    return result
+
+
+def _try_quick_missing_package_repair(req: AgentReq, execution: dict[str, object], emit) -> dict[str, object] | None:
+    project_root = str(req.project_root or ".").strip().strip("/") or "."
+    try:
+        project_dir = safe_join(_ws(), project_root)
+    except Exception:
+        return None
+    packages = _missing_external_packages_from_execution(execution, project_dir)
+    if not packages:
+        return None
+
+    validation_commands = list(dict.fromkeys(
+        str(command)
+        for command in list((execution.get("validation") or {}).get("commands") or [])
+        if str(command).strip()
+    ))
+    if not validation_commands:
+        validation_commands = _infer_validation_commands(project_dir)[:4]
+    commands = [f"npm install --no-audit --no-fund {' '.join(packages)}", *validation_commands]
+
+    emit("status", {"phase": "quick_repair", "message": f"Backend quick repair installed missing package(s): {', '.join(packages)}..."})
+    _emit_command_start_events(emit, tool="quick-repair", phase="quick_repair", project_root=project_root, commands=commands, group="quick repair")
+    shell = _run_harness_shell_actions_internal(
+        ws_root_path=_ws(),
+        project_root=project_root,
+        actions=[AgentHarnessShellAction(command=command, cwd=project_root, reason="Quick missing package repair") for command in commands],
+        emit=emit,
+        tool="quick-repair",
+        phase="quick_repair",
+        group="quick repair",
+    )
+    changed_paths = ["package.json", "package-lock.json"]
+    result = {
+        "ok": bool(shell.get("ok")),
+        "changed_paths": changed_paths,
+        "packages": packages,
+        "commands": commands,
+        "shell": shell,
+        "summary": f"Quick missing-package repair installed {', '.join(packages)}, validation ok={bool(shell.get('ok'))}.",
+        "kind": "missing-package",
+    }
+    emit("tool_output", _harness_tool_output_payload(
+        "quick-repair",
+        "quick_repair",
+        project_root=project_root,
+        ok=bool(shell.get("ok")),
+        summary=str(result["summary"]),
+        paths=changed_paths,
+        commands=commands,
+        results=_shell_event_results(shell.get("results")),
+    ))
+    return result
 
 
 def _remember_backend_execution_state(req: AgentReq, result: dict) -> None:

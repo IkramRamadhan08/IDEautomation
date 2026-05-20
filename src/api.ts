@@ -151,6 +151,7 @@ export type ProjectPreferences = {
   build_mode: BuildMode | null;
   preview_entry: string | null;
   default_prompt_style: string | null;
+  agent_access_mode?: "safe" | "trusted" | null;
 };
 
 export type ModelRouteDiagnostics = {
@@ -913,6 +914,8 @@ export type AgentResult = {
     preview_audit?: PreviewAuditResult | Record<string, unknown> | null;
     repairs?: Array<Record<string, unknown>>;
     run_ledger?: Array<Record<string, unknown>>;
+    completion_report?: Record<string, unknown> | null;
+    failure_analysis?: Record<string, unknown> | null;
   };
 };
 export type AgentJob = {

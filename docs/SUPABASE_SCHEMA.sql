@@ -63,9 +63,20 @@ create table if not exists public.project_preferences (
   build_mode text,
   preview_entry text,
   default_prompt_style text,
+  agent_access_mode text not null default 'safe' check (agent_access_mode in ('safe', 'trusted')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.project_preferences
+add column if not exists agent_access_mode text not null default 'safe';
+
+alter table public.project_preferences
+drop constraint if exists project_preferences_agent_access_mode_check;
+
+alter table public.project_preferences
+add constraint project_preferences_agent_access_mode_check
+check (agent_access_mode in ('safe', 'trusted'));
 
 create table if not exists public.project_files (
   owner_id text not null references public.profiles(id) on delete cascade,

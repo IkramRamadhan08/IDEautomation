@@ -186,6 +186,8 @@ export default function App() {
   const [settings, setSettings] = useState<SettingsInfo | null>(null);
   const [buildMode, setBuildMode] = useState<BuildMode>("hybrid");
   const [buildModeDraft, setBuildModeDraft] = useState<BuildMode>("hybrid");
+  const [agentAccessMode, setAgentAccessMode] = useState<"safe" | "trusted">("safe");
+  const [agentAccessModeDraft, setAgentAccessModeDraft] = useState<"safe" | "trusted">("safe");
   const [modelDraft, setModelDraft] = useState<string>("");
   const [nineRouterBaseUrlDraft, setNineRouterBaseUrlDraft] = useState<string>("http://127.0.0.1:20128/v1");
   const [nineRouterApiKeyDraft, setNineRouterApiKeyDraft] = useState<string>("");
@@ -727,9 +729,17 @@ export default function App() {
 
   useEffect(() => {
     const loadSelectedProjectPrefs = async () => {
-      if (!selectedProject || selectedProject === "." || !hasVerifiedHostedAuth) return;
+      if (!selectedProject || selectedProject === "." || !hasVerifiedHostedAuth) {
+        setAgentAccessMode("safe");
+        setAgentAccessModeDraft("safe");
+        return;
+      }
       const hosted = hostedProjects.find((project) => project.root === selectedProject);
-      if (!hosted) return;
+      if (!hosted) {
+        setAgentAccessMode("safe");
+        setAgentAccessModeDraft("safe");
+        return;
+      }
       try {
         const prefRes = await getProjectPreferences(hosted.id);
         const prefs = prefRes.preferences;
@@ -737,6 +747,9 @@ export default function App() {
           setBuildMode(prefs.build_mode);
           setBuildModeDraft(prefs.build_mode);
         }
+        const accessMode = prefs.agent_access_mode === "trusted" ? "trusted" : "safe";
+        setAgentAccessMode(accessMode);
+        setAgentAccessModeDraft(accessMode);
       } catch {
         // ignore project pref load failures during trial mode
       }
@@ -1023,7 +1036,7 @@ export default function App() {
 
       const res = await createHostedProject({ name, template_id: selectedTemplateId || "blank" });
       if (hasVerifiedHostedAuth) {
-        updateProjectPreferences(res.project.id, { build_mode: buildModeDraft }).catch(() => {
+        updateProjectPreferences(res.project.id, { build_mode: buildModeDraft, agent_access_mode: agentAccessModeDraft }).catch(() => {
           // Project creation must not be blocked by optional preference persistence.
         });
       }
@@ -1200,10 +1213,18 @@ export default function App() {
           cerebras_model: null,
           xai_model: null,
         });
+        const hosted = hostedProjects.find((project) => project.root === selectedProject);
+        if (hosted) {
+          await updateProjectPreferences(hosted.id, {
+            build_mode: buildModeDraft,
+            agent_access_mode: agentAccessModeDraft,
+          });
+        }
       }
 
       await loadSettingsOverview();
       setBuildMode(buildModeDraft);
+      setAgentAccessMode(agentAccessModeDraft);
       setSettingsOpen(false);
       toast.success("Settings disimpan");
     } catch (e) {
@@ -1838,8 +1859,10 @@ export default function App() {
           modelRouteLoading={modelRouteLoading}
           modelRouteTest={modelRouteTest}
           modelRouteTesting={modelRouteTesting}
+          agentAccessModeDraft={agentAccessModeDraft}
           onClose={() => setSettingsOpen(false)}
           onBuildModeDraftChange={setBuildModeDraft}
+          onAgentAccessModeDraftChange={setAgentAccessModeDraft}
           onModelDraftChange={setModelDraft}
           onNineRouterBaseUrlChange={setNineRouterBaseUrlDraft}
           onApiKeyChange={(p, k) => {
