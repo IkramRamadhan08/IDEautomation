@@ -2248,6 +2248,81 @@ class AgentAutoExecuteRegressionTests(unittest.TestCase):
             CURRENT_SESSION_ID.reset(session_token)
             STATE.get("sessions", {}).pop(session_id, None)
 
+    def test_quick_preview_polish_repair_updates_metadata_and_tap_targets(self) -> None:
+        session_id = "quick-preview-polish-repair-test"
+        STATE.get("sessions", {}).pop(session_id, None)
+        session_token = CURRENT_SESSION_ID.set(session_id)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                project = root / "demo"
+                (project / "src").mkdir(parents=True)
+                (project / "index.html").write_text(
+                    "<!doctype html>\n"
+                    "<html><head><title>Build an AI tool app workspace with prompt panel</title></head>"
+                    "<body><div id=\"root\"></div></body></html>\n",
+                    encoding="utf-8",
+                )
+                (project / "src" / "app.css").write_text("button { border: 0; }\n", encoding="utf-8")
+                STATE["sessions"][session_id] = {
+                    "workspace": root,
+                    "runners": {},
+                    "agent_jobs": {},
+                    "oauth_pending": {},
+                    "google_user": None,
+                }
+                execution = {
+                    "ok": True,
+                    "apply": {"ok": True},
+                    "validation": {
+                        "ok": True,
+                        "commands": ["npm run build"],
+                        "results": [{"ok": True, "command": "npm run build", "stdout": "built", "stderr": ""}],
+                    },
+                    "preview_audit": {
+                        "ok": True,
+                        "skipped": False,
+                        "issue_details": [
+                            {"severity": "warning", "category": "metadata", "detail": "Preview page is missing a meta description."},
+                            {"severity": "warning", "category": "mobile-tap-targets", "detail": "Target tap terlalu kecil."},
+                        ],
+                        "visual_summary": {
+                            "title": "Build an AI tool app workspace with prompt panel",
+                            "primary_heading": "OpsBoard AI helps operations teams clear incidents faster.",
+                        },
+                    },
+                }
+                rerun_shell = {
+                    "ok": True,
+                    "results": [{"ok": True, "command": "npm run build", "stdout": "built", "stderr": ""}],
+                }
+                clean_preview = {"ok": True, "skipped": False, "issue_details": [], "summary": "Preview clean."}
+                events: list[tuple[str, dict]] = []
+                with (
+                    patch("api.main._run_harness_shell_actions_internal", return_value=rerun_shell),
+                    patch("api.main._auto_execute_preview_audit", return_value=clean_preview),
+                ):
+                    result = main_mod._try_quick_preview_polish_repair(
+                        main_mod.AgentReq(input="polish preview", project_root="demo", auto_execute=True),
+                        execution,
+                        lambda event, data: events.append((event, data)),
+                    )
+
+                self.assertTrue(result["ok"])
+                self.assertEqual(result["kind"], "preview-polish")
+                self.assertEqual(result["preview_audit"], clean_preview)
+                html = (project / "index.html").read_text(encoding="utf-8")
+                self.assertIn("<title>OpsBoard AI helps operations teams clear incidents faster</title>", html)
+                self.assertIn('<meta name="description"', html)
+                self.assertIn("OpsBoard AI helps operations teams clear incidents faster", html)
+                css = (project / "src" / "app.css").read_text(encoding="utf-8")
+                self.assertIn("Appora quick polish: tap target floor", css)
+                self.assertIn("min-height: 44px", css)
+                self.assertTrue(any(data.get("tool") == "quick-repair" for event, data in events if event == "tool_output"))
+        finally:
+            CURRENT_SESSION_ID.reset(session_token)
+            STATE.get("sessions", {}).pop(session_id, None)
+
     def test_quick_missing_package_repair_installs_allowed_dependency_and_reruns_validation(self) -> None:
         session_id = "quick-missing-package-repair-test"
         STATE.get("sessions", {}).pop(session_id, None)

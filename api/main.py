@@ -14,7 +14,7 @@ import shlex
 import subprocess
 import uuid
 import zipfile
-from html import unescape
+from html import escape, unescape
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request as URLRequest, urlopen
 
@@ -229,6 +229,12 @@ def _safe_export_filename(project_root: str) -> str:
     name = name.split("/")[-1] or "appora-project"
     name = re.sub(r"[^a-zA-Z0-9._-]+", "-", name).strip("-._")
     return (name or "appora-project")[:80]
+
+
+def _project_display_name(project_root: str) -> str:
+    name = _safe_export_filename(project_root)
+    name = re.sub(r"[-_]+", " ", name).strip()
+    return name.title() if name else "Appora Project"
 
 
 def _iter_project_export_files(project_dir: Path) -> list[Path]:
@@ -1155,10 +1161,15 @@ def _build_preview_audit_result(
         })
 
     issues: list[str] = []
+    generic_title = bool(title and _GENERIC_SAAS_COPY_RE.search(title)) or title.lower().startswith("build an ai tool app workspace")
     if not title:
         detail = "Preview page is missing a <title> tag."
         issues.append(detail)
         add_issue("warning", "metadata", detail, "Tambahkan title yang menjelaskan app/page.")
+    elif generic_title:
+        detail = f"Preview page title still feels generic or template-like: {title}."
+        issues.append(detail)
+        add_issue("warning", "metadata", detail, "Ganti title dengan nama produk dan fungsi domain yang spesifik.")
     if not meta_description:
         detail = "Preview page is missing a meta description."
         issues.append(detail)
@@ -5057,8 +5068,8 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
             )
 
     execution["failure_analysis"] = _execution_failure_analysis(execution)
-    for quick_repair_fn in (_try_quick_missing_package_repair, _try_quick_ts6133_repair):
-        if bool(execution.get("ok")):
+    for quick_repair_fn in (_try_quick_missing_package_repair, _try_quick_ts6133_repair, _try_quick_preview_polish_repair):
+        if bool(execution.get("ok")) and not _execution_needs_repair(execution):
             break
         quick_repair = quick_repair_fn(req, execution, emit)
         if not isinstance(quick_repair, dict):
@@ -5066,6 +5077,9 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
         execution["quick_repair"] = quick_repair
         if quick_repair.get("ok"):
             quick_shell = quick_repair.get("shell") if isinstance(quick_repair.get("shell"), dict) else {}
+            quick_preview = quick_repair.get("preview_audit") if isinstance(quick_repair.get("preview_audit"), dict) else None
+            if quick_preview is not None:
+                execution["preview_audit"] = quick_preview
             commands = list(quick_repair.get("commands") or [])
             validation = {
                 "ok": True,
@@ -5497,6 +5511,186 @@ def _try_quick_ts6133_repair(req: AgentReq, execution: dict[str, object], emit) 
         summary=str(result["summary"]),
         paths=changed_paths,
         commands=commands,
+        results=_shell_event_results(shell.get("results")),
+    ))
+    return result
+
+
+def _quick_polish_title_and_description(execution: dict[str, object], project_dir: Path, fallback_name: str) -> tuple[list[str], list[str]]:
+    preview = execution.get("preview_audit") if isinstance(execution.get("preview_audit"), dict) else {}
+    visual = preview.get("visual_summary") if isinstance(preview.get("visual_summary"), dict) else {}
+    heading = str(visual.get("primary_heading") or "").strip()
+    title = str(visual.get("title") or "").strip()
+    product = str(fallback_name or "Appora Project").strip()
+    if heading:
+        head_product = re.split(r"\s+(?:helps|is|for|gives|turns|keeps)\s+", heading, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+        if 2 <= len(head_product) <= 48:
+            product = head_product
+    next_title = f"{product} - Production Workspace"
+    if heading:
+        clean_heading = re.sub(r"\s+", " ", heading).strip().rstrip(".")
+        if len(clean_heading) <= 72:
+            next_title = clean_heading
+        else:
+            next_title = f"{product} - {clean_heading[:70 - len(product)].strip().rstrip(',')}"
+    next_description = heading or f"{product} production-ready app workspace with responsive UI, clear workflows, and validated preview."
+    next_description = re.sub(r"\s+", " ", next_description).strip()
+    if len(next_description) < 80:
+        next_description = f"{next_description} Built with responsive layout, product detail, and validation-ready interactions."
+    next_description = next_description[:180].rstrip()
+    next_title_html = escape(next_title, quote=False)
+    next_description_html = escape(next_description, quote=True)
+
+    changed: list[str] = []
+    notes: list[str] = []
+    html_path = project_dir / "index.html"
+    try:
+        html = html_path.read_text(encoding="utf-8")
+    except Exception:
+        return changed, notes
+    next_html = html
+    if re.search(r"<title[^>]*>.*?</title>", next_html, flags=re.IGNORECASE | re.DOTALL):
+        if not title or title.lower().startswith("build an ai tool app workspace") or _GENERIC_SAAS_COPY_RE.search(title):
+            next_html = re.sub(r"<title[^>]*>.*?</title>", f"<title>{next_title_html}</title>", next_html, count=1, flags=re.IGNORECASE | re.DOTALL)
+            notes.append("updated title")
+    else:
+        next_html = re.sub(r"</head>", f"  <title>{next_title_html}</title>\n</head>", next_html, count=1, flags=re.IGNORECASE)
+        notes.append("added title")
+    if re.search(r"<meta[^>]+name=['\"]description['\"][^>]*>", next_html, flags=re.IGNORECASE | re.DOTALL):
+        next_html = re.sub(
+            r"<meta[^>]+name=['\"]description['\"][^>]*>",
+            f'<meta name="description" content="{next_description_html}">',
+            next_html,
+            count=1,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        notes.append("updated meta description")
+    else:
+        next_html = re.sub(
+            r"</head>",
+            f'  <meta name="description" content="{next_description_html}">\n</head>',
+            next_html,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        notes.append("added meta description")
+    if next_html != html:
+        html_path.write_text(next_html, encoding="utf-8")
+        changed.append("index.html")
+    return changed, notes
+
+
+def _quick_polish_tap_targets(project_dir: Path) -> tuple[list[str], list[str]]:
+    css_candidates = [
+        path for path in [
+            project_dir / "src" / "app.css",
+            project_dir / "src" / "App.css",
+            project_dir / "src" / "index.css",
+            project_dir / "style.css",
+        ]
+        if path.exists()
+    ]
+    if not css_candidates:
+        return [], []
+    css_path = css_candidates[0]
+    try:
+        css = css_path.read_text(encoding="utf-8")
+    except Exception:
+        return [], []
+    marker = "Appora quick polish: tap target floor"
+    if marker in css:
+        return [], []
+    addition = """
+
+/* Appora quick polish: tap target floor */
+a,
+button,
+[role="button"],
+input,
+select,
+textarea {
+  min-height: 44px;
+}
+
+nav a,
+footer a,
+.footer a,
+.fallbackNav a {
+  display: inline-flex;
+  align-items: center;
+}
+"""
+    css_path.write_text(css.rstrip() + addition + "\n", encoding="utf-8")
+    return [css_path.relative_to(project_dir).as_posix()], ["added tap target floor"]
+
+
+def _try_quick_preview_polish_repair(req: AgentReq, execution: dict[str, object], emit) -> dict[str, object] | None:
+    debt = _preview_polish_debt(execution)
+    if not debt:
+        return None
+    categories = {str(item.get("category") or "") for item in debt if isinstance(item, dict)}
+    if not (categories & {"metadata", "mobile-tap-targets"}):
+        return None
+    project_root = str(req.project_root or ".").strip().strip("/") or "."
+    try:
+        project_dir = safe_join(_ws(), project_root)
+    except Exception:
+        return None
+    changed_paths: list[str] = []
+    notes: list[str] = []
+    if "metadata" in categories:
+        changed, local_notes = _quick_polish_title_and_description(execution, project_dir, _project_display_name(project_root))
+        changed_paths.extend(changed)
+        notes.extend(local_notes)
+    if "mobile-tap-targets" in categories:
+        changed, local_notes = _quick_polish_tap_targets(project_dir)
+        changed_paths.extend(changed)
+        notes.extend(local_notes)
+    changed_paths = list(dict.fromkeys(changed_paths))
+    if not changed_paths:
+        return None
+
+    commands = list(dict.fromkeys(
+        str(command)
+        for command in list((execution.get("validation") or {}).get("commands") or [])
+        if str(command).strip()
+    ))
+    if not commands:
+        commands = _infer_validation_commands(project_dir)[:4]
+
+    emit("status", {"phase": "quick_repair", "message": "Backend quick polish fixed metadata/tap-target preview warnings..."})
+    shell = {"ok": True, "results": [], "ran": 0}
+    if commands:
+        _emit_command_start_events(emit, tool="quick-repair", phase="quick_repair", project_root=project_root, commands=commands, group="quick polish")
+        shell = _run_harness_shell_actions_internal(
+            ws_root_path=_ws(),
+            project_root=project_root,
+            actions=[AgentHarnessShellAction(command=command, cwd=project_root, reason="Quick preview polish validation") for command in commands],
+            emit=emit,
+            tool="quick-repair",
+            phase="quick_repair",
+            group="quick polish",
+        )
+    preview_result = _auto_execute_preview_audit(req, project_root) if bool(shell.get("ok")) else None
+    result = {
+        "ok": bool(shell.get("ok")) and (not isinstance(preview_result, dict) or bool(preview_result.get("ok"))),
+        "changed_paths": changed_paths,
+        "notes": notes,
+        "commands": commands,
+        "shell": shell,
+        "preview_audit": preview_result,
+        "summary": f"Quick preview polish changed {len(changed_paths)} file(s), validation ok={bool(shell.get('ok'))}.",
+        "kind": "preview-polish",
+    }
+    emit("tool_output", _harness_tool_output_payload(
+        "quick-repair",
+        "quick_repair",
+        project_root=project_root,
+        ok=bool(result.get("ok")),
+        summary=str(result["summary"]),
+        paths=changed_paths,
+        commands=commands,
+        result={"notes": notes, "preview_ok": preview_result.get("ok") if isinstance(preview_result, dict) else None},
         results=_shell_event_results(shell.get("results")),
     ))
     return result
