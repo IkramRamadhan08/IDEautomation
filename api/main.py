@@ -3536,12 +3536,40 @@ def _execution_needs_repair(execution: dict[str, object]) -> bool:
     preview_audit = execution.get("preview_audit")
     if isinstance(preview_audit, dict) and preview_audit.get("ok") is False and not preview_audit.get("skipped"):
         return True
+    if _preview_polish_debt(execution):
+        return True
     return False
 
 
 def _preview_audit_failed(execution: dict[str, object]) -> bool:
     preview_audit = execution.get("preview_audit")
     return isinstance(preview_audit, dict) and preview_audit.get("ok") is False and not preview_audit.get("skipped")
+
+
+_PREVIEW_POLISH_DEBT_CATEGORIES = {
+    "metadata",
+    "mobile-tap-targets",
+    "source-quality",
+    "source-type-discipline",
+    "visual-polish",
+    "product-depth",
+    "copy-specificity",
+}
+
+
+def _preview_polish_debt(execution: dict[str, object]) -> list[dict[str, object]]:
+    preview_audit = execution.get("preview_audit")
+    if not isinstance(preview_audit, dict) or preview_audit.get("skipped") or preview_audit.get("ok") is not True:
+        return []
+    debts: list[dict[str, object]] = []
+    for issue in list(preview_audit.get("issue_details") or []):
+        if not isinstance(issue, dict) or issue.get("severity") != "warning":
+            continue
+        category = str(issue.get("category") or "").strip()
+        if category not in _PREVIEW_POLISH_DEBT_CATEGORIES:
+            continue
+        debts.append(issue)
+    return debts[:8]
 
 
 def _repair_resolves_parent_execution(parent_execution: dict[str, object], repair_execution: dict[str, object] | None) -> bool:
@@ -3924,6 +3952,14 @@ def _execution_completion_report(execution: dict[str, object]) -> dict[str, obje
             ))
             if warnings and preview_audit.get("ok"):
                 residual_risks.append(f"Preview audit still has {warnings} warning(s).")
+            polish_debt = _preview_polish_debt(execution)
+            if polish_debt:
+                criteria.append(_criterion(
+                    "preview-polish",
+                    "failed" if ok else "pending",
+                    f"warnings_to_polish={len(polish_debt)} categories={', '.join(sorted({str(item.get('category') or '') for item in polish_debt})[:4])}",
+                ))
+                residual_risks.append(f"Preview polish still has {len(polish_debt)} production warning(s).")
     else:
         criteria.append(_criterion("preview", "skipped", "No preview surface or preview URL was available for this run."))
 
@@ -3968,14 +4004,17 @@ def _execution_completion_report(execution: dict[str, object]) -> dict[str, obje
             residual_risks.append(f"Next move: {next_move}")
 
     failed_labels = [item["label"] for item in criteria if item.get("status") == "failed"]
-    completion_state = "complete" if ok else "blocked"
+    polish_debt = _preview_polish_debt(execution)
+    completion_state = "complete" if ok and not polish_debt else ("polish-needed" if ok else "blocked")
     if completion_state == "complete":
         summary = "Complete: backend execution criteria passed or were intentionally skipped."
+    elif completion_state == "polish-needed":
+        summary = f"Polish needed: preview audit still has {len(polish_debt)} production warning(s)."
     else:
         summary = f"Blocked: {', '.join(failed_labels) or 'execution'} still failing."
 
     return {
-        "ok": ok,
+        "ok": ok and not polish_debt,
         "state": completion_state,
         "summary": summary,
         "criteria": criteria,
@@ -4695,10 +4734,13 @@ def _project_has_preview_surface(project_dir: Path, out_changes: list[dict[str, 
 def _run_backend_repair_pass(req: AgentReq, execution: dict[str, object], emit, *, repair_index: int) -> dict[str, object]:
     project_root = str(req.project_root or ".").strip().strip("/") or "."
     failure_analysis = _execution_failure_analysis(execution)
+    polish_debt = _preview_polish_debt(execution)
     emit("status", {"phase": "executing_repair", "message": f"Backend harness running repair pass {repair_index} from execution evidence..."})
     repair_prompt = "\n\n".join([
         f"BACKEND AUTO-EXECUTE REPAIR PASS {repair_index}:",
         "The previous backend execution produced failing apply/shell/validation evidence.",
+        "If build/validation already passes but preview audit still has production-polish warnings, treat those warnings as the active objective and return concrete source fixes.",
+        "Production-polish warning fixes include: specific document title/meta description, accessible tap target sizing, removing loose any/as any, eliminating generic copy, and improving visible product depth.",
         "Repair the project now with concrete file changes and only safe project-scoped shell actions if needed.",
         "If earlier repair passes failed, use their evidence and choose a different concrete fix.",
         "Use the failure_analysis signature to detect repeated failures. If repeated_failure is true, change strategy instead of making the same local edit again.",
@@ -4708,6 +4750,7 @@ def _run_backend_repair_pass(req: AgentReq, execution: dict[str, object], emit, 
         "Do not repeat the same failing command blindly unless your changes address the failure.",
         f"Original user request:\n{req.input}",
         f"Failure analysis:\n{json.dumps(failure_analysis, ensure_ascii=False, indent=2)}",
+        f"Preview polish debt:\n{json.dumps(polish_debt, ensure_ascii=False, indent=2)}",
         f"Current file context after failed execution:\n{_repair_file_context(project_root, execution)}",
         f"Repair replay plan:\n{_repair_replay_plan(execution)}",
         f"Execution evidence:\n{_execution_repair_report(execution)}",

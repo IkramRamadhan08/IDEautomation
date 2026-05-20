@@ -2122,6 +2122,32 @@ class AgentAutoExecuteRegressionTests(unittest.TestCase):
         self.assertFalse(main_mod._repair_resolves_parent_execution(parent_execution, preview_skipped_repair))
         self.assertTrue(main_mod._repair_resolves_parent_execution(parent_execution, preview_clean_repair))
 
+    def test_preview_polish_warnings_keep_execution_in_repair_lane(self) -> None:
+        execution = {
+            "ok": True,
+            "apply": {"ok": True, "applied": True, "count": 1},
+            "shell": {"ok": True, "ran": 1, "results": [{"ok": True}]},
+            "validation": {"ok": True, "ran": 1, "failed": 0, "commands": ["npm run build"]},
+            "preview_audit": {
+                "ok": True,
+                "skipped": False,
+                "audit_mode": "browser",
+                "issue_details": [
+                    {"severity": "warning", "category": "metadata", "detail": "Preview page is missing a meta description."},
+                    {"severity": "warning", "category": "mobile-tap-targets", "detail": "Target tap terlalu kecil."},
+                ],
+            },
+        }
+
+        self.assertTrue(main_mod._execution_needs_repair(execution))
+        report = main_mod._execution_completion_report(execution)
+
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["state"], "polish-needed")
+        criteria = {item["label"]: item for item in report["criteria"]}
+        self.assertEqual(criteria["preview-polish"]["status"], "failed")
+        self.assertIn("Preview polish", " ".join(report["residual_risks"]))
+
     def test_failure_analysis_drops_command_failures_resolved_by_repair_replay(self) -> None:
         execution = {
             "shell": {
