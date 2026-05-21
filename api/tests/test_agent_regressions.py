@@ -713,6 +713,48 @@ class AgentRuntimeContextRegressionTests(unittest.TestCase):
                 attached_assets=[],
             ))
 
+    def test_auto_execute_clara_skips_pre_apply_refinement(self) -> None:
+        with patch("api.agent_runtime.settings_mod.settings.agent_refinement_mode", "auto"):
+            self.assertFalse(_should_run_refinement(
+                build_mode="full-agent",
+                instruction="build a production dashboard app",
+                active_rel="src/App.tsx",
+                preview_url=None,
+                attached_assets=[],
+                auto_execute=True,
+            ))
+
+    def test_backend_repair_skips_redundant_deep_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            project_dir.mkdir(parents=True)
+            (project_dir / "package.json").write_text('{"scripts":{"build":"vite build"}}\n', encoding="utf-8")
+            req = SimpleNamespace(
+                input="repair verifier output",
+                project_root="demo",
+                build_mode="full-agent",
+                active_file="",
+                open_files=[],
+                current_content=None,
+                selection=None,
+                preview_url=None,
+                editor_status="Backend verifier repair before apply",
+                asset_paths=[],
+                auto_execute=False,
+            )
+            ctx = prepare_agent_context(req, ws_root)
+
+            self.assertFalse(_should_run_deep_preflight(ctx, req.input))
+            self.assertFalse(_should_run_refinement(
+                build_mode="full-agent",
+                instruction=req.input,
+                active_rel="src/App.tsx",
+                preview_url=None,
+                attached_assets=[],
+                editor_status=req.editor_status,
+            ))
+
 
 class AgentPatchEditingRegressionTests(unittest.TestCase):
     def test_suggest_converts_unified_patch_to_file_change(self) -> None:
@@ -3425,10 +3467,18 @@ class WorkspaceBoundaryRegressionTests(unittest.TestCase):
                 safe_join(root, "../workspace-evil/secret.txt")
 
     def test_hosted_sensitive_routes_require_verified_user(self) -> None:
-        with patch("api.main.has_supabase", return_value=True):
+        with patch("api.main.has_supabase", return_value=True), \
+            patch("api.main._is_serverless_runtime", return_value=True):
             requires_verified_user = main_mod._requires_verified_hosted_user("/api/fs/list")
 
         self.assertTrue(requires_verified_user)
+
+    def test_local_sensitive_routes_allow_header_fallback_even_with_supabase_env(self) -> None:
+        with patch("api.main.has_supabase", return_value=True), \
+            patch("api.main._is_serverless_runtime", return_value=False):
+            requires_verified_user = main_mod._requires_verified_hosted_user("/api/fs/list")
+
+        self.assertFalse(requires_verified_user)
 
 
 class PreviewRunnerRegressionTests(unittest.TestCase):

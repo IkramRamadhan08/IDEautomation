@@ -125,6 +125,8 @@ SENSITIVE_HOSTED_API_PREFIXES = (
 def _requires_verified_hosted_user(path: str) -> bool:
     if not has_supabase():
         return False
+    if not _is_serverless_runtime():
+        return False
     if path in {"/api/healthz", "/api/auth/debug", "/api/settings", "/api/models", "/api/agent/worker/run"}:
         return False
     if path == "/api/run/proxy" or path.startswith("/api/run/proxy/"):

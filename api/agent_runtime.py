@@ -294,6 +294,8 @@ class PreparedAgentContext:
     project_dir: Path
     mode_profile: AgentModeProfile
     project_name: str
+    auto_execute: bool
+    editor_status: str
     active_rel: str
     open_files: list[str]
     current_from_buffer: bool
@@ -1446,13 +1448,17 @@ def _split_runtime_actions(actions: list[dict[str, Any]]) -> tuple[list[dict[str
     return mcp_actions, tool_actions, other_actions
 
 
-def _should_run_refinement(*, build_mode: str, instruction: str, active_rel: str, preview_url: str | None, attached_assets: list[str]) -> bool:
+def _should_run_refinement(*, build_mode: str, instruction: str, active_rel: str, preview_url: str | None, attached_assets: list[str], auto_execute: bool = False, editor_status: str = "") -> bool:
     refinement_mode = str(getattr(settings_mod.settings, "agent_refinement_mode", "auto") or "auto").strip().lower()
     if refinement_mode == "off":
         return False
     if refinement_mode == "always":
         return True
 
+    if str(editor_status or "").startswith("Backend verifier repair") or str(editor_status or "").startswith("Backend repair after"):
+        return False
+    if auto_execute and build_mode == "full-agent":
+        return False
     if build_mode == "full-agent":
         return True
     friendly_mode = _friendly_free_tier_mode()
@@ -1714,6 +1720,8 @@ def prepare_agent_context(req: Any, ws_root: Path) -> PreparedAgentContext:
         project_dir=project_dir,
         mode_profile=mode_profile,
         project_name=project_name,
+        auto_execute=bool(getattr(req, "auto_execute", False)),
+        editor_status=str(getattr(req, "editor_status", "") or ""),
         active_rel=active_rel,
         open_files=open_files,
         current_from_buffer=current_from_buffer,
@@ -2078,6 +2086,8 @@ def _plan_node(state: AgentRuntimeState) -> AgentRuntimeState:
 def _should_run_deep_preflight(ctx: PreparedAgentContext, user_input: str) -> bool:
     if not ctx.project_dir.exists() or not ctx.project_dir.is_dir():
         return False
+    if ctx.editor_status.startswith("Backend verifier repair") or ctx.editor_status.startswith("Backend repair after"):
+        return False
     if not (ctx.intent.should_write_files or ctx.intent.kind == "inspection"):
         return False
     if ctx.intent.should_write_files or ctx.intent.kind == "inspection":
@@ -2368,6 +2378,8 @@ def _route_after_draft(state: AgentRuntimeState) -> str:
         active_rel=ctx.active_rel,
         preview_url=state.get("request_preview_url"),
         attached_assets=ctx.attached_assets,
+        auto_execute=ctx.auto_execute,
+        editor_status=ctx.editor_status,
     ):
         return "refine"
     return "finalize"
