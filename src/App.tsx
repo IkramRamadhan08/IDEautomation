@@ -186,7 +186,6 @@ export default function App() {
   const [settings, setSettings] = useState<SettingsInfo | null>(null);
   const [buildMode, setBuildMode] = useState<BuildMode>("hybrid");
   const [buildModeDraft, setBuildModeDraft] = useState<BuildMode>("hybrid");
-  const [agentAccessMode, setAgentAccessMode] = useState<"safe" | "trusted">("safe");
   const [agentAccessModeDraft, setAgentAccessModeDraft] = useState<"safe" | "trusted">("safe");
   const [modelDraft, setModelDraft] = useState<string>("");
   const [nineRouterBaseUrlDraft, setNineRouterBaseUrlDraft] = useState<string>("http://127.0.0.1:20128/v1");
@@ -730,13 +729,11 @@ export default function App() {
   useEffect(() => {
     const loadSelectedProjectPrefs = async () => {
       if (!selectedProject || selectedProject === "." || !hasVerifiedHostedAuth) {
-        setAgentAccessMode("safe");
         setAgentAccessModeDraft("safe");
         return;
       }
       const hosted = hostedProjects.find((project) => project.root === selectedProject);
       if (!hosted) {
-        setAgentAccessMode("safe");
         setAgentAccessModeDraft("safe");
         return;
       }
@@ -748,7 +745,6 @@ export default function App() {
           setBuildModeDraft(prefs.build_mode);
         }
         const accessMode = prefs.agent_access_mode === "trusted" ? "trusted" : "safe";
-        setAgentAccessMode(accessMode);
         setAgentAccessModeDraft(accessMode);
       } catch {
         // ignore project pref load failures during trial mode
@@ -1224,7 +1220,6 @@ export default function App() {
 
       await loadSettingsOverview();
       setBuildMode(buildModeDraft);
-      setAgentAccessMode(agentAccessModeDraft);
       setSettingsOpen(false);
       toast.success("Settings disimpan");
     } catch (e) {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import posixpath
 from pathlib import Path, PurePosixPath
 import re
 from typing import Any, Callable, Literal, TypedDict
@@ -14,7 +15,7 @@ from .agent_intent import AgentIntent, classify_agent_intent
 from .agent_mcp import discover_mcp_servers, execute_mcp_tool, format_mcp_prompt, format_mcp_results_prompt, list_mcp_tools, suggest_mcp_actions
 from .agent_tools import execute_local_tool, format_local_tool_results_prompt, format_local_tools_prompt
 from .agent_memory import remember_agent_run, retrieve_agent_memory
-from .agent_skills import format_skill_prompt, resolve_agent_skills
+from .agent_skills import detect_project_stack, format_skill_prompt, resolve_agent_skills
 from .app_state import CURRENT_SESSION_ID, CURRENT_USER_ID, STATE
 from .fs import read_text, safe_join
 from .hybrid import build_hybrid_seed, merge_hybrid_seed, should_seed_hybrid
@@ -49,9 +50,10 @@ Shared rules:
 - Prefer `patches` for precise edits to existing files when the current file content was provided. Use `changes` with FULL file contents for new/generated files or when patching is ambiguous.
 - patches must be standard unified diffs that apply cleanly to the provided current content.
 - Use actions only for steps that are truly needed.
-- Tools are callable interfaces. Use `type: \"tool\"` for local read-only repo helpers (no external MCP server required).
+- Tools are callable interfaces. Use `type: \"tool\"` for local repo helpers/edit preflight tools (no external MCP server required). Local edit preflight tools preview changes; final writes must still be returned as `changes` or `patches`.
 - MCP is NOT a tool. It is a standard way to connect to external tools/data sources. Use `type: \"mcp\"` only when a registered MCP integration (server exposing tools) would materially improve the answer.
 - If you need tools (local or MCP) before finalizing, return the tool action(s) first and keep `changes` empty until the tool result comes back.
+- For precise edits after inspection, prefer `line_replace_preview` or `search_replace_preview` to validate the intended edit, then return the resulting suggested change as final `changes`/`patches`.
 - Do not mix exploratory tool actions with final shell actions in the same pass unless absolutely unavoidable.
 - If current content is marked as coming from the editor buffer, trust it over on-disk file contents.
 - Reuse the existing stack and patterns unless there is a clear reason not to.
@@ -100,6 +102,8 @@ CODEX-STYLE PROGRESS:
 """
 
 _FRONTEND_EXTS = {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".css", ".scss", ".sass", ".less", ".html"}
+_FRONTEND_REQUEST_RE = re.compile(r"\b(ui|ux|web|website|frontend|front-end|landing|dashboard|page|halaman|tampilan|preview|browser|react|vite|next|css|html)\b", re.IGNORECASE)
+_NO_UI_REQUEST_RE = re.compile(r"\b(jangan|tidak|tanpa|no)\s+(?:bikin|buat|create|make)?\s*(?:ui|web|website|frontend|front-end|preview|react|vite|halaman|tampilan)\b", re.IGNORECASE)
 _RELATIVE_IMPORT_RE = re.compile(r'(?:import\s+(?:[^\"\']+?\s+from\s+)?|export\s+[^\"\']*?\s+from\s+|import\()\s*["\']([^"\']+)["\']')
 _IMPORT_FROM_RE = re.compile(
     r'\bimport\s+(?P<clause>[^;\n]+?)\s+from\s*["\'](?P<spec>[^"\']+)["\']'
@@ -151,13 +155,34 @@ _HARD_VERIFIER_CHECKS = {
     "unique-change-paths",
     "non-empty-file-content",
     "valid-shell-actions",
+    "root-route-entrypoint",
 }
 _MAX_AUTONOMOUS_TASK_LOOPS = 2
+
+
+def _should_seed_full_agent_project(project_dir: Path, user_input: str) -> bool:
+    if not should_seed_hybrid(project_dir):
+        return False
+    hint = str(user_input or "")
+    if _NO_UI_REQUEST_RE.search(hint):
+        return False
+    try:
+        stack = detect_project_stack(project_dir)
+    except Exception:
+        stack = None
+    if stack and stack.has_preview_surface:
+        return True
+    if _FRONTEND_REQUEST_RE.search(hint):
+        return True
+    if stack and (stack.languages or stack.validation_files or stack.has_database_schema or stack.has_infra):
+        return False
+    return True
 
 APPORA_AUTO_SAFE_SHELL_COMMANDS = [
     "npm/pnpm/yarn/bun install, add, test, run <script>",
     "cd <relative-project-folder> && npm/pnpm/yarn/bun run <script>",
     "python -m compileall, pytest, unittest",
+    "go test, cargo test/check, mvn/gradle test, composer/bundle/dotnet validation",
     "tsc, vite build, eslint, vitest, jest, playwright test",
     "git status, diff, log, show, branch",
     "pwd, ls, find, cat, head, tail, wc, sed -n on workspace-relative paths",
@@ -734,7 +759,10 @@ def _merge_action_sets(*batches: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return merged
 
 
-_STARTER_RESIDUE_RE = re.compile(r"\b(vite|react \+ vite|seeded template|lorem ipsum|placeholder|template starter)\b", re.IGNORECASE)
+_STARTER_RESIDUE_RE = re.compile(
+    r"\b(vite|react \+ vite|seeded template|lorem ipsum|placeholder\s+(?:copy|content|text|section|card|page)|template starter)\b",
+    re.IGNORECASE,
+)
 _GENERIC_SAAS_COPY_RE = re.compile(r"\b(streamline|seamless|reimagined|next[- ]generation|supercharge|unlock|scale faster|all[- ]in[- ]one|boost productivity|transform your workflow)\b", re.IGNORECASE)
 _SEVERE_OVERFLOW_CSS_RE = re.compile(r"(?<![-\w])(?:min-)?width\s*:\s*(\d{3,4})px|(?<![-\w])width\s*:\s*100vw\b|(?<![-\w])(?:min-)?width\s*:\s*(?:max-content|fit-content)\b", re.IGNORECASE)
 
@@ -767,7 +795,7 @@ def _frontend_static_quality_issues(ctx: PreparedAgentContext, changes: list[dic
                     continue
             severe_overflow_css_count += 1
 
-        if inline_style_count > 8:
+        if inline_style_count > 12:
             issues.append(f"{path}: {inline_style_count} inline style blocks; move repeated styling into classes/components.")
         if any_cast_count:
             issues.append(f"{path}: {any_cast_count} loose any cast/type usage; use typed data instead.")
@@ -1113,10 +1141,17 @@ def _change_map_by_local_path(changes: list[dict[str, Any]]) -> dict[str, str]:
     return out
 
 
+def _allows_empty_file(path: str) -> bool:
+    name = PurePosixPath(str(path or "").strip()).name
+    return name in {"__init__.py", ".gitkeep", ".keep"}
+
+
 def _resolve_import_candidate(source_rel: str, specifier: str, candidates: set[str]) -> str | None:
     if not specifier.startswith("."):
         return None
-    raw = str(PurePosixPath(PurePosixPath(source_rel).parent, specifier)).lstrip("/")
+    raw = posixpath.normpath(str(PurePosixPath(PurePosixPath(source_rel).parent, specifier))).lstrip("/")
+    if raw.startswith("../"):
+        return None
     names: list[str] = []
     if PurePosixPath(raw).suffix:
         names.append(raw)
@@ -1135,6 +1170,10 @@ def _missing_relative_imports(ctx: PreparedAgentContext, changes: list[dict[str,
     change_map = _change_map_by_local_path(changes)
     if not change_map:
         return []
+    for rel, content in list(change_map.items()):
+        local_rel = _localize_project_rel(rel, ctx.project_root)
+        if local_rel and local_rel not in change_map:
+            change_map[local_rel] = content
     candidate_files = set(ctx.all_files) | set(change_map.keys())
     missing: list[str] = []
     for rel, content in change_map.items():
@@ -1371,6 +1410,30 @@ def _missing_external_dependencies(ctx: PreparedAgentContext, changes: list[dict
     return missing
 
 
+def _root_route_entrypoint_issues(ctx: PreparedAgentContext, changes: list[dict[str, Any]]) -> list[str]:
+    change_map = _change_map_by_local_path(changes)
+    for rel, content in list(change_map.items()):
+        local_rel = _localize_project_rel(rel, ctx.project_root)
+        if local_rel and local_rel not in change_map:
+            change_map[local_rel] = content
+
+    issues: list[str] = []
+    for rel, content in change_map.items():
+        local_rel = _localize_project_rel(rel, ctx.project_root)
+        if PurePosixPath(local_rel).name not in {"App.tsx", "App.jsx"}:
+            continue
+        text = str(content or "")
+        has_not_found_fallback = bool(re.search(r"\b(NotFound|404|Page not found)\b", text, re.IGNORECASE))
+        has_named_routes = bool(re.search(r"\bpath\s*:\s*['\"]/", text))
+        has_root_route = bool(re.search(r"\bpath\s*:\s*['\"]/(?:['\"]|$)", text))
+        redirects_root = bool(re.search(r"location\.pathname\s*={2,3}\s*['\"]/['\"]|normalizePath\([^)]*['\"]/(?:dashboard|home|app)['\"]", text))
+        if has_not_found_fallback and has_named_routes and not has_root_route and not redirects_root:
+            issues.append(
+                f"{local_rel} defines SPA routes with a NotFound/404 fallback but no '/' route; preview root can render 404. Add '/' to the dashboard/home route or redirect '/' to the primary app route."
+            )
+    return issues[:4]
+
+
 def _large_rewrite_warnings(ctx: PreparedAgentContext, changes: list[dict[str, Any]], user_input: str) -> list[str]:
     hint = (user_input or "").lower()
     if any(token in hint for token in ("rewrite", "rombak", "bongkar", "rebuild", "ulang", "replace", "hapus semua")):
@@ -1571,8 +1634,10 @@ def _build_context_parts(ctx: PreparedAgentContext, req: Any) -> list[str]:
         "- You are working inside the user's selected Appora project workspace, not an abstract code snippet.",
         "- You can return file changes/patches; Appora applies them to the project and syncs durable hosted files.",
         "- You can request shell actions for project-scoped install/build/test/lint/inspect work; Appora runs them through guarded autonomy and streams stdout/stderr.",
-        "- You can request local read-only tools with actions like {type:'tool', tool:'repo_search'|'read_file'|'repo_overview'|'package_scripts'|'dependency_graph'|'component_index'|'route_map'|'quality_scan', arguments:{...}}.",
-        "- Appora can start/refresh a live preview and run preview audit when the project has a preview surface; optimize visible UI accordingly.",
+        "- You can request local tools with actions like {type:'tool', tool:'repo_map'|'file_window'|'line_replace_preview'|'search_replace_preview'|'symbol_search'|'style_stack'|'repo_search'|'repo_read'|'repo_overview'|'stack_profile'|'validation_plan'|'skill_catalog'|'skill_read'|'package_scripts'|'dependency_graph'|'component_index'|'route_map'|'quality_scan', arguments:{...}}.",
+        "- Local edit preflight tools do not write files directly; use their suggested_change as evidence for the final changes/patches you return.",
+        "- Detect the repository stack first. Appora is a general coder agent for frontend, backend, CLI, API, DB, infra, and polyglot repos; do not assume React/Vite unless the files prove it.",
+        "- Appora can start/refresh a live preview and run preview audit when the project has a preview surface; optimize visible UI accordingly only for UI/web tasks.",
         "- Never tell the non-technical user to run terminal commands when you can request a shell action instead.",
         "Auto-safe shell command families:",
         "- " + "\n- ".join(APPORA_AUTO_SAFE_SHELL_COMMANDS),
@@ -1764,7 +1829,7 @@ def prepare_agent_context(req: Any, ws_root: Path) -> PreparedAgentContext:
             except Exception as exc:
                 prep_warnings.append({"phase": "context", "message": f"Linked CSS discovery dari '{active_rel}' gagal ({exc})."[:240]})
 
-        hybrid_seed_needed = mode_profile.build_mode == "full-agent" and should_seed_hybrid(project_dir)
+        hybrid_seed_needed = mode_profile.build_mode == "full-agent" and _should_seed_full_agent_project(project_dir, getattr(req, "input", ""))
         if hybrid_seed_needed:
             seed_files = build_hybrid_seed(project_root, project_name, getattr(req, "input", ""))
             for rel_path, content in seed_files.items():
@@ -1976,48 +2041,42 @@ def _build_execution_plan(ctx: PreparedAgentContext, user_input: str) -> list[di
 
     context_files = [ctx.active_rel, *ctx.open_files]
     context_files = [item for index, item in enumerate(context_files) if item and item not in context_files[:index]]
-    task_kind = ctx.intent.kind
-
     add(
         "scope",
-        "Define task boundary",
+        "Understand task boundary",
         (
-            f"Treat this as {task_kind}. "
-            "Keep normal conversation read-only, keep hybrid changes surgical, and let full-agent mode cover broader app flow when requested."
+            f"Classified as {ctx.intent.kind}. Use the graph state, current files, memory, skills, MCP registry, and tool results as evidence."
         ),
         context_files,
     )
 
     if ctx.memory_prompt:
-        add("memory", "Use project memory", "Fold relevant same-project memory and long-term docs into decisions before changing files.")
+        add("memory", "Use retrieved memory", "Fold relevant project memory/RAG into reasoning when it changes the implementation path.")
 
     if ctx.resolved_skill_ids:
-        add("skills", "Apply matched skills", f"Use skill guidance: {', '.join(ctx.resolved_skill_ids[:6])}.")
+        add("skills", "Use matched skills", f"Apply progressively loaded skill guidance when relevant: {', '.join(ctx.resolved_skill_ids[:6])}.")
 
     if ctx.intent.should_run_tools:
         add(
-            "inspect",
-            "Inspect before writing",
-            "Prefer local repo tools or MCP read-only calls first when the request needs broader context than currently loaded files.",
+            "tool_loop",
+            "Choose tools from evidence gaps",
+            "Request local tool or MCP actions only when they answer a concrete uncertainty; use returned observations in the next graph pass.",
         )
 
     if ctx.intent.should_write_files:
         add(
-            "implement",
-            "Implement scoped changes",
-            (
-                "Produce complete file contents, keep imports/styles/states consistent, remove starter residue, avoid `as any`/excessive inline styles, "
-                "and preserve existing architecture unless full-agent mode demands a broader build."
-            ),
+            "act",
+            "Act on the repository",
+            "Return concrete file changes and/or project-scoped shell actions once enough evidence exists.",
             context_files,
         )
         add(
             "verify",
-            "Plan validation",
-            "Return shell actions only when install/build/lint/test commands materially improve confidence; otherwise leave a clear self-review trail.",
+            "Validate with available commands",
+            "Use the validation plan and shell policy to request build/test/lint/typecheck commands when they materially improve confidence.",
         )
     else:
-        add("answer", "Respond without file writes", "Explain findings or conversation answer without generating changes/actions.")
+        add("answer", "Answer without writes", "Return a read-only answer unless new user intent explicitly asks for project work.")
 
     if ctx.attached_assets:
         add("assets", "Use attached assets", f"Consider uploaded assets when relevant: {', '.join(ctx.attached_assets[:4])}.")
@@ -2026,7 +2085,7 @@ def _build_execution_plan(ctx: PreparedAgentContext, user_input: str) -> list[di
         add(
             "scale",
             "Keep app-scale structure",
-            "Prefer clear module boundaries, reusable components, durable state shape, empty/loading/error states, and validation hooks for larger apps.",
+            "Preserve clear module boundaries, state shape, error/loading flows, and validation hooks when the task is app-scale.",
         )
 
     return plan
@@ -2100,9 +2159,9 @@ def _update_task_state_after_verify(ctx: PreparedAgentContext, state: AgentRunti
     if ctx.resolved_skill_ids:
         mark_stage("skills", "done")
     if ctx.intent.should_run_tools:
-        mark_stage("inspect", "done" if ctx.trace_local_tools_used or ctx.trace_mcp_tools_used or actions else "pending")
+        mark_stage("tool_loop", "done" if ctx.trace_local_tools_used or ctx.trace_mcp_tools_used or actions else "pending")
     if ctx.intent.should_write_files:
-        mark_stage("implement", "done" if changes or actions else "blocked")
+        mark_stage("act", "done" if changes or actions else "blocked")
         mark_stage("verify", "blocked" if blocking else "done")
     else:
         mark_stage("answer", "done" if not changes and not actions else "blocked")
@@ -2202,18 +2261,14 @@ def _deep_preflight_node(state: AgentRuntimeState) -> AgentRuntimeState:
     if not _should_run_deep_preflight(ctx, state["input"]):
         return {"context": ctx, "deep_preflight": False}
 
-    _emit(state, "status", {"phase": "tooling", "message": "Deep work preflight: baca struktur repo, scripts, dan dependency graph dulu..."})
+    _emit(state, "status", {"phase": "tooling", "message": "Bootstrap tools: cek stack, validasi, skill, dan MCP dulu..."})
     root_arg = ctx.project_root or "."
     tool_specs: list[dict[str, Any]] = [
-        {"tool": "repo_overview", "arguments": {"project_root": root_arg, "max_files": 700}},
-        {"tool": "package_scripts", "arguments": {"project_root": root_arg}},
-        {"tool": "preview_capabilities", "arguments": {"project_root": root_arg}},
-        {"tool": "memory_overview", "arguments": {"project_root": root_arg}},
+        {"tool": "repo_overview", "arguments": {"project_root": root_arg, "max_files": 450}},
+        {"tool": "stack_profile", "arguments": {"project_root": root_arg}},
+        {"tool": "validation_plan", "arguments": {"project_root": root_arg}},
+        {"tool": "skill_catalog", "arguments": {"project_root": root_arg, "query": state["input"], "limit": 12}},
         {"tool": "mcp_status", "arguments": {"project_root": root_arg, "include_live_tools": False}},
-        {"tool": "dependency_graph", "arguments": {"project_root": root_arg, "max_files": 220}},
-        {"tool": "component_index", "arguments": {"project_root": root_arg, "max_files": 240}},
-        {"tool": "route_map", "arguments": {"project_root": root_arg, "max_files": 240}},
-        {"tool": "quality_scan", "arguments": {"project_root": root_arg, "max_files": 260}},
     ]
 
     read_many_paths: list[str] = []
@@ -2280,9 +2335,14 @@ def _deep_preflight_node(state: AgentRuntimeState) -> AgentRuntimeState:
 
     local_prompt = format_local_tool_results_prompt(results)
     if local_prompt:
-        ctx.extra_context = f"{ctx.extra_context}\n\nDEEP WORK PREFLIGHT:\n{local_prompt}".strip()
-    ctx.trace_warnings.append({"phase": "deep-preflight", "message": f"Deep work preflight memakai {sum(1 for item in results if item.ok)}/{len(results)} local tools."})
-    _emit(state, "delta", {"message": f"Deep preflight selesai: {sum(1 for item in results if item.ok)} tool context masuk."})
+        ctx.extra_context = (
+            f"{ctx.extra_context}\n\n"
+            "AGENT BOOTSTRAP TOOL RESULTS:\n"
+            f"{local_prompt}\n\n"
+            "Only this minimal bootstrap was automatic. For missing facts, request additional local tools/MCP actions from the registry instead of guessing."
+        ).strip()
+    ctx.trace_warnings.append({"phase": "deep-preflight", "message": f"Bootstrap memakai {sum(1 for item in results if item.ok)}/{len(results)} local tools; further tools are model-selected."})
+    _emit(state, "delta", {"message": f"Bootstrap selesai: {sum(1 for item in results if item.ok)} tool context masuk. Tool berikutnya dipilih agent dari evidence gap."})
     return {"context": ctx, "deep_preflight": True}
 
 
@@ -2300,7 +2360,7 @@ def _compact_no_work_context(ctx: PreparedAgentContext) -> str:
     quality_tools = [
         item
         for item in list(ctx.trace_local_tools_used or [])
-        if isinstance(item, dict) and item.get("tool") in {"repo_overview", "package_scripts", "route_map", "quality_scan", "preview_capabilities"}
+        if isinstance(item, dict) and item.get("tool") in {"repo_overview", "stack_profile", "validation_plan", "skill_catalog", "package_scripts", "route_map", "quality_scan", "preview_capabilities"}
     ]
     compact = {
         "project_root": ctx.project_root,
@@ -2311,7 +2371,7 @@ def _compact_no_work_context(ctx: PreparedAgentContext) -> str:
             "next_action": task_state.get("next_action"),
             "blocking_checks": list(task_state.get("blocking_checks") or [])[:8],
         },
-        "quality_tool_evidence": [
+        "tool_evidence": [
             {
                 "tool": item.get("tool"),
                 "ok": item.get("ok"),
@@ -2319,18 +2379,12 @@ def _compact_no_work_context(ctx: PreparedAgentContext) -> str:
             }
             for item in quality_tools[-5:]
         ],
-        "required_output": [
-            f"{ctx.project_root}/src/App.tsx",
-            f"{ctx.project_root}/src/pages/Home.tsx",
-            f"{ctx.project_root}/src/app.css",
-            f"{ctx.project_root}/index.html",
-        ],
     }
     return (
         "NO-WORK RECOVERY CONTEXT:\n"
-        "The previous pass produced no file changes for a build request. Ignore broad exploration now and produce concrete file changes.\n"
+        "The previous pass produced no concrete work for a build request. Use the graph evidence to choose the next action.\n"
         f"{json.dumps(compact, ensure_ascii=False, indent=2)[:5000]}\n"
-        "Hard requirements: return valid JSON with non-empty `changes`; include full file contents; remove starter/template residue; avoid `as any`; avoid excessive inline styles; avoid emoji-heavy UI; include a shell action for `npm run build`."
+        "Return either: concrete file changes, project-scoped shell actions, or specific local tool/MCP actions that resolve the current evidence gap. Do not hardcode a React/Vite shape unless the repository stack actually supports it."
     )
 
 
@@ -2721,7 +2775,9 @@ def _verify_node(state: AgentRuntimeState) -> AgentRuntimeState:
     empty_files = [
         str(item.get("path") or "")
         for item in changes
-        if isinstance(item.get("new_content"), str) and not item.get("new_content")
+        if isinstance(item.get("new_content"), str)
+        and not item.get("new_content")
+        and not _allows_empty_file(str(item.get("path") or ""))
     ]
     add("non-empty-file-content", not empty_files, "Changed files have content." if not empty_files else f"Empty outputs: {', '.join(empty_files[:5])}")
 
@@ -2758,6 +2814,17 @@ def _verify_node(state: AgentRuntimeState) -> AgentRuntimeState:
             "Changed external imports are declared or installed by shell actions."
             if not missing_dependencies
             else f"Undeclared external imports: {', '.join(missing_dependencies[:6])}"
+        ),
+    )
+
+    root_route_issues = _root_route_entrypoint_issues(ctx, changes)
+    add(
+        "root-route-entrypoint",
+        not root_route_issues,
+        (
+            "SPA entrypoint renders a real page at '/'."
+            if not root_route_issues
+            else "; ".join(root_route_issues[:2])
         ),
     )
 
@@ -2898,16 +2965,7 @@ def _route_after_strict_retry(state: AgentRuntimeState) -> str:
 
 
 def _should_finalize_to_emergency_fallback(state: AgentRuntimeState) -> bool:
-    ctx = state["context"]
-    if not (ctx.is_full_agent and ctx.intent.should_write_files):
-        return False
-    if state.get("changes") or state.get("actions"):
-        return False
-    task_state = ctx.trace_task_state if isinstance(ctx.trace_task_state, dict) else {}
-    blockers = {str(item) for item in list(task_state.get("blocking_checks") or [])}
-    if "has-work-output" not in blockers:
-        return False
-    return bool(state.get("strict_agentic_retried")) or int(state.get("autonomous_iterations") or 0) >= 1
+    return False
 
 
 def _needs_autonomous_continue(state: AgentRuntimeState) -> bool:
@@ -3009,25 +3067,10 @@ def _finalize_node(state: AgentRuntimeState) -> AgentRuntimeState:
         normalized_changes = []
         normalized_actions = []
     elif ctx.is_full_agent and not normalized_changes and not normalized_actions:
-        fallback_changes, fallback_actions = _emergency_full_agent_changes(ctx, state["input"])
-        if fallback_changes:
-            normalized_changes = fallback_changes
-            normalized_actions = fallback_actions
-            spoken = (
-                "Aku tidak mau berhenti dengan output kosong. Aku pakai fallback full-agent untuk membuat surface produk awal, "
-                "lalu minta build validation supaya backend tetap bisa ngecek hasilnya."
-            )
-            log = f"{log} emergency_full_agent_fallback=1".strip()
-            ctx.trace_warnings.append({
-                "phase": "fallback",
-                "message": "Emergency full-agent fallback produced concrete files after repeated no-work output.",
-            })
-            ctx.trace_verification = _emergency_fallback_verification()
-            ctx.trace_task_state = {
-                "status": "ready",
-                "next_action": "Apply emergency full-agent fallback and run validation.",
-                "blocking_checks": [],
-            }
+        ctx.trace_warnings.append({
+            "phase": "finalize",
+            "message": "Full-agent run ended without concrete work; static emergency scaffolding is disabled so the model/tool loop owns recovery.",
+        })
     if ctx.intent.should_write_files:
         safe_actions: list[dict[str, Any]] = []
         dropped_actions: list[str] = []
@@ -3088,7 +3131,7 @@ def _finalize_node(state: AgentRuntimeState) -> AgentRuntimeState:
             project_name=ctx.project_name,
             instruction=state["input"],
             changes=normalized_changes,
-            should_seed=ctx.hybrid_seed_needed,
+            should_seed=ctx.hybrid_seed_needed and bool(normalized_changes),
         )
         if ctx.hybrid_seed_needed and "full-agent-mode" not in log:
             log = f"{log} full-agent-mode=seeded".strip()

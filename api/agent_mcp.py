@@ -6,6 +6,7 @@ from pathlib import Path
 import json
 import os
 import time
+import tomllib
 from typing import Any
 
 from anyio import BrokenResourceError
@@ -61,10 +62,32 @@ def _candidate_configs(ws_root: Path, project_dir: Path) -> list[Path]:
         ws_root / ".voiceide" / "mcp.json",
         project_dir / ".voiceide" / "mcp.json",
         project_dir / "mcp.json",
+        ws_root / ".mcp.json",
+        project_dir / ".mcp.json",
+        project_dir / ".claude" / "settings.json",
+        ws_root / ".codex" / "config.toml",
+        project_dir / ".codex" / "config.toml",
     ]:
         if path.exists() and path.is_file():
             out.append(path)
     return out
+
+
+def _load_config_payload(config_path: Path) -> dict[str, Any]:
+    if config_path.suffix.lower() == ".toml":
+        with config_path.open("rb") as fh:
+            payload = tomllib.load(fh)
+        return payload if isinstance(payload, dict) else {}
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    return payload if isinstance(payload, dict) else {}
+
+
+def _server_config_map(payload: dict[str, Any]) -> dict[str, Any] | None:
+    for key in ("servers", "mcpServers", "mcp_servers"):
+        raw = payload.get(key)
+        if isinstance(raw, dict):
+            return raw
+    return None
 
 
 def _normalize_dict_of_str(raw: Any) -> dict[str, str] | None:
@@ -139,15 +162,15 @@ def discover_mcp_servers(ws_root: Path, project_dir: Path, *, warnings: list[str
     seen: set[tuple[str, str]] = set()
     for config_path in _candidate_configs(ws_root, project_dir):
         try:
-            payload = json.loads(config_path.read_text(encoding="utf-8"))
+            payload = _load_config_payload(config_path)
         except Exception as exc:
             if warnings is not None:
                 warnings.append(f"MCP config '{config_path.name}' nggak kebaca ({exc}).")
             continue
-        raw_servers = payload.get("servers") if isinstance(payload, dict) else None
+        raw_servers = _server_config_map(payload)
         if not isinstance(raw_servers, dict):
             if warnings is not None:
-                warnings.append(f"MCP config '{config_path.name}' nggak punya object 'servers' yang valid.")
+                warnings.append(f"MCP config '{config_path.name}' nggak punya object 'servers'/'mcpServers' yang valid.")
             continue
         for name, raw in raw_servers.items():
             server = _normalize_server(str(name), raw, str(config_path), project_dir=project_dir, ws_root=ws_root)

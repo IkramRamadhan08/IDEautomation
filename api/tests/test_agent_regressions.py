@@ -17,7 +17,7 @@ from api import main as main_mod
 from api.agent_mcp import MCPServerInfo, MCPToolCallResult, MCPToolInfo, discover_mcp_servers, execute_mcp_tool, suggest_mcp_actions
 from api.agent_memory import get_agent_memory_overview, remember_agent_run, retrieve_agent_memory
 from api.agent_runtime import _autonomous_continue_node, _compact_no_work_context, _deep_preflight_node, _finalize_node, _intent_with_active_work_context, _is_no_work_recovery, _looks_like_plan_only_reply, _max_tool_loops_for_run, _plan_node, _remember_project_work_state, _route_after_strict_retry, _route_after_verify, _should_finalize_to_emergency_fallback, _should_run_deep_preflight, _should_run_refinement, _strict_agentic_retry_node, _verify_node, prepare_agent_context
-from api.agent_skills import detect_project_stack, resolve_agent_skills
+from api.agent_skills import build_validation_plan, detect_project_stack, resolve_agent_skills
 from api.agent_tools import execute_local_tool
 from api.app_state import CURRENT_SESSION_ID, CURRENT_USER_ID, STATE
 from api.auth_identity import AuthenticatedUser
@@ -307,7 +307,7 @@ class AgentRuntimeContextRegressionTests(unittest.TestCase):
             state["strict_agentic_retried"] = True
             self.assertEqual(_route_after_verify(state), "finalize")
 
-    def test_repeated_no_work_routes_to_emergency_fallback_without_extra_loop(self) -> None:
+    def test_repeated_no_work_routes_to_autonomous_loop_without_static_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ws_root = Path(tmp)
             project_dir = ws_root / "demo"
@@ -336,11 +336,8 @@ class AgentRuntimeContextRegressionTests(unittest.TestCase):
             verified = _verify_node(state)
             routed_state = {**state, **verified}
 
-            self.assertTrue(_should_finalize_to_emergency_fallback(routed_state))
-            self.assertEqual(_route_after_verify(routed_state), "finalize")
-            finalized = _finalize_node(routed_state)
-            self.assertTrue(finalized["changes"])
-            self.assertIn("emergency_full_agent_fallback=1", finalized["log"])
+            self.assertFalse(_should_finalize_to_emergency_fallback(routed_state))
+            self.assertEqual(_route_after_verify(routed_state), "autonomous_continue")
 
     def test_repeated_plan_only_build_reply_routes_to_fallback_finalize(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -376,7 +373,7 @@ class AgentRuntimeContextRegressionTests(unittest.TestCase):
 
             self.assertTrue(routed_state["context"].intent.should_write_files)
             self.assertEqual(routed_state["context"].trace_task_state["status"], "blocked")
-            self.assertEqual(_route_after_verify(routed_state), "finalize")
+            self.assertEqual(_route_after_verify(routed_state), "autonomous_continue")
 
     def test_blocked_task_state_routes_to_autonomous_continue(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -544,10 +541,41 @@ class AgentRuntimeContextRegressionTests(unittest.TestCase):
         self.assertIn("selected Appora project workspace", ctx.extra_context)
         self.assertIn("start/refresh a live preview and run preview audit", ctx.extra_context)
         self.assertIn("npm/pnpm/yarn/bun install, add, test, run <script>", ctx.extra_context)
+        self.assertIn("go test, cargo test/check, mvn/gradle test, composer/bundle/dotnet validation", ctx.extra_context)
+        self.assertIn("Detect the repository stack first", ctx.extra_context)
         self.assertIn("cd <relative-project-folder> && npm/pnpm/yarn/bun run <script>", ctx.extra_context)
         self.assertIn("global installs such as npm install -g", ctx.extra_context)
         self.assertIn("Remove starter residue", ctx.mode_profile.instruction_prefix)
         self.assertIn("emoji-as-icon decoration", ctx.mode_profile.system_prompt)
+
+    def test_full_agent_does_not_seed_react_shell_for_python_project(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "py-tools"
+            (project_dir / "app").mkdir(parents=True)
+            (project_dir / "tests").mkdir(parents=True)
+            (project_dir / "pyproject.toml").write_text("[project]\nname='py-tools'\n", encoding="utf-8")
+            (project_dir / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+            (project_dir / "app" / "metrics.py").write_text("def completion_rate(done, total):\n    return done / total\n", encoding="utf-8")
+            req = SimpleNamespace(
+                input="Perbaiki modul Python metrics. Jangan bikin UI.",
+                project_root="py-tools",
+                build_mode="full-agent",
+                active_file="app/metrics.py",
+                open_files=["app/metrics.py"],
+                current_content=None,
+                selection=None,
+                preview_url=None,
+                editor_status=None,
+                asset_paths=[],
+            )
+
+            ctx = prepare_agent_context(req, ws_root)
+
+        self.assertFalse(ctx.hybrid_seed_needed)
+        self.assertIn("app/metrics.py", ctx.relevant_files)
+        self.assertNotIn("package.json", ctx.relevant_files)
+        self.assertNotIn("src/App.tsx", ctx.relevant_files)
 
     def test_codex_tools_prompt_triggers_deep_preflight_for_agent_work(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -571,7 +599,7 @@ class AgentRuntimeContextRegressionTests(unittest.TestCase):
 
             self.assertTrue(_should_run_deep_preflight(ctx, req.input))
 
-    def test_deep_preflight_loads_preview_memory_and_mcp_capability_tools(self) -> None:
+    def test_deep_preflight_loads_minimal_bootstrap_then_leaves_tools_model_selected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ws_root = Path(tmp)
             project_dir = ws_root / "demo"
@@ -599,11 +627,18 @@ class AgentRuntimeContextRegressionTests(unittest.TestCase):
 
             self.assertTrue(next_state["deep_preflight"])
             used_tools = [item["tool"] for item in next_state["context"].trace_local_tools_used]
-            self.assertIn("preview_capabilities", used_tools)
-            self.assertIn("memory_overview", used_tools)
+            self.assertIn("stack_profile", used_tools)
+            self.assertIn("validation_plan", used_tools)
+            self.assertIn("skill_catalog", used_tools)
             self.assertIn("mcp_status", used_tools)
-            self.assertIn("preview_capabilities", next_state["context"].extra_context)
-            self.assertTrue(any(data.get("tool") == "preview_capabilities" for event, data in emitted if event == "tool_call"))
+            self.assertNotIn("component_index", used_tools)
+            self.assertNotIn("route_map", used_tools)
+            self.assertNotIn("quality_scan", used_tools)
+            self.assertIn("stack_profile", next_state["context"].extra_context)
+            self.assertIn("validation_plan", next_state["context"].extra_context)
+            self.assertIn("skill_catalog", next_state["context"].extra_context)
+            self.assertIn("Only this minimal bootstrap was automatic", next_state["context"].extra_context)
+            self.assertTrue(any(data.get("tool") == "mcp_status" for event, data in emitted if event == "tool_call"))
 
     def test_no_work_recovery_uses_compact_action_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -632,10 +667,10 @@ class AgentRuntimeContextRegressionTests(unittest.TestCase):
             compact = _compact_no_work_context(ctx)
 
         self.assertIn("NO-WORK RECOVERY CONTEXT", compact)
-        self.assertIn("non-empty `changes`", compact)
-        self.assertIn("npm run build", compact)
+        self.assertIn("concrete file changes", compact)
+        self.assertIn("local tool/MCP actions", compact)
 
-    def test_full_agent_finalize_uses_emergency_fallback_after_no_work(self) -> None:
+    def test_full_agent_finalize_does_not_use_static_emergency_fallback_after_no_work(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ws_root = Path(tmp)
             project_dir = ws_root / "demo"
@@ -667,17 +702,10 @@ class AgentRuntimeContextRegressionTests(unittest.TestCase):
 
             finalized = _finalize_node(state)
 
-        paths = [item["path"] for item in finalized["changes"]]
-        self.assertIn("demo/src/pages/Home.tsx", paths)
-        self.assertIn("demo/src/app.css", paths)
-        self.assertTrue(any(item.get("command") == "npm run build" for item in finalized["actions"]))
-        self.assertIn("emergency_full_agent_fallback=1", finalized["log"])
-        fallback_text = "\n".join(item["new_content"] for item in finalized["changes"])
-        self.assertIn("LedgerIQ", fallback_text)
-        self.assertIn("FAQ", fallback_text)
-        self.assertIn("min-height: 44px", fallback_text)
-        self.assertTrue(all(item["ok"] for item in finalized["trace"]["verification"]))
-        self.assertEqual(finalized["trace"]["task_state"]["status"], "ready")
+        self.assertEqual(finalized["changes"], [])
+        self.assertEqual(finalized["actions"], [])
+        self.assertNotIn("emergency_full_agent_fallback=1", finalized["log"])
+        self.assertTrue(any(item["phase"] == "finalize" and "static emergency scaffolding is disabled" in item["message"] for item in finalized["trace"]["warnings"]))
 
     def test_free_tier_clara_build_allows_reliable_local_tool_loops(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -906,6 +934,70 @@ class AgentVerifierRegressionTests(unittest.TestCase):
         self.assertEqual(result["context"].trace_task_state["blocking_checks"], [])
         self.assertFalse(main_mod._trace_has_blocking_verifier_failures({"verification": result["context"].trace_verification}))
 
+    def test_verifier_resolves_mixed_project_prefixed_relative_import_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src").mkdir(parents=True)
+            ctx = self._ctx(ws_root)
+
+            state = {
+                "context": ctx,
+                "input": "build dashboard",
+                "changes": [
+                    {
+                        "path": "src/pages/Dashboard.tsx",
+                        "new_content": "import Card from '../components/ui/Card';\nexport default function Dashboard() { return <Card /> }\n",
+                    },
+                    {
+                        "path": "demo/src/components/ui/Card.tsx",
+                        "new_content": "export default function Card() { return <section /> }\n",
+                    },
+                ],
+                "actions": [],
+            }
+            result = _verify_node(state)
+
+        verification = {item["name"]: item for item in result["context"].trace_verification}
+        self.assertTrue(verification["relative-imports-resolve"]["ok"])
+
+    def test_verifier_blocks_spa_router_without_root_entrypoint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src").mkdir(parents=True)
+            (project_dir / "src" / "App.tsx").write_text("export default function App() { return null }\n", encoding="utf-8")
+            ctx = self._ctx(ws_root, prompt="build dashboard app")
+
+            state = {
+                "context": ctx,
+                "input": "build dashboard app",
+                "changes": [
+                    {
+                        "path": "src/App.tsx",
+                        "new_content": (
+                            "import DashboardPage from './pages/Dashboard';\n"
+                            "import NotFoundPage from './pages/NotFound';\n"
+                            "const routes = [{ path: '/dashboard', element: <DashboardPage /> }];\n"
+                            "export default function App() {\n"
+                            "  const activeRoute = routes.find((route) => route.path === window.location.pathname);\n"
+                            "  return activeRoute ? activeRoute.element : <NotFoundPage />;\n"
+                            "}\n"
+                        ),
+                    },
+                    {"path": "src/pages/Dashboard.tsx", "new_content": "export default function DashboardPage() { return <main><h1>Dashboard</h1></main>; }\n"},
+                    {"path": "src/pages/NotFound.tsx", "new_content": "export default function NotFoundPage() { return <main><h1>404</h1></main>; }\n"},
+                ],
+                "actions": [],
+            }
+            result = _verify_node(state)
+
+        verification = {item["name"]: item for item in result["context"].trace_verification}
+        self.assertFalse(verification["root-route-entrypoint"]["ok"])
+        self.assertEqual(verification["root-route-entrypoint"]["severity"], "hard")
+        self.assertIn("root", verification["root-route-entrypoint"]["detail"].lower())
+        self.assertTrue(main_mod._trace_has_blocking_verifier_failures({"verification": result["context"].trace_verification}))
+
     def test_verifier_warns_on_large_rewrite_without_blocking(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ws_root = Path(tmp)
@@ -998,6 +1090,25 @@ class AgentVerifierRegressionTests(unittest.TestCase):
 
         verification = {item["name"]: item for item in result["context"].trace_verification}
         self.assertTrue(verification["relative-import-exports-match"]["ok"])
+
+    def test_verifier_allows_legitimate_empty_package_marker_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "tests").mkdir(parents=True)
+            ctx = self._ctx(ws_root, prompt="add python test package marker")
+
+            state = {
+                "context": ctx,
+                "input": "add python test package marker",
+                "spoken": "Added package marker.",
+                "changes": [{"path": "tests/__init__.py", "new_content": ""}],
+                "actions": [],
+            }
+            result = _verify_node(state)
+
+        verification = {item["name"]: item for item in result["context"].trace_verification}
+        self.assertTrue(verification["non-empty-file-content"]["ok"])
 
     def test_verifier_blocks_changed_export_that_breaks_existing_importer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1389,6 +1500,37 @@ class PreviewAuditRegressionTests(unittest.TestCase):
         self.assertTrue(audit["visual_summary"]["top_blockers"])
         self.assertIn("Top issues:", audit["repair_brief"])
 
+    def test_preview_audit_flags_root_route_404_as_routing_blocker(self) -> None:
+        snapshot = {
+            "title": "Product Task Tracker",
+            "meta_description": "Task tracker",
+            "headings": ["404"],
+            "buttons": ["Go back home"],
+            "links": ["Dashboard", "Features", "Pricing"],
+            "word_count": 34,
+            "image_count": 0,
+            "images_missing_alt": 0,
+            "interactive_count": 6,
+            "excerpt": "404 Page not found. Go back home.",
+            "console_errors": [],
+            "page_errors": [],
+            "viewport_meta": True,
+            "document_lang": "en",
+            "main_count": 1,
+            "landmark_count": 3,
+            "mobile_overflow_x": False,
+        }
+        audit = _build_preview_audit_result("http://127.0.0.1:4173", snapshot, audit_mode="browser")
+
+        self.assertFalse(audit["ok"])
+        routing_blockers = [
+            item for item in audit["issue_details"]
+            if item["severity"] == "blocking" and item["category"] == "routing"
+        ]
+        self.assertTrue(routing_blockers)
+        self.assertIn("root route", routing_blockers[0]["suggested_fix"].lower())
+        self.assertIn("routing", audit["repair_brief"].lower())
+
     def test_browser_audit_is_runtime_capability_not_project_dependency(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project_dir = Path(tmp)
@@ -1398,6 +1540,21 @@ class PreviewAuditRegressionTests(unittest.TestCase):
 
 
 class CommandPolicyRegressionTests(unittest.TestCase):
+    def test_infer_validation_commands_uses_python_stack_without_npm(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "py-tools"
+            (project / "app").mkdir(parents=True)
+            (project / "tests").mkdir(parents=True)
+            (project / "pyproject.toml").write_text("[project]\nname='py-tools'\n", encoding="utf-8")
+            (project / "app" / "metrics.py").write_text("def completion_rate(done, total):\n    return 0\n", encoding="utf-8")
+            (project / "tests" / "test_metrics.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+
+            commands = main_mod._infer_validation_commands(project)
+
+        self.assertIn("python3 -m unittest discover -s tests", commands)
+        self.assertIn("python3 -m compileall .", commands)
+        self.assertNotIn("npm run build", commands)
+
     def test_command_policy_allows_project_validation_commands(self) -> None:
         for command in [
             "npm run build",
@@ -1421,6 +1578,17 @@ class CommandPolicyRegressionTests(unittest.TestCase):
             "vitest run",
             "python3 -m compileall api",
             "python3 -m pytest",
+            "go test ./...",
+            "cargo test",
+            "cargo check",
+            "mvn test",
+            "gradle test",
+            "./gradlew test",
+            "composer validate",
+            "bundle exec rspec",
+            "dotnet test",
+            "terraform validate",
+            "cd services/api && go test ./...",
         ]:
             with self.subTest(command=command):
                 decision = _command_policy_decision(command)
@@ -1523,6 +1691,40 @@ class CommandPolicyRegressionTests(unittest.TestCase):
         self.assertEqual(result["results"][0]["command"], "python3 -m compileall .")
         self.assertEqual(result["results"][0]["original_command"], "cd demo && python3 -m compileall .")
         self.assertIn("redundant", result["results"][0]["normalization"])
+
+    def test_agent_harness_normalizes_python_alias_to_python3(self) -> None:
+        session_id = "harness-normalize-python-test"
+        STATE.get("sessions", {}).pop(session_id, None)
+        session_token = CURRENT_SESSION_ID.set(session_id)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                project = root / "demo"
+                project.mkdir()
+                (project / "ok.py").write_text("print('ok')\n", encoding="utf-8")
+                STATE["sessions"][session_id] = {
+                    "workspace": str(root),
+                    "runners": {},
+                    "agent_jobs": {},
+                    "oauth_pending": {},
+                    "google_user": None,
+                }
+                req = main_mod.AgentHarnessRunShellReq(
+                    project_root="demo",
+                    actions=[
+                        main_mod.AgentHarnessShellAction(command="cd demo && python -m compileall .", reason="agent used python alias"),
+                    ],
+                )
+
+                result = main_mod.agent_harness_run_shell(req)
+        finally:
+            CURRENT_SESSION_ID.reset(session_token)
+            STATE.get("sessions", {}).pop(session_id, None)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["results"][0]["command"], "python3 -m compileall .")
+        self.assertEqual(result["results"][0]["original_command"], "cd demo && python -m compileall .")
+        self.assertIn("python3", result["results"][0]["normalization"])
 
 
 class MCPHintRegressionTests(unittest.TestCase):
@@ -1648,6 +1850,53 @@ class AgentToolsRegressionTests(unittest.TestCase):
         browser = next(s for s in servers if s.name == "browser")
         self.assertEqual(browser.transport, "http")
 
+    def test_discover_mcp_servers_imports_claude_and_codex_config_shapes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            project_dir.mkdir(parents=True)
+            (project_dir / ".mcp.json").write_text(
+                json.dumps(
+                    {
+                        "mcpServers": {
+                            "context7": {
+                                "command": "npx",
+                                "args": ["-y", "@upstash/context7-mcp"],
+                                "tools": ["resolve-library-id"],
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (project_dir / ".claude").mkdir()
+            (project_dir / ".claude" / "settings.json").write_text(
+                json.dumps(
+                    {
+                        "mcpServers": {
+                            "browser": {
+                                "url": "http://127.0.0.1:3333/mcp",
+                                "enabled": True,
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (ws_root / ".codex").mkdir()
+            (ws_root / ".codex" / "config.toml").write_text(
+                '[mcp_servers.deepwiki]\nurl = "https://mcp.deepwiki.com/mcp"\n',
+                encoding="utf-8",
+            )
+
+            servers = discover_mcp_servers(ws_root, project_dir)
+
+        by_name = {server.name: server for server in servers}
+        self.assertEqual(by_name["context7"].transport, "stdio")
+        self.assertEqual(by_name["context7"].command, "npx")
+        self.assertEqual(by_name["browser"].transport, "http")
+        self.assertEqual(by_name["deepwiki"].transport, "http")
+
     def test_detect_project_stack_component_and_browser_signals(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project_dir = Path(tmp) / "demo"
@@ -1673,6 +1922,47 @@ class AgentToolsRegressionTests(unittest.TestCase):
         self.assertIn("radix-ui", stack.component_libraries)
         self.assertTrue(stack.has_playwright)
         self.assertTrue(stack.has_headless_browser)
+
+    def test_detect_project_stack_supports_backend_and_system_languages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "polyglot"
+            project_dir.mkdir(parents=True)
+            (project_dir / "pyproject.toml").write_text("[project]\nname='api'\n", encoding="utf-8")
+            (project_dir / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+            (project_dir / "go.mod").write_text("module demo\n", encoding="utf-8")
+            (project_dir / "Cargo.toml").write_text("[package]\nname='core'\nversion='0.1.0'\n", encoding="utf-8")
+            (project_dir / "pom.xml").write_text("<project></project>\n", encoding="utf-8")
+            (project_dir / "supabase" / "migrations").mkdir(parents=True)
+            (project_dir / "Dockerfile").write_text("FROM python:3.12\n", encoding="utf-8")
+
+            stack = detect_project_stack(project_dir)
+
+        self.assertIn("python", stack.languages)
+        self.assertIn("go", stack.languages)
+        self.assertIn("rust", stack.languages)
+        self.assertIn("java", stack.languages)
+        self.assertIn("maven", stack.frameworks)
+        self.assertTrue(stack.has_database_schema)
+        self.assertTrue(stack.has_infra)
+
+    def test_build_validation_plan_recommends_stack_specific_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "polyglot"
+            project_dir.mkdir(parents=True)
+            (project_dir / "pyproject.toml").write_text("[project]\nname='api'\n", encoding="utf-8")
+            (project_dir / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+            (project_dir / "go.mod").write_text("module demo\n", encoding="utf-8")
+            (project_dir / "Cargo.toml").write_text("[package]\nname='core'\nversion='0.1.0'\n", encoding="utf-8")
+            (project_dir / "build.gradle").write_text("plugins { id 'java' }\n", encoding="utf-8")
+
+            plan = build_validation_plan(project_dir, project_root="polyglot")
+            commands = [item["command"] for item in plan["commands"]]
+
+        self.assertIn("cd polyglot && python3 -m pytest", commands)
+        self.assertIn("cd polyglot && python3 -m compileall .", commands)
+        self.assertIn("cd polyglot && go test ./...", commands)
+        self.assertIn("cd polyglot && cargo test", commands)
+        self.assertIn("cd polyglot && gradle test", commands)
 
     def test_resolve_agent_skills_prefers_component_library_skills_when_detected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1771,6 +2061,46 @@ class AgentToolsRegressionTests(unittest.TestCase):
             self.assertNotIn("dist/bundle.js", listing.text)
             self.assertNotIn(".git", listing.text)
 
+    def test_local_tools_import_codex_and_claude_style_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            codex_skill = ws_root / ".codex" / "skills" / "api-review"
+            claude_skill = project_dir / ".claude" / "skills" / "django-fix"
+            codex_skill.mkdir(parents=True)
+            claude_skill.mkdir(parents=True)
+            project_dir.mkdir(parents=True, exist_ok=True)
+            (codex_skill / "SKILL.md").write_text(
+                "---\nname: api-review\ndescription: Review REST API error handling and status codes\n---\n# API Review\nCheck handlers, auth boundaries, and response contracts.\n",
+                encoding="utf-8",
+            )
+            (claude_skill / "SKILL.md").write_text(
+                "---\nname: django-fix\ndescription: Use for Django model, view, migration, and queryset bugs\n---\n# Django Fix\nInspect models, migrations, serializers, and tests before editing.\n",
+                encoding="utf-8",
+            )
+
+            catalog = execute_local_tool(
+                ws_root,
+                project_dir,
+                tool_name="skill_catalog",
+                arguments={"project_root": "demo", "query": "fix django queryset api bug"},
+            )
+            detail = execute_local_tool(
+                ws_root,
+                project_dir,
+                tool_name="skill_read",
+                arguments={"project_root": "demo", "skill_id": "django-fix"},
+            )
+
+        self.assertTrue(catalog.ok)
+        self.assertIn('"django-fix"', catalog.text)
+        self.assertIn('"api-review"', catalog.text)
+        self.assertIn('"provider": "claude"', catalog.text)
+        self.assertIn('"provider": "codex"', catalog.text)
+        self.assertTrue(detail.ok)
+        self.assertIn("Inspect models", detail.text)
+        self.assertIn('"source"', detail.text)
+
     def test_local_tools_provide_repo_overview_package_scripts_and_dependency_graph(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ws_root = Path(tmp)
@@ -1848,6 +2178,16 @@ class AgentToolsRegressionTests(unittest.TestCase):
             self.assertTrue(memory.ok)
             self.assertIn('"retrieval_backend"', memory.text)
 
+            stack_profile = execute_local_tool(ws_root, project_dir, tool_name="stack_profile", arguments={"project_root": "demo"})
+            self.assertTrue(stack_profile.ok)
+            self.assertIn('"typescript"', stack_profile.text)
+            self.assertIn('"vite"', stack_profile.text)
+
+            validation = execute_local_tool(ws_root, project_dir, tool_name="validation_plan", arguments={"project_root": "demo"})
+            self.assertTrue(validation.ok)
+            self.assertIn("pnpm run lint", validation.text)
+            self.assertIn("pnpm run build", validation.text)
+
             mcp_status = execute_local_tool(ws_root, project_dir, tool_name="mcp_status", arguments={"project_root": "demo"})
             self.assertTrue(mcp_status.ok)
             self.assertIn('"servers"', mcp_status.text)
@@ -1856,6 +2196,116 @@ class AgentToolsRegressionTests(unittest.TestCase):
             self.assertTrue(preview_caps.ok)
             self.assertIn('"can_attempt_preview": true', preview_caps.text)
             self.assertIn('"dev"', preview_caps.text)
+
+    def test_local_tools_provide_swe_agent_and_aider_style_navigation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src" / "components").mkdir(parents=True)
+            (project_dir / "package.json").write_text(
+                json.dumps(
+                    {
+                        "scripts": {"build": "vite build"},
+                        "dependencies": {"@tailwindcss/vite": "^4.0.0", "react": "^19.0.0"},
+                        "devDependencies": {"typescript": "^5.0.0"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (project_dir / "src" / "components" / "Panel.tsx").write_text(
+                "export type PanelProps = { title: string }\n"
+                "export function Panel(props: PanelProps) {\n"
+                "  return <section className=\"rounded-xl border p-4\">{props.title}</section>\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (project_dir / "src" / "App.tsx").write_text(
+                "import { Panel } from './components/Panel';\n"
+                "export default function App() {\n"
+                "  return <main className=\"grid gap-4\"><Panel title=\"Ops\" /></main>\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (project_dir / "src" / "style.css").write_text(
+                "@import \"tailwindcss\";\n:root { --app-bg: #fff; }\n.card { border-radius: 12px; }\n",
+                encoding="utf-8",
+            )
+
+            repo_map = execute_local_tool(ws_root, project_dir, tool_name="repo_map", arguments={"project_root": "demo", "query": "Panel dashboard", "max_files": 20})
+            file_window = execute_local_tool(ws_root, project_dir, tool_name="file_window", arguments={"path": "demo/src/App.tsx", "line": 2, "context": 1})
+            symbol_search = execute_local_tool(ws_root, project_dir, tool_name="symbol_search", arguments={"project_root": "demo", "query": "Panel"})
+            style_stack = execute_local_tool(ws_root, project_dir, tool_name="style_stack", arguments={"project_root": "demo"})
+
+        self.assertTrue(repo_map.ok)
+        self.assertIn("src/components/Panel.tsx", repo_map.text)
+        self.assertIn("PanelProps", repo_map.text)
+        self.assertIn("export function Panel", repo_map.text)
+        self.assertTrue(file_window.ok)
+        self.assertIn("1| import { Panel }", file_window.text)
+        self.assertIn("3|   return <main", file_window.text)
+        self.assertTrue(symbol_search.ok)
+        self.assertIn('"Panel"', symbol_search.text)
+        self.assertIn('"src/components/Panel.tsx"', symbol_search.text)
+        self.assertTrue(style_stack.ok)
+        self.assertIn('"tailwind": true', style_stack.text)
+        self.assertIn('"utility_class_usage": true', style_stack.text)
+        self.assertIn('"css_custom_properties": true', style_stack.text)
+
+    def test_local_tools_provide_swe_agent_and_aider_style_edit_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src").mkdir(parents=True)
+            (project_dir / "src" / "math.py").write_text(
+                "def add(a, b):\n"
+                "    return a + b\n"
+                "\n"
+                "def subtract(a, b):\n"
+                "    return a - b\n",
+                encoding="utf-8",
+            )
+            (project_dir / "src" / "App.tsx").write_text(
+                "export default function App() {\n"
+                "  return <main className=\"grid gap-4\">Old</main>\n"
+                "}\n",
+                encoding="utf-8",
+            )
+
+            line_preview = execute_local_tool(
+                ws_root,
+                project_dir,
+                tool_name="line_replace_preview",
+                arguments={
+                    "path": "demo/src/math.py",
+                    "start_line": 2,
+                    "end_line": 2,
+                    "replacement": "    return a + b + 1\n",
+                    "context": 1,
+                },
+            )
+            replace_preview = execute_local_tool(
+                ws_root,
+                project_dir,
+                tool_name="search_replace_preview",
+                arguments={
+                    "path": "demo/src/App.tsx",
+                    "search": "return <main className=\"grid   gap-4\">Old</main>",
+                    "replace": "return <main className=\"grid gap-4\">Ready</main>",
+                    "context": 1,
+                },
+            )
+
+            unchanged = (project_dir / "src" / "math.py").read_text(encoding="utf-8")
+
+        self.assertTrue(line_preview.ok)
+        self.assertIn('"strategy": "line-range"', line_preview.text)
+        self.assertIn("2|     return a + b + 1", line_preview.text)
+        self.assertIn('"path": "demo/src/math.py"', line_preview.text)
+        self.assertIn("return a + b\n", unchanged)
+        self.assertTrue(replace_preview.ok)
+        self.assertIn('"strategy": "whitespace-flexible"', replace_preview.text)
+        self.assertIn("Ready</main>", replace_preview.text)
+        self.assertIn('"suggested_change"', replace_preview.text)
 
 
 class HybridSeedRegressionTests(unittest.TestCase):
@@ -1916,13 +2366,52 @@ class HybridSeedRegressionTests(unittest.TestCase):
         )
 
         app_tsx = files["demo/src/App.tsx"]
+        self.assertIn('path: "/", element: <DashboardPage />', app_tsx)
         self.assertIn('path: "/dashboard"', app_tsx)
+        self.assertNotIn('import HomePage from "./pages/Home";', app_tsx)
         self.assertNotIn('path: "/workspace"', app_tsx)
         self.assertNotIn('path: "/contact"', app_tsx)
         self.assertIn("demo/src/pages/Dashboard.tsx", files)
         self.assertNotIn("demo/src/pages/Workspace.tsx", files)
         self.assertNotIn("demo/src/pages/Integrations.tsx", files)
         self.assertNotIn("demo/src/pages/AppSettings.tsx", files)
+
+    def test_hybrid_seed_nav_accepts_tuple_or_object_items(self) -> None:
+        files = build_hybrid_seed(
+            project_root="demo",
+            project_name="Ops Hub",
+            instruction="Build a dashboard for product operations.",
+        )
+
+        app_tsx = files["demo/src/App.tsx"]
+        shell_tsx = files["demo/src/components/AppShell.tsx"]
+        self.assertIn('type NavItem = [string, string] | { path: string; label: string } | { href: string; label: string };', app_tsx)
+        self.assertIn("const NAV_ITEMS: NavItem[]", app_tsx)
+        self.assertNotIn("Array<[string, string]>", app_tsx)
+        self.assertNotIn("as any", app_tsx)
+        self.assertIn("navItems: NavItem[];", shell_tsx)
+        self.assertIn("function navItemParts(item: NavItem)", shell_tsx)
+        self.assertNotIn("navItems.map(([href, label])", shell_tsx)
+
+    def test_hybrid_seed_ui_wrappers_accept_common_dom_props(self) -> None:
+        files = build_hybrid_seed(
+            project_root="demo",
+            project_name="Ops Hub",
+            instruction="Build a dashboard for product operations.",
+        )
+
+        card_tsx = files["demo/src/components/ui/Card.tsx"]
+        button_tsx = files["demo/src/components/ui/Button.tsx"]
+        self.assertIn('ComponentPropsWithoutRef<"section">', card_tsx)
+        self.assertIn('const { title, eyebrow, children, className = "", ...sectionProps } = props;', card_tsx)
+        self.assertIn("<section {...sectionProps} className={classes}>", card_tsx)
+        self.assertIn("ButtonHTMLAttributes<HTMLButtonElement>", button_tsx)
+        self.assertIn("...buttonProps", button_tsx)
+
+    def test_starter_residue_does_not_flag_input_placeholder_attribute(self) -> None:
+        text = '<input className="input" placeholder="Search tasks..." aria-label="Search tasks" />'
+        self.assertEqual(main_mod._starter_residue_terms(text), [])
+        self.assertIn("placeholder content", main_mod._starter_residue_terms("Remove placeholder content before launch."))
 
 
 class HostedProfileIdRegressionTests(unittest.TestCase):
@@ -2436,6 +2925,319 @@ class AgentAutoExecuteRegressionTests(unittest.TestCase):
             self.assertIn("description: string;", text)
             self.assertIn("void title;", text)
             self.assertIn("void description;", text)
+
+    def test_quick_ts6133_repair_removes_unused_usestate_setter(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "demo"
+            (project / "src").mkdir(parents=True)
+            page = project / "src" / "Dashboard.tsx"
+            page.write_text(
+                "import { useState } from 'react';\n"
+                "export default function Dashboard() {\n"
+                "  const [tasks, setTasks] = useState<string[]>([]);\n"
+                "  return <main>{tasks.length}</main>;\n"
+                "}\n",
+                encoding="utf-8",
+            )
+
+            changed = main_mod._insert_void_usage_for_unused_symbols(
+                project,
+                [{"path": "src/Dashboard.tsx", "line": 3, "name": "setTasks"}],
+            )
+
+            text = page.read_text(encoding="utf-8")
+            self.assertEqual(changed, ["src/Dashboard.tsx"])
+            self.assertIn("const [tasks] = useState<string[]>([]);", text)
+            self.assertNotIn("void setTasks", text)
+
+    def test_quick_ts6133_repair_skips_arrow_expression_body_props(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "demo"
+            (project / "src").mkdir(parents=True)
+            page = project / "src" / "Dashboard.tsx"
+            original = (
+                "const StatChip = ({\n"
+                "  label,\n"
+                "  color,\n"
+                "}: {\n"
+                "  label: string;\n"
+                "  color: string;\n"
+                "}) => (\n"
+                "  <span>{label}</span>\n"
+                ");\n"
+                "\n"
+                "export default function Dashboard() {\n"
+                "  return <StatChip label=\"Open\" color=\"green\" />;\n"
+                "}\n"
+            )
+            page.write_text(original, encoding="utf-8")
+
+            changed = main_mod._insert_void_usage_for_unused_symbols(
+                project,
+                [{"path": "src/Dashboard.tsx", "line": 3, "name": "color"}],
+            )
+
+            self.assertEqual(changed, [])
+            self.assertEqual(page.read_text(encoding="utf-8"), original)
+
+    def test_quick_ts6133_repair_references_unused_local_const_after_declaration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "demo"
+            (project / "src").mkdir(parents=True)
+            page = project / "src" / "Dashboard.tsx"
+            page.write_text(
+                "export default function Dashboard() {\n"
+                "  const statusColor = '#22c55e';\n"
+                "  return <main>ok</main>;\n"
+                "}\n",
+                encoding="utf-8",
+            )
+
+            changed = main_mod._insert_void_usage_for_unused_symbols(
+                project,
+                [{"path": "src/Dashboard.tsx", "line": 2, "name": "statusColor"}],
+            )
+
+            text = page.read_text(encoding="utf-8")
+            self.assertEqual(changed, ["src/Dashboard.tsx"])
+            self.assertIn("  const statusColor = '#22c55e';\n  void statusColor;\n", text)
+            self.assertNotIn("function Dashboard() {\n  void statusColor;\n", text)
+
+    def test_quick_ts6133_repair_references_unused_multiline_const_after_declaration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "demo"
+            (project / "src").mkdir(parents=True)
+            page = project / "src" / "Dashboard.tsx"
+            page.write_text(
+                "export default function Dashboard() {\n"
+                "  const statusLabels = {\n"
+                "    todo: 'Todo',\n"
+                "    done: 'Done',\n"
+                "  };\n"
+                "  return <main>ok</main>;\n"
+                "}\n",
+                encoding="utf-8",
+            )
+
+            changed = main_mod._insert_void_usage_for_unused_symbols(
+                project,
+                [{"path": "src/Dashboard.tsx", "line": 2, "name": "statusLabels"}],
+            )
+
+            text = page.read_text(encoding="utf-8")
+            self.assertEqual(changed, ["src/Dashboard.tsx"])
+            self.assertIn("  };\n  void statusLabels;\n  return <main>ok</main>;", text)
+            self.assertNotIn("function Dashboard() {\n  void statusLabels;\n", text)
+
+    def test_quick_ts6133_repair_references_unused_function_after_block(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "demo"
+            (project / "src").mkdir(parents=True)
+            page = project / "src" / "Dashboard.tsx"
+            page.write_text(
+                "function StatusBadge() {\n"
+                "  return <span>Active</span>;\n"
+                "}\n"
+                "\n"
+                "export default function Dashboard() {\n"
+                "  return <main>ok</main>;\n"
+                "}\n",
+                encoding="utf-8",
+            )
+
+            changed = main_mod._insert_void_usage_for_unused_symbols(
+                project,
+                [{"path": "src/Dashboard.tsx", "line": 1, "name": "StatusBadge"}],
+            )
+
+            text = page.read_text(encoding="utf-8")
+            self.assertEqual(changed, ["src/Dashboard.tsx"])
+            self.assertIn("}\nvoid StatusBadge;\n\nexport default function Dashboard", text)
+            self.assertNotIn("function StatusBadge() {\n  void StatusBadge;\n", text)
+
+    def test_quick_ts6133_failed_validation_rolls_back_mechanical_edit(self) -> None:
+        session_id = "quick-ts6133-rollback-test"
+        STATE.get("sessions", {}).pop(session_id, None)
+        session_token = CURRENT_SESSION_ID.set(session_id)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                project = root / "demo"
+                (project / "src").mkdir(parents=True)
+                page = project / "src" / "Dashboard.tsx"
+                original = (
+                    "import Card from './Card';\n"
+                    "import Button from './Button';\n"
+                    "export default function Dashboard() {\n"
+                    "  return <main>ok</main>;\n"
+                    "}\n"
+                )
+                page.write_text(original, encoding="utf-8")
+                STATE["sessions"][session_id] = {
+                    "workspace": root,
+                    "runners": {},
+                    "agent_jobs": {},
+                    "oauth_pending": {},
+                    "google_user": None,
+                }
+                execution = {
+                    "validation": {
+                        "commands": ["npm run build"],
+                        "results": [
+                            {
+                                "ok": False,
+                                "stderr": (
+                                    "src/Dashboard.tsx(1,1): error TS6133: 'Card' is declared but its value is never read.\n"
+                                    "src/Dashboard.tsx(2,1): error TS6133: 'Button' is declared but its value is never read.\n"
+                                ),
+                            }
+                        ],
+                    },
+                }
+
+                with patch("api.main._run_harness_shell_actions_internal", return_value={"ok": False, "results": [{"ok": False}]}):
+                    result = main_mod._try_quick_ts6133_repair(
+                        main_mod.AgentReq(input="fix", project_root="demo"),
+                        execution,
+                        lambda _event, _data: None,
+                    )
+
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["rolled_back_paths"], ["src/Dashboard.tsx"])
+                self.assertEqual(page.read_text(encoding="utf-8"), original)
+        finally:
+            CURRENT_SESSION_ID.reset(session_token)
+            STATE.get("sessions", {}).pop(session_id, None)
+
+    def test_degrading_repair_checkpoint_can_be_rolled_back(self) -> None:
+        session_id = "repair-checkpoint-rollback-test"
+        STATE.get("sessions", {}).pop(session_id, None)
+        session_token = CURRENT_SESSION_ID.set(session_id)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                project = root / "demo"
+                (project / "src").mkdir(parents=True)
+                target = project / "src" / "Dashboard.tsx"
+                target.write_text("export default function Dashboard() { return <main>ok</main>; }\n", encoding="utf-8")
+                STATE["sessions"][session_id] = {
+                    "workspace": root,
+                    "runners": {},
+                    "agent_jobs": {},
+                    "oauth_pending": {},
+                    "google_user": None,
+                }
+                apply_result = main_mod.agent_harness_apply(
+                    main_mod.AgentHarnessApplyReq(
+                        project_root="demo",
+                        changes=[
+                            main_mod.AgentHarnessApplyChange(
+                                path="demo/src/Dashboard.tsx",
+                                content="export default function Dashboard() { return <main><div></main>; }\n",
+                            )
+                        ],
+                    )
+                )
+                parent_execution = {
+                    "ok": False,
+                    "validation": {"ok": True, "results": [{"ok": True}]},
+                    "preview_audit": {"ok": False, "skipped": False, "issue_details": [{"severity": "blocking", "category": "content"}]},
+                }
+                repair_execution = {
+                    "ok": False,
+                    "apply": apply_result,
+                    "validation": {
+                        "ok": False,
+                        "results": [
+                            {
+                                "ok": False,
+                                "stderr": "src/Dashboard.tsx(1,54): error TS17002: Expected corresponding JSX closing tag for 'div'.",
+                            }
+                        ],
+                    },
+                }
+
+                self.assertTrue(main_mod._repair_execution_degrades_parent(parent_execution, repair_execution))
+                rollback = main_mod._rollback_repair_checkpoint(repair_execution)
+
+                self.assertTrue(rollback["ok"])
+                self.assertEqual(target.read_text(encoding="utf-8"), "export default function Dashboard() { return <main>ok</main>; }\n")
+        finally:
+            CURRENT_SESSION_ID.reset(session_token)
+            STATE.get("sessions", {}).pop(session_id, None)
+
+    def test_repair_preview_regression_counts_as_degradation(self) -> None:
+        parent_execution = {
+            "ok": True,
+            "preview_audit": {
+                "ok": True,
+                "skipped": False,
+                "issue_details": [{"severity": "warning", "category": "source-quality"}],
+            },
+        }
+        repair_execution = {
+            "ok": False,
+            "preview_audit": {
+                "ok": False,
+                "skipped": False,
+                "issue_details": [
+                    {"severity": "blocking", "category": "responsive"},
+                    {"severity": "warning", "category": "source-quality"},
+                ],
+            },
+        }
+
+        self.assertTrue(main_mod._repair_execution_degrades_parent(parent_execution, repair_execution))
+
+    def test_backend_repair_provider_failure_returns_structured_execution(self) -> None:
+        session_id = "repair-provider-failure-test"
+        STATE.get("sessions", {}).pop(session_id, None)
+        session_token = CURRENT_SESSION_ID.set(session_id)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                project = root / "demo"
+                (project / "src").mkdir(parents=True)
+                (project / "src" / "App.tsx").write_text("export default function App() { return <main />; }\n", encoding="utf-8")
+                STATE["sessions"][session_id] = {
+                    "workspace": root,
+                    "runners": {},
+                    "agent_jobs": {},
+                    "oauth_pending": {},
+                    "google_user": None,
+                }
+                execution = {
+                    "ok": True,
+                    "preview_audit": {
+                        "ok": True,
+                        "skipped": False,
+                        "issue_details": [{"severity": "warning", "category": "product-depth", "detail": "thin"}],
+                    },
+                }
+
+                events: list[tuple[str, dict]] = []
+                with patch("api.main.run_agent_pipeline", side_effect=RuntimeError("nine_router key ditolak. Cek ulang API key di Settings.")):
+                    repair = main_mod._run_backend_repair_pass(
+                        main_mod.AgentReq(input="fix", project_root="demo", build_mode="full-agent"),
+                        execution,
+                        lambda event, data: events.append((event, data)),
+                        repair_index=1,
+                    )
+
+                repair_execution = repair["execution"]
+                self.assertFalse(repair_execution["ok"])
+                self.assertEqual(repair_execution["failure_analysis"]["current_signature"], "repair-provider-error")
+                self.assertIn("nine_router key ditolak", repair_execution["failure_analysis"]["summary"])
+                self.assertIn("completion_report", repair_execution)
+                self.assertTrue(any(data.get("tool") == "repair-model" for event, data in events if event == "tool_output"))
+        finally:
+            CURRENT_SESSION_ID.reset(session_token)
+            STATE.get("sessions", {}).pop(session_id, None)
 
     def test_quick_ts2741_repair_relaxes_missing_required_ui_prop(self) -> None:
         session_id = "quick-ts2741-repair-test"
@@ -3310,6 +4112,10 @@ class AgentAutoExecuteRegressionTests(unittest.TestCase):
                 status_phases = [data.get("phase") for event, data in events if event == "status"]
                 self.assertIn("repair_stop", status_phases)
                 self.assertIn("completion", status_phases)
+                done_events = [data for event, data in events if event == "done"]
+                self.assertTrue(done_events)
+                self.assertIn("Blocked", done_events[-1].get("message", ""))
+                self.assertNotIn("Beres", done_events[-1].get("message", ""))
         finally:
             CURRENT_SESSION_ID.reset(session_token)
             STATE.get("sessions", {}).pop(session_id, None)
@@ -3347,6 +4153,8 @@ class CapabilityHonestyRegressionTests(unittest.TestCase):
         self.assertIn("component_index", caps["boundaries"]["local_tool_names"])
         self.assertIn("route_map", caps["boundaries"]["local_tool_names"])
         self.assertIn("quality_scan", caps["boundaries"]["local_tool_names"])
+        self.assertIn("skill_catalog", caps["boundaries"]["local_tool_names"])
+        self.assertIn("skill_read", caps["boundaries"]["local_tool_names"])
 
 
 class SupabaseReadinessRegressionTests(unittest.TestCase):

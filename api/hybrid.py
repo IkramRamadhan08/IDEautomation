@@ -199,7 +199,7 @@ def build_hybrid_seed(project_root: str, project_name: str, instruction: str) ->
     landing_sections_json = json.dumps(landing_sections, ensure_ascii=False)
     features_items_json = json.dumps(features_items, ensure_ascii=False)
     pricing_items_json = json.dumps(pricing_items, ensure_ascii=False)
-    route_entries = ['{ path: "/", element: <HomePage /> }']
+    route_entries = ['{ path: "/", element: <DashboardPage /> }'] if template == "dashboard" else ['{ path: "/", element: <HomePage /> }']
     if template == "app":
         route_entries.extend([
             '{ path: "/workspace", element: <WorkspacePage /> }',
@@ -326,7 +326,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         "src/App.tsx": f'''import {{ useEffect, useMemo, useState }} from "react";
 import AppShell from "./components/AppShell";
 
-import HomePage from "./pages/Home";
+{'import HomePage from "./pages/Home";' if template != 'dashboard' else ''}
 {'import FeaturesPage from "./pages/Features";' if template != 'app' else ''}
 {'import PricingPage from "./pages/Pricing";' if template != 'app' else ''}
 {'import ContactPage from "./pages/Contact";' if template == 'landing' else ''}
@@ -337,7 +337,9 @@ import HomePage from "./pages/Home";
 {'import SettingsPage from "./pages/AppSettings";' if template == 'app' else ''}
 import NotFoundPage from "./pages/NotFound";
 
-const NAV_ITEMS: Array<[string, string]> = {nav_json} as any;
+type NavItem = [string, string] | {{ path: string; label: string }} | {{ href: string; label: string }};
+
+const NAV_ITEMS: NavItem[] = {nav_json};
 
 function normalizePath(path: string) {{
   const clean = (path || "/").split("#")[0].split("?")[0] || "/";
@@ -377,10 +379,19 @@ export default function App() {{
         "src/components/AppShell.tsx": '''import type { ReactNode } from "react";
 import ThemeToggle from "./ui/ThemeToggle";
 
+type NavItem = [string, string] | { path: string; label: string } | { href: string; label: string };
+
+function navItemParts(item: NavItem) {
+  if (Array.isArray(item)) {
+    return { href: item[0], label: item[1] };
+  }
+  return { href: "path" in item ? item.path : item.href, label: item.label };
+}
+
 export default function AppShell(props: {
   title: string;
   description: string;
-  navItems: Array<[string, string]>;
+  navItems: NavItem[];
   currentPath: string;
   onNavigate: (path: string) => void;
   children: ReactNode;
@@ -395,19 +406,22 @@ export default function AppShell(props: {
           <div className="brandSub">{description}</div>
         </div>
         <nav className="nav">
-          {navItems.map(([href, label]) => (
-            <a
-              key={href}
-              href={href}
-              className={"navLink" + (currentPath === href ? " active" : "")}
-              onClick={(event) => {
-                event.preventDefault();
-                onNavigate(href);
-              }}
-            >
-              {label}
-            </a>
-          ))}
+          {navItems.map((item) => {
+            const { href, label } = navItemParts(item);
+            return (
+              <a
+                key={href}
+                href={href}
+                className={"navLink" + (currentPath === href ? " active" : "")}
+                onClick={(event) => {
+                  event.preventDefault();
+                  onNavigate(href);
+                }}
+              >
+                {label}
+              </a>
+            );
+          })}
         </nav>
         <div className="topbarActions">
           <ThemeToggle />
@@ -418,44 +432,48 @@ export default function AppShell(props: {
 
       <footer className="footer">
         <div className="footerInner">
-          <span className="muted">Seeded template · React + Vite + TS</span>
-          <a className="footerLink" href="https://vite.dev" target="_blank" rel="noreferrer">
-            Vite
-          </a>
+          <span className="muted">{new Date().getFullYear()} {title}</span>
+          <button className="footerLink" type="button" onClick={() => onNavigate("/")}>
+            Back to overview
+          </button>
         </div>
       </footer>
     </div>
   );
 }
 ''',
-        "src/components/ui/Button.tsx": '''import type { ReactNode } from "react";
+        "src/components/ui/Button.tsx": '''import type { ButtonHTMLAttributes, ReactNode } from "react";
 
-export default function Button(props: {
+type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "primary" | "ghost";
   children: ReactNode;
-  onClick?: () => void;
-  type?: "button" | "submit";
-}) {
-  const { variant = "primary", children, onClick, type = "button" } = props;
+};
+
+export default function Button(props: ButtonProps) {
+  const { variant = "primary", children, className = "", type = "button", ...buttonProps } = props;
+  const classes = ["btn", variant === "ghost" ? "btnGhost" : "btnPrimary", className].filter(Boolean).join(" ");
   return (
-    <button type={type} className={"btn " + (variant === "ghost" ? "btnGhost" : "btnPrimary")} onClick={onClick}>
+    <button {...buttonProps} type={type} className={classes}>
       {children}
     </button>
   );
 }
 ''',
-        "src/components/ui/Card.tsx": '''import type { ReactNode } from "react";
+        "src/components/ui/Card.tsx": '''import type { ComponentPropsWithoutRef, ReactNode } from "react";
 
-export default function Card(props: {
-  title: string;
+type CardProps = ComponentPropsWithoutRef<"section"> & {
+  title?: string;
   eyebrow?: string;
   children: ReactNode;
-}) {
-  const { title, eyebrow, children } = props;
+};
+
+export default function Card(props: CardProps) {
+  const { title, eyebrow, children, className = "", ...sectionProps } = props;
+  const classes = ["card", className].filter(Boolean).join(" ");
   return (
-    <section className="card">
+    <section {...sectionProps} className={classes}>
       {eyebrow ? <div className="eyebrow">{eyebrow}</div> : null}
-      <h2 className="cardTitle">{title}</h2>
+      {title ? <h2 className="cardTitle">{title}</h2> : null}
       <div className="cardBody">{children}</div>
     </section>
   );
@@ -483,7 +501,7 @@ export default function ThemeToggle() {
     return "dark";
   }, []);
 
-  const [theme, setTheme] = useState<"light" | "dark">(initial as any);
+  const [theme, setTheme] = useState<"light" | "dark">(initial);
 
   useEffect(() => {
     applyTheme(theme);

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import json
+import os
 import re
 
 _TOKEN_RE = re.compile(r"[a-zA-Z0-9_:@./-]{2,}")
@@ -14,14 +15,24 @@ class SkillDoc:
     title: str
     body: str
     source: str
+    description: str = ""
+    provider: str = "appora"
 
 
 @dataclass(frozen=True)
 class ProjectStackSignals:
-    component_libraries: list[str]
-    has_playwright: bool
-    has_headless_browser: bool
-    has_webcontainer: bool
+    component_libraries: list[str] = field(default_factory=list)
+    has_playwright: bool = False
+    has_headless_browser: bool = False
+    has_webcontainer: bool = False
+    languages: list[str] = field(default_factory=list)
+    frameworks: list[str] = field(default_factory=list)
+    runtimes: list[str] = field(default_factory=list)
+    package_managers: list[str] = field(default_factory=list)
+    validation_files: list[str] = field(default_factory=list)
+    has_database_schema: bool = False
+    has_infra: bool = False
+    has_preview_surface: bool = False
 
 
 _BUILTIN_SKILLS: list[SkillDoc] = [
@@ -83,8 +94,9 @@ _BUILTIN_SKILLS: list[SkillDoc] = [
         title="Agentic tool discipline",
         source="builtin",
         body=(
-            "Use local read-only tools for repo-local facts before editing: repo_overview for shape, package_scripts for validation, dependency_graph for imports, "
-            "component_index for React surfaces, route_map for navigation, and quality_scan for production-readiness risks. Use MCP only for external systems or live integrations."
+            "Use local read-only tools for repo-local facts before editing: repo_overview for shape, stack_profile for language/framework detection, "
+            "validation_plan for stack-specific test/build commands, package_scripts for JS scripts, dependency_graph for imports, component_index for React surfaces, "
+            "route_map for navigation, and quality_scan for production-readiness risks. Use MCP only for external systems or live integrations."
         ),
     ),
     SkillDoc(
@@ -115,17 +127,95 @@ def _score(query_tokens: set[str], text: str) -> float:
 
 def _custom_skill_paths(ws_root: Path, project_dir: Path) -> list[Path]:
     out: list[Path] = []
-    for base in [ws_root / ".voiceide" / "skills", project_dir / ".voiceide" / "skills"]:
-        if not base.exists() or not base.is_dir():
+    bases = [
+        ws_root / ".voiceide" / "skills",
+        project_dir / ".voiceide" / "skills",
+        ws_root / ".codex" / "skills",
+        project_dir / ".codex" / "skills",
+        ws_root / ".agents" / "skills",
+        project_dir / ".agents" / "skills",
+        project_dir / ".claude" / "skills",
+    ]
+    home = Path.home()
+    if ws_root != home:
+        bases.extend([
+            home / ".codex" / "skills",
+            home / ".codex" / "plugins" / "cache",
+            home / ".agents" / "skills",
+            home / ".claude" / "skills",
+        ])
+    seen: set[Path] = set()
+    for base in bases:
+        try:
+            root = base.expanduser().resolve()
+        except Exception:
             continue
-        for path in sorted(base.glob("*.md")):
-            if path.is_file():
-                out.append(path)
+        if not root.exists() or not root.is_dir():
+            continue
+        patterns = ["*.md", "*/SKILL.md", "**/skills/**/SKILL.md"] if root.name == "cache" else ["*.md", "*/SKILL.md"]
+        for pattern in patterns:
+            for path in sorted(root.glob(pattern)):
+                if not path.is_file():
+                    continue
+                try:
+                    resolved = path.resolve()
+                except Exception:
+                    continue
+                if resolved in seen:
+                    continue
+                seen.add(resolved)
+                out.append(resolved)
     return out
+
+
+def _parse_skill_frontmatter(text: str) -> tuple[dict[str, str], str]:
+    raw = str(text or "")
+    if not raw.startswith("---"):
+        return {}, raw
+    lines = raw.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}, raw
+    meta: dict[str, str] = {}
+    end_index = -1
+    for idx, line in enumerate(lines[1:], start=1):
+        if line.strip() == "---":
+            end_index = idx
+            break
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip().lower()
+        value = value.strip().strip('"').strip("'")
+        if key:
+            meta[key] = value
+    if end_index < 0:
+        return {}, raw
+    return meta, "\n".join(lines[end_index + 1 :]).strip()
+
+
+def _skill_provider(path: Path) -> str:
+    text = path.as_posix().lower()
+    if "/.claude/" in text:
+        return "claude"
+    if "/.codex/" in text:
+        return "codex"
+    if "/.agents/" in text:
+        return "agent"
+    return "appora"
+
+
+def _skill_id_from_path(path: Path, meta: dict[str, str]) -> str:
+    raw = str(meta.get("name") or meta.get("id") or "").strip()
+    if raw:
+        return re.sub(r"[^a-zA-Z0-9_.:-]+", "-", raw).strip("-").lower()
+    if path.name == "SKILL.md":
+        return path.parent.name.strip().lower()
+    return path.stem.strip().lower()
 
 
 def _load_custom_skills(ws_root: Path, project_dir: Path, *, warnings: list[str] | None = None) -> list[SkillDoc]:
     skills: list[SkillDoc] = []
+    seen_ids: set[str] = set()
     for path in _custom_skill_paths(ws_root, project_dir):
         try:
             text = path.read_text(encoding="utf-8", errors="ignore").strip()
@@ -135,10 +225,42 @@ def _load_custom_skills(ws_root: Path, project_dir: Path, *, warnings: list[str]
             continue
         if not text:
             continue
-        lines = text.splitlines()
-        title = lines[0].lstrip("# ").strip() or path.stem.replace("-", " ")
-        skills.append(SkillDoc(skill_id=path.stem, title=title, body=text[:4000], source=str(path)))
+        meta, body = _parse_skill_frontmatter(text)
+        skill_id = _skill_id_from_path(path, meta)
+        if not skill_id or skill_id in seen_ids:
+            continue
+        seen_ids.add(skill_id)
+        lines = body.splitlines() if body else text.splitlines()
+        title = str(meta.get("title") or meta.get("name") or "").strip()
+        if not title:
+            title = (lines[0].lstrip("# ").strip() if lines else "") or path.parent.name.replace("-", " ").title()
+        description = str(meta.get("description") or "").strip()
+        prompt_body = "\n".join(part for part in [description, body or text] if part).strip()
+        skills.append(
+            SkillDoc(
+                skill_id=skill_id,
+                title=title,
+                body=prompt_body[:6000],
+                source=str(path),
+                description=description,
+                provider=_skill_provider(path),
+            )
+        )
     return skills
+
+
+def list_imported_skills(ws_root: Path, project_dir: Path, *, warnings: list[str] | None = None) -> list[SkillDoc]:
+    return _load_custom_skills(ws_root, project_dir, warnings=warnings)
+
+
+def read_imported_skill(ws_root: Path, project_dir: Path, skill_id: str, *, warnings: list[str] | None = None) -> SkillDoc | None:
+    wanted = str(skill_id or "").strip().lower()
+    if not wanted:
+        return None
+    for skill in _load_custom_skills(ws_root, project_dir, warnings=warnings):
+        if skill.skill_id.lower() == wanted:
+            return skill
+    return None
 
 
 def _read_package_json(project_dir: Path, *, warnings: list[str] | None = None) -> dict:
@@ -158,11 +280,186 @@ def _read_package_json(project_dir: Path, *, warnings: list[str] | None = None) 
     return data
 
 
+def _read_json_file(path: Path, *, warnings: list[str] | None = None) -> dict:
+    if not path.exists() or not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        if warnings is not None:
+            warnings.append(f"{path.name} nggak kebaca buat stack detection ({exc}).")
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _project_file_set(project_dir: Path, *, limit: int = 1800) -> set[str]:
+    files: set[str] = set()
+    ignored = {
+        ".git",
+        "node_modules",
+        "dist",
+        "build",
+        ".next",
+        ".vercel",
+        ".voiceide",
+        "__pycache__",
+        ".venv",
+        "venv",
+        "target",
+        "vendor",
+    }
+    for root, dirnames, filenames in os.walk(project_dir):
+        root_path = Path(root)
+        try:
+            rel_root = root_path.relative_to(project_dir).as_posix()
+        except Exception:
+            continue
+        dirnames[:] = [name for name in dirnames if name not in ignored and f"{rel_root}/{name}".strip("./") not in ignored]
+        for filename in filenames:
+            if len(files) >= limit:
+                return files
+            try:
+                rel = (root_path / filename).relative_to(project_dir).as_posix()
+            except Exception:
+                continue
+            if any(part in ignored for part in rel.split("/")):
+                continue
+            files.add(rel)
+    return files
+
+
+def _append_unique(items: list[str], *values: str) -> None:
+    for value in values:
+        clean = str(value or "").strip()
+        if clean and clean not in items:
+            items.append(clean)
+
+
+def _package_runner(package_manager: str) -> str:
+    manager = str(package_manager or "").split("@", 1)[0].strip().lower()
+    return manager if manager in {"pnpm", "yarn", "bun"} else "npm"
+
+
 def detect_project_stack(project_dir: Path, *, warnings: list[str] | None = None) -> ProjectStackSignals:
     pkg = _read_package_json(project_dir, warnings=warnings)
     deps = pkg.get("dependencies") if isinstance(pkg.get("dependencies"), dict) else {}
     dev_deps = pkg.get("devDependencies") if isinstance(pkg.get("devDependencies"), dict) else {}
+    scripts = pkg.get("scripts") if isinstance(pkg.get("scripts"), dict) else {}
     all_names = {str(name).strip() for name in [*deps.keys(), *dev_deps.keys()] if str(name).strip()}
+    files = _project_file_set(project_dir)
+    root_files = {rel for rel in files if "/" not in rel}
+
+    languages: list[str] = []
+    frameworks: list[str] = []
+    runtimes: list[str] = []
+    package_managers: list[str] = []
+    validation_files: list[str] = []
+
+    if pkg:
+        _append_unique(languages, "javascript")
+        if "typescript" in all_names or "tsconfig.json" in root_files or any(rel.endswith((".ts", ".tsx")) for rel in files):
+            _append_unique(languages, "typescript")
+        package_manager = str(pkg.get("packageManager") or "").strip()
+        if package_manager:
+            _append_unique(package_managers, package_manager.split("@", 1)[0])
+        elif "pnpm-lock.yaml" in root_files:
+            _append_unique(package_managers, "pnpm")
+        elif "yarn.lock" in root_files:
+            _append_unique(package_managers, "yarn")
+        elif "bun.lock" in root_files or "bun.lockb" in root_files:
+            _append_unique(package_managers, "bun")
+        elif "package-lock.json" in root_files:
+            _append_unique(package_managers, "npm")
+        else:
+            _append_unique(package_managers, "npm")
+    for name, framework in [
+        ("react", "react"),
+        ("vite", "vite"),
+        ("next", "nextjs"),
+        ("@remix-run/react", "remix"),
+        ("astro", "astro"),
+        ("svelte", "svelte"),
+        ("vue", "vue"),
+        ("@angular/core", "angular"),
+        ("express", "express"),
+        ("fastify", "fastify"),
+        ("@nestjs/core", "nestjs"),
+    ]:
+        if name in all_names:
+            _append_unique(frameworks, framework)
+    if (
+        "vite.config.ts" in root_files
+        or "vite.config.js" in root_files
+        or "@vitejs/plugin-react" in all_names
+        or any("vite" in str(value).lower() for value in scripts.values())
+    ):
+        _append_unique(frameworks, "vite")
+    if "next.config.js" in root_files or "next.config.mjs" in root_files or "next.config.ts" in root_files:
+        _append_unique(frameworks, "nextjs")
+    if pkg or any(rel.endswith((".js", ".mjs", ".cjs", ".ts")) for rel in files):
+        _append_unique(runtimes, "node")
+
+    if {"pyproject.toml", "requirements.txt", "setup.py", "setup.cfg", "Pipfile", "poetry.lock", "pytest.ini"} & root_files or any(rel.endswith(".py") for rel in files):
+        _append_unique(languages, "python")
+        _append_unique(package_managers, "pip" if "requirements.txt" in root_files else ("poetry" if "poetry.lock" in root_files else "python"))
+    if "manage.py" in root_files:
+        _append_unique(frameworks, "django")
+    if any(rel.endswith(".py") for rel in files):
+        for rel in files:
+            if not rel.endswith(".py"):
+                continue
+            try:
+                text = (project_dir / rel).read_text(encoding="utf-8", errors="ignore")[:20_000]
+            except Exception:
+                continue
+            if "from fastapi" in text or "import fastapi" in text:
+                _append_unique(frameworks, "fastapi")
+            if "from flask" in text or "import flask" in text:
+                _append_unique(frameworks, "flask")
+            if "django" in text.lower():
+                _append_unique(frameworks, "django")
+            if {"fastapi", "flask", "django"} & set(frameworks):
+                break
+
+    if "go.mod" in root_files or any(rel.endswith(".go") for rel in files):
+        _append_unique(languages, "go")
+        _append_unique(package_managers, "go")
+        if "go.mod" in root_files:
+            _append_unique(validation_files, "go.mod")
+    if "Cargo.toml" in root_files or any(rel.endswith(".rs") for rel in files):
+        _append_unique(languages, "rust")
+        _append_unique(package_managers, "cargo")
+        if "Cargo.toml" in root_files:
+            _append_unique(validation_files, "Cargo.toml")
+    if "pom.xml" in root_files or "build.gradle" in root_files or "build.gradle.kts" in root_files or "gradlew" in root_files or any(rel.endswith(".java") for rel in files):
+        _append_unique(languages, "java")
+        if "pom.xml" in root_files:
+            _append_unique(frameworks, "maven")
+            _append_unique(package_managers, "maven")
+            _append_unique(validation_files, "pom.xml")
+        if "build.gradle" in root_files or "build.gradle.kts" in root_files or "gradlew" in root_files:
+            _append_unique(frameworks, "gradle")
+            _append_unique(package_managers, "gradle")
+            _append_unique(validation_files, "build.gradle" if "build.gradle" in root_files else "gradlew")
+    if any(rel.endswith(".kt") for rel in files):
+        _append_unique(languages, "kotlin")
+    if "composer.json" in root_files or any(rel.endswith(".php") for rel in files):
+        _append_unique(languages, "php")
+        _append_unique(package_managers, "composer")
+        if "composer.json" in root_files:
+            _append_unique(validation_files, "composer.json")
+    if "Gemfile" in root_files or any(rel.endswith(".rb") for rel in files):
+        _append_unique(languages, "ruby")
+        _append_unique(package_managers, "bundler")
+        if "Gemfile" in root_files:
+            _append_unique(validation_files, "Gemfile")
+    if any(rel.endswith(".csproj") for rel in files) or any(rel.endswith(".sln") for rel in files):
+        _append_unique(languages, "csharp")
+        _append_unique(package_managers, "dotnet")
+
+    for rel in ["package.json", "tsconfig.json", "pyproject.toml", "requirements.txt", "pytest.ini", "manage.py"]:
+        if rel in root_files:
+            _append_unique(validation_files, rel)
 
     component_libraries: list[str] = []
     if any(name.startswith("@radix-ui/") for name in all_names):
@@ -185,13 +482,119 @@ def detect_project_stack(project_dir: Path, *, warnings: list[str] | None = None
     has_playwright = "playwright" in all_names or "@playwright/test" in all_names
     has_headless_browser = has_playwright or "puppeteer" in all_names
     has_webcontainer = "@webcontainer/api" in all_names
+    has_database_schema = any(
+        rel.startswith(("supabase/migrations/", "migrations/", "prisma/"))
+        or rel in {"schema.prisma", "drizzle.config.ts", "drizzle.config.js"}
+        for rel in files
+    ) or (project_dir / "supabase" / "migrations").is_dir() or (project_dir / "migrations").is_dir() or (project_dir / "prisma").is_dir()
+    has_infra = any(
+        rel in {"Dockerfile", "docker-compose.yml", "compose.yaml", "terraform.tf", "serverless.yml"}
+        or rel.endswith(".tf")
+        or rel.startswith((".github/workflows/", "infra/"))
+        for rel in files
+    )
+    has_preview_surface = bool(
+        pkg
+        or "index.html" in root_files
+        or any(framework in frameworks for framework in {"vite", "nextjs", "astro", "svelte", "vue", "react"})
+    )
 
     return ProjectStackSignals(
         component_libraries=component_libraries,
         has_playwright=has_playwright,
         has_headless_browser=has_headless_browser,
         has_webcontainer=has_webcontainer,
+        languages=languages,
+        frameworks=frameworks,
+        runtimes=runtimes,
+        package_managers=package_managers,
+        validation_files=validation_files,
+        has_database_schema=has_database_schema,
+        has_infra=has_infra,
+        has_preview_surface=has_preview_surface,
     )
+
+
+def build_validation_plan(project_dir: Path, *, project_root: str = ".") -> dict:
+    stack = detect_project_stack(project_dir)
+    pkg = _read_package_json(project_dir)
+    scripts = pkg.get("scripts") if isinstance(pkg.get("scripts"), dict) else {}
+    root = str(project_root or ".").strip() or "."
+    prefix = "" if root == "." else f"cd {root} && "
+    files = _project_file_set(project_dir)
+    commands: list[dict[str, str]] = []
+    optional: list[dict[str, str]] = []
+
+    def add(command: str, reason: str, *, kind: str = "primary") -> None:
+        item = {"command": f"{prefix}{command}", "reason": reason, "kind": kind}
+        target = optional if kind == "optional" else commands
+        if item["command"] not in {entry["command"] for entry in commands + optional}:
+            target.append(item)
+
+    if pkg:
+        manager = _package_runner(str(pkg.get("packageManager") or (stack.package_managers[0] if stack.package_managers else "npm")))
+        for script in ["typecheck", "check", "lint", "test", "build"]:
+            if script in scripts:
+                add(f"{manager} run {script}", f"package.json exposes `{script}` script.")
+        if "dev" in scripts or "preview" in scripts:
+            add(f"{manager} run {'preview' if 'preview' in scripts else 'dev'}", "Preview smoke command exists; use only when a live preview check is needed.", kind="optional")
+
+    root_files = {rel for rel in files if "/" not in rel}
+    if "python" in stack.languages:
+        has_tests_dir = any(rel.startswith("tests/") for rel in files)
+        if "pytest.ini" in root_files:
+            add("python3 -m pytest", "Python test discovery via pytest config/tests directory.")
+        elif has_tests_dir:
+            add("python3 -m unittest discover -s tests", "Python stdlib unittest discovery from tests directory.")
+        elif "manage.py" in root_files:
+            add("python3 manage.py test", "Django project has manage.py.")
+        add("python3 -m compileall .", "Python syntax smoke check across project files.")
+    if "go" in stack.languages:
+        add("go test ./...", "Go module/package validation.")
+    if "rust" in stack.languages:
+        add("cargo test", "Rust crate test validation.")
+        add("cargo check", "Rust type/build smoke validation.", kind="optional")
+    if "java" in stack.languages or "kotlin" in stack.languages:
+        if "gradlew" in root_files:
+            add("./gradlew test", "Gradle wrapper test validation.")
+        elif "build.gradle" in root_files or "build.gradle.kts" in root_files:
+            add("gradle test", "Gradle test validation.")
+        if "pom.xml" in root_files:
+            add("mvn test", "Maven test validation.")
+    if "php" in stack.languages:
+        composer = _read_json_file(project_dir / "composer.json")
+        composer_scripts = composer.get("scripts") if isinstance(composer.get("scripts"), dict) else {}
+        if "test" in composer_scripts:
+            add("composer test", "composer.json exposes test script.")
+        else:
+            add("composer validate", "composer.json dependency/config validation.", kind="optional")
+    if "ruby" in stack.languages:
+        if "Rakefile" in root_files:
+            add("bundle exec rake test", "Ruby project has Rakefile test entry.")
+        elif any(rel.startswith("spec/") for rel in root_files):
+            add("bundle exec rspec", "Ruby project has spec directory.")
+    if "csharp" in stack.languages:
+        add("dotnet test", ".NET solution/project test validation.")
+    if any(rel.endswith(".tf") for rel in root_files):
+        add("terraform validate", "Terraform configuration validation.", kind="optional")
+
+    return {
+        "project_root": root,
+        "detected_stack": {
+            "languages": stack.languages,
+            "frameworks": stack.frameworks,
+            "runtimes": stack.runtimes,
+            "package_managers": stack.package_managers,
+            "validation_files": stack.validation_files,
+            "has_database_schema": stack.has_database_schema,
+            "has_infra": stack.has_infra,
+            "has_preview_surface": stack.has_preview_surface,
+        },
+        "commands": commands[:12],
+        "optional_commands": optional[:8],
+        "confidence": "high" if commands else ("medium" if optional else "low"),
+        "note": "Run the smallest relevant validation set for the files changed; do not assume this is only a frontend project.",
+    }
 
 
 def _stack_skills(project_dir: Path, *, warnings: list[str] | None = None) -> list[SkillDoc]:
@@ -259,6 +662,8 @@ def resolve_agent_skills(
                     active_rel,
                     preview_url or "",
                     " ".join(stack.component_libraries),
+                    " ".join(stack.languages),
+                    " ".join(stack.frameworks),
                     "playwright" if stack.has_playwright else "",
                     "headless-browser" if stack.has_headless_browser else "",
                     "webcontainer" if stack.has_webcontainer else "",

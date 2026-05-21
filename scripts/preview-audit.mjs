@@ -20,6 +20,13 @@ function limitList(values, limit = 8) {
   return out;
 }
 
+function looksLikeTransientLoading(snapshot) {
+  const excerpt = cleanText(snapshot?.excerpt || '').toLowerCase();
+  const headings = (snapshot?.headings || []).join(' ').toLowerCase();
+  const wordCount = Number(snapshot?.word_count || 0);
+  return wordCount <= 8 && /\b(loading|memuat|please wait|spinner)\b/.test(`${headings} ${excerpt}`);
+}
+
 if (!url) {
   console.log(JSON.stringify({ ok: false, error: 'Missing preview URL.' }));
   process.exit(0);
@@ -163,10 +170,18 @@ try {
     };
   });
 
-  const desktopSnapshot = await collectSnapshot();
+  let desktopSnapshot = await collectSnapshot();
+  if (looksLikeTransientLoading(desktopSnapshot)) {
+    await page.waitForTimeout(Math.max(900, settleMs));
+    desktopSnapshot = await collectSnapshot();
+  }
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(Math.min(settleMs, 500));
-  const mobileSnapshot = await collectSnapshot();
+  let mobileSnapshot = await collectSnapshot();
+  if (looksLikeTransientLoading(mobileSnapshot)) {
+    await page.waitForTimeout(Math.max(900, settleMs));
+    mobileSnapshot = await collectSnapshot();
+  }
   const snapshot = {
     ...desktopSnapshot,
     viewport: { width: desktopSnapshot.viewport_width, height: desktopSnapshot.viewport_height },

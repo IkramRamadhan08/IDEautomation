@@ -59,7 +59,7 @@ from api.agent_runtime import (
     _remember_project_work_state,
     run_agent_pipeline,
 )
-from api.agent_skills import detect_project_stack
+from api.agent_skills import build_validation_plan, detect_project_stack
 from api.agent_tools import list_local_tools
 
 
@@ -890,7 +890,10 @@ def _count_emoji_chars(text: str) -> int:
     return count
 
 
-_STARTER_RESIDUE_RE = re.compile(r"\b(vite|react \+ vite|seeded template|lorem ipsum|template starter|starter|placeholder)\b", re.IGNORECASE)
+_STARTER_RESIDUE_RE = re.compile(
+    r"\b(vite|react \+ vite|seeded template|lorem ipsum|template starter|starter|placeholder\s+(?:copy|content|text|section|card|page))\b",
+    re.IGNORECASE,
+)
 _GENERIC_SAAS_COPY_RE = re.compile(
     r"\b(streamline|seamless|reimagined|next[- ]generation|supercharge|unlock|scale faster|all[- ]in[- ]one|boost productivity|transform your workflow)\b",
     re.IGNORECASE,
@@ -1105,8 +1108,8 @@ def _build_quality_checks(snapshot: dict, *, project_signals: dict[str, object] 
     checks.append({
         "id": "source-style-discipline",
         "label": "Style discipline",
-        "ok": inline_style_count <= 8,
-        "detail": "Inline style masih wajar atau styling sudah dipindah ke class/CSS." if inline_style_count <= 8 else f"Inline style terlalu banyak ({inline_style_count}); pindahkan styling berulang ke CSS/class.",
+        "ok": inline_style_count <= 12,
+        "detail": "Inline style masih wajar atau styling sudah dipindah ke class/CSS." if inline_style_count <= 12 else f"Inline style terlalu banyak ({inline_style_count}); pindahkan styling berulang ke CSS/class.",
     })
     checks.append({
         "id": "emoji-polish",
@@ -1235,6 +1238,14 @@ def _build_preview_audit_result(
         detail = "Preview page has no visible H1 heading."
         issues.append(detail)
         add_issue("blocking", "content", detail, "Tambahkan H1 yang jelas di first viewport.")
+    route_404 = bool(
+        any(str(item).strip().lower() in {"404", "not found", "page not found"} for item in headings)
+        or re.search(r"\b(404|page not found|not found)\b", excerpt, re.IGNORECASE)
+    )
+    if route_404:
+        detail = "Preview root is rendering a 404/not-found page instead of the primary app surface."
+        issues.append(detail)
+        add_issue("blocking", "routing", detail, "Add a root route '/' that renders the dashboard/home surface, or redirect '/' to the primary app route before preview audit.")
     if word_count < 20:
         detail = "Preview content is nearly empty or still showing a starter shell."
         issues.append(detail)
@@ -1275,7 +1286,7 @@ def _build_preview_audit_result(
         detail = f"Source still contains {any_cast_count} loose any/as any usage(s)."
         issues.append(detail)
         add_issue("warning", "source-quality", detail, "Ganti dengan tipe data eksplisit supaya hasil lebih production-ready.")
-    if inline_style_count > 8:
+    if inline_style_count > 12:
         detail = f"Source contains {inline_style_count} inline style block(s), which makes the UI harder to polish consistently."
         issues.append(detail)
         add_issue("warning", "source-quality", detail, "Pindahkan styling berulang ke CSS class, token, atau component variants.")
@@ -1738,6 +1749,24 @@ _SAFE_COMMAND_PREFIXES = (
     ("python", "-m", "pytest"),
     ("python3", "-m", "unittest"),
     ("python", "-m", "unittest"),
+    ("go", "test"),
+    ("go", "vet"),
+    ("cargo", "test"),
+    ("cargo", "check"),
+    ("cargo", "clippy"),
+    ("mvn", "test"),
+    ("mvn", "-q", "test"),
+    ("gradle", "test"),
+    ("./gradlew", "test"),
+    ("gradlew", "test"),
+    ("composer", "test"),
+    ("composer", "validate"),
+    ("composer", "run-script"),
+    ("bundle", "exec", "rake"),
+    ("bundle", "exec", "rspec"),
+    ("ruby", "-c"),
+    ("dotnet", "test"),
+    ("terraform", "validate"),
     ("tsc",),
     ("vite", "build"),
     ("vitest",),
@@ -1817,7 +1846,7 @@ def _command_policy_decision_for_parts(clean: str, parts: list[str], *, access_m
         return CommandPolicyDecision(ok=True, command=clean, risk_level="safe", reason="Command baca/inspect relatif workspace boleh auto-run.", requires_approval=False)
 
     if access_mode == "trusted":
-        if executable in {"npm", "pnpm", "yarn", "bun", "npx", "node", "python", "python3", "pip", "pip3", "tsx", "ts-node", "vite", "vitest", "jest", "eslint", "prettier", "playwright"}:
+        if executable in {"npm", "pnpm", "yarn", "bun", "npx", "node", "python", "python3", "pip", "pip3", "go", "cargo", "mvn", "gradle", "gradlew", "composer", "bundle", "ruby", "dotnet", "terraform", "tsx", "ts-node", "vite", "vitest", "jest", "eslint", "prettier", "playwright"}:
             return CommandPolicyDecision(ok=True, command=clean, risk_level="safe", reason="Trusted Project mode: command project-scoped boleh auto-run.", requires_approval=False)
         if executable == "git":
             return CommandPolicyDecision(ok=True, command=clean, risk_level="safe", reason="Trusted Project mode: git non-destruktif boleh auto-run.", requires_approval=False)
@@ -1924,10 +1953,21 @@ def _command_policy_decision(command: str, *, access_mode: str | None = None, pr
 
 def _infer_validation_commands(project_dir: Path) -> list[str]:
     commands: list[str] = []
+    try:
+        plan = build_validation_plan(project_dir, project_root=".")
+        for item in list(plan.get("commands") or []):
+            if not isinstance(item, dict):
+                continue
+            command = str(item.get("command") or "").strip()
+            if command:
+                commands.append(command)
+    except Exception:
+        commands = []
+
     package_manager = _resolve_package_manager(project_dir)
 
     package_json = project_dir / "package.json"
-    if package_json.exists():
+    if package_json.exists() and not commands:
         try:
             data = json.loads(package_json.read_text(encoding="utf-8"))
             scripts = data.get("scripts") or {}
@@ -1946,8 +1986,9 @@ def _infer_validation_commands(project_dir: Path) -> list[str]:
     elif any(project_dir.glob("*.py")):
         python_targets.append(".")
 
-    for target in python_targets:
-        commands.append(f"python3 -m compileall {shlex.quote(target)}")
+    if not commands:
+        for target in python_targets:
+            commands.append(f"python3 -m compileall {shlex.quote(target)}")
 
     deduped: list[str] = []
     seen: set[str] = set()
@@ -2995,8 +3036,12 @@ def list_checkpoints(project_root: str = "."):
 
 @app.post("/api/checkpoints/restore")
 def restore_checkpoint(req: RestoreCheckpointReq):
+    return _restore_checkpoint_path(req.path)
+
+
+def _restore_checkpoint_path(path: str) -> dict[str, object]:
     root = _ws()
-    checkpoint_path = safe_join(root, req.path)
+    checkpoint_path = safe_join(root, path)
     if not checkpoint_path.exists() or checkpoint_path.suffix.lower() != ".json":
         raise HTTPException(404, "Checkpoint not found")
     try:
@@ -3033,6 +3078,41 @@ def restore_checkpoint(req: RestoreCheckpointReq):
         restored += 1
 
     return {"ok": True, "restored": restored, "skipped": skipped}
+
+
+def _snapshot_project_files(project_dir: Path, rel_paths: list[str]) -> dict[str, str | None]:
+    snapshots: dict[str, str | None] = {}
+    for raw in rel_paths:
+        rel = str(raw or "").strip().lstrip("/")
+        if not rel or ".." in rel.split("/") or rel in snapshots:
+            continue
+        target = (project_dir / rel).resolve()
+        try:
+            if project_dir != target and project_dir not in target.parents:
+                continue
+            snapshots[rel] = target.read_text(encoding="utf-8") if target.exists() and target.is_file() else None
+        except Exception:
+            continue
+    return snapshots
+
+
+def _restore_project_file_snapshots(project_dir: Path, snapshots: dict[str, str | None]) -> list[str]:
+    restored: list[str] = []
+    for rel, content in snapshots.items():
+        target = (project_dir / rel).resolve()
+        try:
+            if project_dir != target and project_dir not in target.parents:
+                continue
+            if content is None:
+                if target.exists() and target.is_file():
+                    target.unlink()
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content, encoding="utf-8")
+            restored.append(rel)
+        except Exception:
+            continue
+    return restored
 
 
 class DiffReq(BaseModel):
@@ -3927,6 +4007,75 @@ def _execution_failure_analysis(execution: dict[str, object]) -> dict[str, objec
     }
 
 
+_TS_PARSE_FAILURE_RE = re.compile(
+    r"\bTS(?:1003|1005|1109|1128|1351|1381|1382|17002|2657)\b|JSX expressions must have one parent element|Unexpected token|Expected corresponding JSX closing tag",
+    re.IGNORECASE,
+)
+
+
+def _execution_has_command_failure(execution: dict[str, object]) -> bool:
+    for key in ("shell", "validation", "replay"):
+        container = execution.get(key)
+        if isinstance(container, dict) and container.get("ok") is False:
+            return True
+    return False
+
+
+def _execution_has_parse_failure(execution: dict[str, object]) -> bool:
+    for key in ("shell", "validation", "replay"):
+        container = execution.get(key)
+        if not isinstance(container, dict):
+            continue
+        for result in list(container.get("results") or []):
+            if not isinstance(result, dict):
+                continue
+            text = f"{result.get('stdout') or ''}\n{result.get('stderr') or ''}"
+            if _TS_PARSE_FAILURE_RE.search(text):
+                return True
+    return False
+
+
+def _repair_execution_degrades_parent(parent_execution: dict[str, object], repair_execution: dict[str, object]) -> bool:
+    parent_had_command_failure = _execution_has_command_failure(parent_execution)
+    repair_has_command_failure = _execution_has_command_failure(repair_execution)
+    if repair_has_command_failure and not parent_had_command_failure:
+        return True
+    if _execution_has_parse_failure(repair_execution) and not _execution_has_parse_failure(parent_execution):
+        return True
+    parent_preview = parent_execution.get("preview_audit")
+    repair_preview = repair_execution.get("preview_audit")
+    if isinstance(parent_preview, dict) and isinstance(repair_preview, dict):
+        if parent_preview.get("skipped") or repair_preview.get("skipped"):
+            return False
+        parent_issues = [item for item in list(parent_preview.get("issue_details") or []) if isinstance(item, dict)]
+        repair_issues = [item for item in list(repair_preview.get("issue_details") or []) if isinstance(item, dict)]
+        parent_blocking = sum(1 for item in parent_issues if item.get("severity") == "blocking")
+        repair_blocking = sum(1 for item in repair_issues if item.get("severity") == "blocking")
+        parent_warnings = sum(1 for item in parent_issues if item.get("severity") == "warning")
+        repair_warnings = sum(1 for item in repair_issues if item.get("severity") == "warning")
+        if bool(parent_preview.get("ok")) and not bool(repair_preview.get("ok")):
+            return True
+        if repair_blocking > parent_blocking:
+            return True
+        if repair_blocking == parent_blocking and repair_warnings > parent_warnings:
+            return True
+    return False
+
+
+def _rollback_repair_checkpoint(repair_execution: dict[str, object]) -> dict[str, object] | None:
+    apply_result = repair_execution.get("apply")
+    if not isinstance(apply_result, dict):
+        return None
+    checkpoint_path = str(apply_result.get("checkpoint_path") or "").strip()
+    if not checkpoint_path:
+        return None
+    try:
+        restored = _restore_checkpoint_path(checkpoint_path)
+        return {"ok": True, "checkpoint_path": checkpoint_path, **restored}
+    except Exception as exc:
+        return {"ok": False, "checkpoint_path": checkpoint_path, "error": str(exc)[:300]}
+
+
 def _execution_final_failure_analysis(execution: dict[str, object]) -> dict[str, object]:
     raw = _execution_failure_analysis(execution)
     if not bool(execution.get("ok")):
@@ -4549,22 +4698,25 @@ def _normalize_project_scoped_shell_command(command: str, *, cwd_label: str, pro
         parts = shlex.split(clean)
     except Exception:
         return clean, current_cwd, None
-    if len(parts) < 4 or parts[0] != "cd" or parts[2] not in _SHELL_CHAIN_OPERATORS:
+    normalized_parts = list(parts)
+    note_parts: list[str] = []
+    if len(parts) >= 4 and parts[0] == "cd" and parts[2] in _SHELL_CHAIN_OPERATORS:
+        target = str(parts[1] or "").strip().strip("/")
+        if target and not target.startswith(("/", "~")) and ".." not in PurePosixPath(target.replace("\\", "/")).parts:
+            root_name = PurePosixPath(root).name
+            target_is_project = target in {root, f"./{root}", root_name, f"./{root_name}", "."}
+            if target_is_project:
+                normalized_parts = parts[3:]
+                if normalized_parts:
+                    current_cwd = root if current_cwd == "." and target not in {".", "./."} else current_cwd
+                    note_parts.append(f"Normalized redundant `cd {target} &&` because backend already runs shell commands inside the project cwd.")
+    if len(normalized_parts) >= 3 and normalized_parts[0] == "python" and normalized_parts[1] == "-m" and normalized_parts[2] in {"compileall", "pytest", "unittest"}:
+        normalized_parts[0] = "python3"
+        note_parts.append("Normalized `python` to `python3` for Appora's local Python runtime.")
+    normalized_command = shlex.join(normalized_parts)
+    if normalized_command == clean and not note_parts:
         return clean, current_cwd, None
-    target = str(parts[1] or "").strip().strip("/")
-    if not target or target.startswith(("/", "~")) or ".." in PurePosixPath(target.replace("\\", "/")).parts:
-        return clean, current_cwd, None
-    root_name = PurePosixPath(root).name
-    target_is_project = target in {root, f"./{root}", root_name, f"./{root_name}", "."}
-    if not target_is_project:
-        return clean, current_cwd, None
-    next_parts = parts[3:]
-    if not next_parts:
-        return clean, current_cwd, None
-    next_command = shlex.join(next_parts)
-    next_cwd = root if current_cwd == "." and target not in {".", "./."} else current_cwd
-    note = f"Normalized redundant `cd {target} &&` because backend already runs shell commands inside the project cwd."
-    return next_command, next_cwd, note
+    return normalized_command, current_cwd, " ".join(note_parts) or None
 
 
 def _run_harness_shell_actions_internal(
@@ -4847,6 +4999,8 @@ def _run_backend_repair_pass(req: AgentReq, execution: dict[str, object], emit, 
         "Use failure_analysis.summary and failure_analysis.suggested_next_move as the repair objective.",
         "If command failures were already replayed successfully by earlier repairs, focus the remaining preview, responsive, source-quality, or apply blockers.",
         "If the active failure is preview_audit/responsive/visual quality, return CSS/layout/component changes; install-only shell actions do not resolve preview blockers.",
+        "If the active failure is a TypeScript/JSX parse error, rewrite the complete failing component/file into valid TSX instead of patching a small JSX fragment.",
+        "Prefer simple, balanced JSX structure over clever inline expressions during repair; one valid full-file replacement is better than multiple risky local patches.",
         "Do not repeat the same failing command blindly unless your changes address the failure.",
         f"Original user request:\n{req.input}",
         f"Failure analysis:\n{json.dumps(failure_analysis, ensure_ascii=False, indent=2)}",
@@ -4871,8 +5025,65 @@ def _run_backend_repair_pass(req: AgentReq, execution: dict[str, object], emit, 
         background=False,
         auto_execute=False,
     )
-    with _agent_lock_for_current_provider():
-        repair_pipeline = run_agent_pipeline(repair_req, ws_root=_ws(), emit=emit)
+    try:
+        with _agent_lock_for_current_provider():
+            repair_pipeline = run_agent_pipeline(repair_req, ws_root=_ws(), emit=emit)
+    except Exception as exc:
+        message = str(exc or "Backend repair model call failed.")[:500]
+        repair_execution: dict[str, object] = {
+            "auto_execute": True,
+            "project_root": project_root,
+            "ok": False,
+            "steps": [
+                _execution_step(
+                    "repair_model",
+                    "Backend repair model call",
+                    False,
+                    message,
+                    repair_index=repair_index,
+                )
+            ],
+            "apply": None,
+            "shell": None,
+            "validation": None,
+            "preview_audit": execution.get("preview_audit") if isinstance(execution.get("preview_audit"), dict) else None,
+            "repairs": [],
+            "failure_analysis": {
+                "current_signature": "repair-provider-error",
+                "failure_count": 1,
+                "active_failure_count": 1,
+                "resolved_failure_count": 0,
+                "failures": [{"kind": "repair_provider", "detail": message}],
+                "resolved_failures": [],
+                "evidence_excerpt": message,
+                "primary_failure": message,
+                "summary": f"Backend repair model call failed: {message}",
+                "suggested_next_move": "Check 9Router/API key or provider quota, then retry the repair pass.",
+                "prior_signatures": [],
+                "repeated_failure": False,
+                "repeated_count": 0,
+            },
+        }
+        repair_execution["completion_report"] = _execution_completion_report(repair_execution)
+        emit("tool_output", _harness_tool_output_payload(
+            "repair-model",
+            "executing_repair",
+            project_root=project_root,
+            ok=False,
+            summary=f"Backend repair model call failed: {message}",
+            repair_index=repair_index,
+        ))
+        return {
+            "spoken": "",
+            "log": f"repair_provider_error={message}",
+            "changes": [],
+            "actions": [],
+            "intent": {},
+            "trace": {},
+            "pre_repair_failure_analysis": failure_analysis,
+            "execution": repair_execution,
+            "provider_error": message,
+        }
     repair_changes = _prepare_agent_out_changes(_ws(), list(repair_pipeline.get("changes") or []))
     repair_actions = list(repair_pipeline.get("actions") or [])
     repair_execution = _auto_execute_agent_result(repair_req, repair_changes, repair_actions, emit, allow_repair=False)
@@ -5213,7 +5424,7 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
                 ))
     if allow_repair:
         for repair_index in range(1, max_repair_passes + 1):
-            if not _execution_needs_repair(execution) or bool(execution.get("ok")):
+            if not _execution_needs_repair(execution):
                 break
             repair = _run_backend_repair_pass(req, execution, emit, repair_index=repair_index)
             repairs = execution.setdefault("repairs", [])
@@ -5235,8 +5446,30 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
                     failure_analysis=repair_failure_analysis or {},
                     repeated_failure=bool(pre_repair_failure_analysis.get("repeated_failure")) if isinstance(pre_repair_failure_analysis, dict) else False,
                 ))
+            parent_before_repair = execution
             repair_ok = _repair_resolves_parent_execution(execution, repair_execution if isinstance(repair_execution, dict) else None)
             repair_failure_analysis = repair_execution.get("failure_analysis") if isinstance(repair_execution, dict) else None
+            rollback_result = None
+            if isinstance(repair_execution, dict) and not repair_ok and _repair_execution_degrades_parent(parent_before_repair, repair_execution):
+                rollback_result = _rollback_repair_checkpoint(repair_execution)
+                if isinstance(repair, dict):
+                    repair["rollback"] = rollback_result
+                emit("status", {
+                    "phase": "executing_rollback",
+                    "message": "Backend harness rolled back a degrading repair checkpoint before the next pass.",
+                })
+                emit("tool_output", _harness_tool_output_payload(
+                    "rollback",
+                    "executing_rollback",
+                    project_root=project_root,
+                    ok=bool(isinstance(rollback_result, dict) and rollback_result.get("ok")),
+                    summary=(
+                        f"Rolled back repair checkpoint {rollback_result.get('checkpoint_path')}."
+                        if isinstance(rollback_result, dict) and rollback_result.get("ok")
+                        else "Repair rollback failed or no checkpoint was available."
+                    ),
+                    result=rollback_result or {},
+                ))
             emit("tool_output", _harness_tool_output_payload(
                 "repair",
                 "executing_repair",
@@ -5251,6 +5484,7 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
                 changes=len(list(repair.get("changes") or [])) if isinstance(repair, dict) else 0,
                 actions=len(list(repair.get("actions") or [])) if isinstance(repair, dict) else 0,
                 failure_analysis=repair_failure_analysis if isinstance(repair_failure_analysis, dict) else {},
+                rollback=rollback_result or None,
             ))
             if isinstance(repair_execution, dict):
                 execution["ok"] = repair_ok
@@ -5326,6 +5560,7 @@ _HARD_VERIFIER_CHECKS = {
     "unique-change-paths",
     "non-empty-file-content",
     "valid-shell-actions",
+    "root-route-entrypoint",
 }
 
 
@@ -5669,16 +5904,63 @@ def _is_type_only_context(lines: list[str], line_index: int) -> bool:
     return False
 
 
+def _opens_function_body(line: str, *, declaration_is_const: bool) -> bool:
+    stripped = line.rstrip()
+    if not stripped.endswith("{"):
+        return False
+    if re.match(r"^\s*(type|interface)\s+", stripped):
+        return False
+    if not declaration_is_const:
+        return True
+    arrow_index = stripped.rfind("=>")
+    open_index = stripped.rfind("{")
+    if arrow_index >= 0:
+        return open_index > arrow_index
+    return bool(re.search(r"=\s*function\b", stripped))
+
+
 def _function_body_insertion_index(lines: list[str], line_index: int) -> int | None:
     start = max(0, min(line_index, len(lines) - 1))
     for probe in range(start, max(-1, start - 24), -1):
         stripped = lines[probe].strip()
-        if re.match(r"^(export\s+default\s+)?function\s+", stripped) or re.match(r"^(export\s+)?const\s+[A-Za-z_$][\w$]*\s*=", stripped):
+        is_function_declaration = bool(re.match(r"^(export\s+default\s+)?function\s+", stripped))
+        is_const_declaration = bool(re.match(r"^(export\s+)?const\s+[A-Za-z_$][\w$]*\s*=", stripped))
+        if is_function_declaration or is_const_declaration:
             for body_probe in range(probe, min(len(lines), probe + 32)):
-                if lines[body_probe].rstrip().endswith("{") and not re.match(r"^\s*(type|interface)\s+", lines[body_probe]):
+                if _opens_function_body(lines[body_probe], declaration_is_const=is_const_declaration):
                     return body_probe + 1
             return None
     return None
+
+
+def _declaration_end_index(lines: list[str], line_index: int) -> int | None:
+    depth = 0
+    saw_opener = False
+    for probe in range(line_index, min(len(lines), line_index + 120)):
+        line = lines[probe]
+        depth += line.count("(") + line.count("{") + line.count("[")
+        if line.count("(") or line.count("{") or line.count("["):
+            saw_opener = True
+        depth -= line.count(")") + line.count("}") + line.count("]")
+        stripped = line.strip()
+        if depth <= 0 and (stripped.endswith(";") or (saw_opener and stripped == "}")):
+            return probe
+    return None
+
+
+def _unused_declaration_reference(lines: list[str], line_index: int, name: str) -> tuple[int, str] | None:
+    if line_index < 0 or line_index >= len(lines):
+        return None
+    line = lines[line_index]
+    value_match = re.match(rf"^(?P<indent>\s*)(?:const|let|var)\s+{re.escape(name)}\b", line)
+    function_match = re.match(rf"^(?P<indent>\s*)(?:export\s+)?function\s+{re.escape(name)}\b", line)
+    match = value_match or function_match
+    if match is None:
+        return None
+    end_index = _declaration_end_index(lines, line_index)
+    if end_index is None:
+        return None
+    return end_index + 1, f"{match.group('indent')}void {name};"
 
 
 def _insert_void_usage_for_unused_symbols(project_dir: Path, issues: list[dict[str, object]]) -> list[str]:
@@ -5712,7 +5994,15 @@ def _insert_void_usage_for_unused_symbols(project_dir: Path, issues: list[dict[s
             if _remove_unused_import_symbol(lines, idx, name):
                 touched = True
                 continue
+            if _remove_unused_usestate_setter(lines, idx, name):
+                touched = True
+                continue
             if _is_type_only_context(lines, idx):
+                continue
+            declaration_reference = _unused_declaration_reference(lines, idx, name)
+            if declaration_reference is not None:
+                insertion_index, insertion = declaration_reference
+                insertions.setdefault(insertion_index, []).append(insertion)
                 continue
             insertion_index = _function_body_insertion_index(lines, idx)
             if insertion_index is None:
@@ -5732,6 +6022,24 @@ def _insert_void_usage_for_unused_symbols(project_dir: Path, issues: list[dict[s
         path.write_text("\n".join(next_lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
         changed.append(rel)
     return changed
+
+
+def _remove_unused_usestate_setter(lines: list[str], idx: int, name: str) -> bool:
+    if idx < 0 or idx >= len(lines):
+        return False
+    line = lines[idx]
+    if "useState" not in line or name not in line:
+        return False
+    next_line = re.sub(
+        rf"\[\s*(?P<value>[A-Za-z_$][\w$]*)\s*,\s*{re.escape(name)}\s*\]",
+        r"[\g<value>]",
+        line,
+        count=1,
+    )
+    if next_line == line:
+        return False
+    lines[idx] = next_line
+    return True
 
 
 def _component_tag_at_line(lines: list[str], line_no: int) -> str:
@@ -5867,6 +6175,12 @@ def _remove_unsupported_jsx_props(project_dir: Path, issues: list[dict[str, obje
     return changed
 
 
+def _rollback_quick_repair_if_failed(project_dir: Path, shell: dict[str, object], snapshots: dict[str, str | None]) -> list[str]:
+    if bool(shell.get("ok")):
+        return []
+    return _restore_project_file_snapshots(project_dir, snapshots)
+
+
 def _try_quick_ts6133_repair(req: AgentReq, execution: dict[str, object], emit) -> dict[str, object] | None:
     issues = _ts6133_issues_from_execution(execution)
     if not issues:
@@ -5876,6 +6190,11 @@ def _try_quick_ts6133_repair(req: AgentReq, execution: dict[str, object], emit) 
         project_dir = safe_join(_ws(), project_root)
     except Exception:
         return None
+    snapshots = _snapshot_project_files(project_dir, list(dict.fromkeys(
+        str(issue.get("path") or "").strip().lstrip("/")
+        for issue in issues
+        if str(issue.get("path") or "").strip()
+    )))
     changed_paths = _insert_void_usage_for_unused_symbols(project_dir, issues)
     if not changed_paths:
         return None
@@ -5901,13 +6220,15 @@ def _try_quick_ts6133_repair(req: AgentReq, execution: dict[str, object], emit) 
         phase="quick_repair",
         group="quick repair",
     )
+    rolled_back = _rollback_quick_repair_if_failed(project_dir, shell, snapshots)
     result = {
         "ok": bool(shell.get("ok")),
         "changed_paths": changed_paths,
+        "rolled_back_paths": rolled_back,
         "issues": issues,
         "commands": commands,
         "shell": shell,
-        "summary": f"Quick TS6133 repair changed {len(changed_paths)} file(s), validation ok={bool(shell.get('ok'))}.",
+        "summary": f"Quick TS6133 repair changed {len(changed_paths)} file(s), validation ok={bool(shell.get('ok'))}, rolled_back={len(rolled_back)}.",
     }
     emit("tool_output", _harness_tool_output_payload(
         "quick-repair",
@@ -5931,6 +6252,11 @@ def _try_quick_ts2741_missing_required_prop_repair(req: AgentReq, execution: dic
         project_dir = safe_join(_ws(), project_root)
     except Exception:
         return None
+    src_dir = project_dir / "src"
+    snapshot_candidates = []
+    if src_dir.exists():
+        snapshot_candidates = [path.relative_to(project_dir).as_posix() for path in src_dir.glob("**/*.tsx") if path.is_file()][:120]
+    snapshots = _snapshot_project_files(project_dir, snapshot_candidates)
     changed_paths = _make_missing_required_props_optional(project_dir, issues)
     if not changed_paths:
         return None
@@ -5956,14 +6282,16 @@ def _try_quick_ts2741_missing_required_prop_repair(req: AgentReq, execution: dic
         phase="quick_repair",
         group="quick repair",
     )
+    rolled_back = _rollback_quick_repair_if_failed(project_dir, shell, snapshots)
     result = {
         "ok": bool(shell.get("ok")),
         "kind": "ts2741-missing-required-prop",
         "changed_paths": changed_paths,
+        "rolled_back_paths": rolled_back,
         "issues": issues,
         "commands": commands,
         "shell": shell,
-        "summary": f"Quick TS2741 prop repair changed {len(changed_paths)} file(s), validation ok={bool(shell.get('ok'))}.",
+        "summary": f"Quick TS2741 prop repair changed {len(changed_paths)} file(s), validation ok={bool(shell.get('ok'))}, rolled_back={len(rolled_back)}.",
     }
     emit("tool_output", _harness_tool_output_payload(
         "quick-repair",
@@ -5987,6 +6315,11 @@ def _try_quick_ts2322_unsupported_prop_repair(req: AgentReq, execution: dict[str
         project_dir = safe_join(_ws(), project_root)
     except Exception:
         return None
+    snapshots = _snapshot_project_files(project_dir, list(dict.fromkeys(
+        str(issue.get("path") or "").strip().lstrip("/")
+        for issue in issues
+        if str(issue.get("path") or "").strip()
+    )))
     changed_paths = _remove_unsupported_jsx_props(project_dir, issues)
     if not changed_paths:
         return None
@@ -6012,13 +6345,21 @@ def _try_quick_ts2322_unsupported_prop_repair(req: AgentReq, execution: dict[str
         phase="quick_repair",
         group="quick repair",
     )
+    rolled_back = _rollback_quick_repair_if_failed(project_dir, shell, snapshots)
+    preview_result = (
+        _auto_execute_preview_audit(req, project_root)
+        if bool(shell.get("ok")) and not rolled_back and _project_has_preview_surface(project_dir, [{"path": path} for path in changed_paths])
+        else None
+    )
     result = {
         "ok": bool(shell.get("ok")),
         "changed_paths": changed_paths,
+        "rolled_back_paths": rolled_back,
         "issues": issues,
         "commands": commands,
         "shell": shell,
-        "summary": f"Quick TS2322 prop repair changed {len(changed_paths)} file(s), validation ok={bool(shell.get('ok'))}.",
+        "preview_audit": preview_result,
+        "summary": f"Quick TS2322 prop repair changed {len(changed_paths)} file(s), validation ok={bool(shell.get('ok'))}, rolled_back={len(rolled_back)}.",
         "kind": "ts2322-unsupported-jsx-prop",
     }
     emit("tool_output", _harness_tool_output_payload(
@@ -6029,6 +6370,7 @@ def _try_quick_ts2322_unsupported_prop_repair(req: AgentReq, execution: dict[str
         summary=str(result["summary"]),
         paths=changed_paths,
         commands=commands,
+        result={"preview_ok": preview_result.get("ok") if isinstance(preview_result, dict) else None},
         results=_shell_event_results(shell.get("results")),
     ))
     return result
@@ -6389,7 +6731,13 @@ def _run_agent_impl(req: AgentReq, event_cb=None, job_id: str | None = None):
             for chunk in _spoken_stream_chunks(str(result.get("spoken") or "")):
                 emit("delta", {"spoken_chunk": chunk})
         _update_agent_job_record(job_id, "completed", result=result)
-        emit("done", {"message": "Beres, hasil agent siap dipakai.", "result": result})
+        done_message = "Beres, hasil agent siap dipakai."
+        execution = result.get("execution") if isinstance(result.get("execution"), dict) else None
+        if isinstance(execution, dict) and execution.get("auto_execute") and not execution.get("ok"):
+            completion_report = execution.get("completion_report") if isinstance(execution.get("completion_report"), dict) else {}
+            summary = str(completion_report.get("summary") or execution.get("summary") or "Agent execution masih gagal.").strip()
+            done_message = summary if summary.lower().startswith("blocked") else f"Blocked: {summary}"
+        emit("done", {"message": done_message, "result": result})
         return result
     except RuntimeError as exc:
         _update_agent_job_record(job_id, "failed", error=str(exc))
