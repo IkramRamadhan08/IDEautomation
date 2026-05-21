@@ -196,11 +196,14 @@ export type ApplyManyPreflightResult = {
 
 const envBase = (import.meta.env.VITE_API_BASE ?? "").trim().replace(/\/$/, "");
 const isViteDev = Boolean(import.meta.env.DEV);
-const localDevBase = typeof window !== "undefined"
+const sameHostLocalBase = typeof window !== "undefined"
   ? `${window.location.protocol}//${window.location.hostname || "localhost"}:8787`
   : "http://localhost:8787";
-const hostedApiBase = "https://appora-api-production.up.railway.app";
-const BASE = envBase || (isViteDev ? localDevBase : hostedApiBase);
+const browserLocalBase = "http://localhost:8787";
+const localApiBase = isViteDev ? sameHostLocalBase : browserLocalBase;
+const BASE = envBase || localApiBase;
+export const API_BASE = BASE;
+export const isLocalApiBase = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|::1)(:\d+)?$/i.test(BASE);
 const SESSION_STORAGE_KEY = "voiceide-session-id";
 const USER_STORAGE_KEY = "voiceide-user-id";
 

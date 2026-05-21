@@ -134,7 +134,8 @@ Run the frontend:
 npm run dev
 ```
 
-By default the Vite frontend calls the local API at `http://localhost:8787` in development.
+By default the frontend calls the local API at `http://localhost:8787`.
+That also applies when the Vercel-hosted UI is used as a temporary local-first shell, so keep the backend running on port `8787` while Railway or another hosted backend is unavailable.
 
 ## Supabase Setup
 

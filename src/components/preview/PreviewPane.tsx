@@ -1,5 +1,6 @@
 import React from "react";
 import { RefreshCw, ExternalLink, Play } from "lucide-react";
+import { isLocalApiBase } from "../../api";
 
 interface PreviewPaneProps {
   ws: string | null;
@@ -21,7 +22,7 @@ export const PreviewPane: React.FC<PreviewPaneProps> = ({
   const browserHost = typeof window !== "undefined" ? window.location.hostname.toLowerCase() : "";
   const hostedBrowser = Boolean(browserHost && !["localhost", "127.0.0.1", "::1"].includes(browserHost));
   const localPreviewTarget = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|::1)(:\d+)?/i.test(previewUrl);
-  const unreachableHostedPreview = hostedBrowser && localPreviewTarget;
+  const unreachableHostedPreview = hostedBrowser && localPreviewTarget && !isLocalApiBase;
   const previewState = previewUrl ? "Live preview" : "Preview idle";
   const previewMeta = unreachableHostedPreview
     ? "This deployment cannot open private preview targets from your browser."
