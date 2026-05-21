@@ -134,8 +134,14 @@ Run the frontend:
 npm run dev
 ```
 
-By default the frontend calls the local API at `http://localhost:8787`.
-That also applies when the Vercel-hosted UI is used as a temporary local-first shell, so keep the backend running on port `8787` while Railway or another hosted backend is unavailable.
+By default the local frontend calls the local API at `http://localhost:8787`.
+For local-first development while Railway or another hosted backend is unavailable, run:
+
+```bash
+npm run dev:local
+```
+
+Then open `http://localhost:5173`. Do not use the Vercel-hosted UI for local backend work unless the local API is exposed through an HTTPS tunnel and `VITE_API_BASE` points to that tunnel.
 
 ## Supabase Setup
 
