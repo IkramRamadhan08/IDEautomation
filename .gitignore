@@ -26,6 +26,7 @@ playwright-report/
 .voiceide-users.json
 .voiceide-projects.json
 .voiceide-home/
+.tmp-agent-live/
 *.log
 
 # misc

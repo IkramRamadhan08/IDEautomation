@@ -2651,6 +2651,82 @@ class AgentAutoExecuteRegressionTests(unittest.TestCase):
         self.assertLess(len(stdout_chunks), 20)
         self.assertIn("line-19", "".join(stdout_chunks))
 
+    def test_quick_missing_package_repair_allows_react_router_dom(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            (project / "package.json").write_text(json.dumps({"dependencies": {"react": "^19.0.0"}}), encoding="utf-8")
+            execution = {
+                "validation": {
+                    "results": [
+                        {
+                            "stdout": "src/App.tsx(1,31): error TS2307: Cannot find module 'react-router-dom' or its corresponding type declarations.\n",
+                            "stderr": "",
+                        }
+                    ]
+                }
+            }
+
+            packages = main_mod._missing_external_packages_from_execution(execution, project)
+
+        self.assertIn("react-router-dom", packages)
+
+    def test_quick_ts2322_repair_removes_unsupported_jsx_prop(self) -> None:
+        session_id = "quick-ts2322-repair-test"
+        STATE.get("sessions", {}).pop(session_id, None)
+        session_token = CURRENT_SESSION_ID.set(session_id)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                project = root / "demo"
+                (project / "src" / "pages").mkdir(parents=True)
+                (project / "src" / "pages" / "Pricing.tsx").write_text(
+                    "import Button from '../components/Button';\n"
+                    "export default function Pricing() {\n"
+                    "  return <Button variant=\"primary\" style={{ width: '100%' }}>Start</Button>;\n"
+                    "}\n",
+                    encoding="utf-8",
+                )
+                STATE["sessions"][session_id] = {
+                    "workspace": str(root),
+                    "runners": {},
+                    "agent_jobs": {},
+                    "oauth_pending": {},
+                    "google_user": None,
+                }
+                execution = {
+                    "validation": {
+                        "commands": ["npm run build"],
+                        "results": [
+                            {
+                                "stdout": (
+                                    "src/pages/Pricing.tsx(3,36): error TS2322: Type '{ children: string; variant: \"primary\"; style: { width: string; }; }' "
+                                    "is not assignable to type 'IntrinsicAttributes'.\n"
+                                    "  Property 'style' does not exist on type 'IntrinsicAttributes'.\n"
+                                ),
+                                "stderr": "",
+                                "ok": False,
+                            }
+                        ],
+                    }
+                }
+
+                with patch("api.main._run_harness_shell_actions_internal", return_value={"ok": True, "results": []}):
+                    result = main_mod._try_quick_ts2322_unsupported_prop_repair(
+                        main_mod.AgentReq(input="fix", project_root="demo"),
+                        execution,
+                        lambda *_args: None,
+                    )
+
+                self.assertIsInstance(result, dict)
+                self.assertTrue(result["ok"])
+                self.assertEqual(result["changed_paths"], ["src/pages/Pricing.tsx"])
+                repaired = (project / "src" / "pages" / "Pricing.tsx").read_text(encoding="utf-8")
+                self.assertNotIn("style=", repaired)
+                self.assertIn("<Button variant=\"primary\">Start</Button>", repaired)
+        finally:
+            CURRENT_SESSION_ID.reset(session_token)
+            STATE.get("sessions", {}).pop(session_id, None)
+
     def test_backend_auto_execute_records_preview_audit_step_when_preview_url_is_available(self) -> None:
         session_id = "auto-execute-preview-audit-test"
         STATE.get("sessions", {}).pop(session_id, None)

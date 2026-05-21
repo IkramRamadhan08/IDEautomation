@@ -5070,7 +5070,12 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
             )
 
     execution["failure_analysis"] = _execution_failure_analysis(execution)
-    for quick_repair_fn in (_try_quick_missing_package_repair, _try_quick_ts6133_repair, _try_quick_preview_polish_repair):
+    for quick_repair_fn in (
+        _try_quick_missing_package_repair,
+        _try_quick_ts6133_repair,
+        _try_quick_ts2322_unsupported_prop_repair,
+        _try_quick_preview_polish_repair,
+    ):
         if bool(execution.get("ok")) and not _execution_needs_repair(execution):
             break
         quick_repair = quick_repair_fn(req, execution, emit)
@@ -5323,6 +5328,8 @@ def _run_backend_verifier_repair_pass(req: AgentReq, ws_root: Path, trace: dict,
 
 
 _TS6133_RE = re.compile(r"(?P<path>[^\s:(]+\.tsx?)\((?P<line>\d+),(?P<col>\d+)\):\s+error TS6133:\s+'(?P<name>[A-Za-z_$][\w$]*)'\s+is declared but its value is never read\.")
+_TS2322_LOCATION_RE = re.compile(r"(?P<path>[^\s:(]+\.tsx?)\((?P<line>\d+),(?P<col>\d+)\):\s+error TS2322:")
+_TS_PROP_NOT_EXIST_RE = re.compile(r"Property ['\"](?P<prop>[A-Za-z_$][\w$]*)['\"] does not exist on type")
 _TS2307_MODULE_RE = re.compile(r"error TS2307:\s+Cannot find module ['\"](?P<module>[^'\"]+)['\"]")
 _VITE_IMPORT_RESOLVE_RE = re.compile(r"Failed to resolve import ['\"](?P<module>[^'\"]+)['\"]")
 _QUICK_INSTALL_PACKAGE_ALLOWLIST = {
@@ -5338,6 +5345,7 @@ _QUICK_INSTALL_PACKAGE_ALLOWLIST = {
     "lucide-react",
     "react-hook-form",
     "react-markdown",
+    "react-router-dom",
     "recharts",
     "sonner",
     "tailwind-merge",
@@ -5372,6 +5380,35 @@ def _ts6133_issues_from_execution(execution: dict[str, object]) -> list[dict[str
                     continue
                 seen.add(key)
                 issues.append({"path": path, "line": line, "name": name})
+    return issues[:16]
+
+
+def _ts2322_unsupported_prop_issues_from_execution(execution: dict[str, object]) -> list[dict[str, object]]:
+    issues: list[dict[str, object]] = []
+    seen: set[tuple[str, int, str]] = set()
+    for container_name in ("shell", "validation", "replay"):
+        container = execution.get(container_name)
+        if not isinstance(container, dict):
+            continue
+        for result in list(container.get("results") or []):
+            if not isinstance(result, dict):
+                continue
+            lines = str(f"{result.get('stdout') or ''}\n{result.get('stderr') or ''}").splitlines()
+            current: tuple[str, int] | None = None
+            for line in lines:
+                location = _TS2322_LOCATION_RE.search(line)
+                if location:
+                    current = (str(location.group("path") or "").strip(), int(location.group("line") or 0))
+                    continue
+                prop_match = _TS_PROP_NOT_EXIST_RE.search(line)
+                if prop_match and current:
+                    prop = str(prop_match.group("prop") or "").strip()
+                    path, line_no = current
+                    key = (path, line_no, prop)
+                    if path and line_no and prop and key not in seen:
+                        seen.add(key)
+                        issues.append({"path": path, "line": line_no, "prop": prop})
+                    current = None
     return issues[:16]
 
 
@@ -5487,6 +5524,46 @@ def _insert_void_usage_for_unused_symbols(project_dir: Path, issues: list[dict[s
     return changed
 
 
+def _remove_unsupported_jsx_props(project_dir: Path, issues: list[dict[str, object]]) -> list[str]:
+    grouped: dict[str, list[dict[str, object]]] = {}
+    for issue in issues:
+        rel = str(issue.get("path") or "").strip().lstrip("/")
+        if not rel or ".." in rel.split("/"):
+            continue
+        grouped.setdefault(rel, []).append(issue)
+
+    changed: list[str] = []
+    for rel, file_issues in grouped.items():
+        path = (project_dir / rel).resolve()
+        try:
+            if project_dir != path and project_dir not in path.parents:
+                continue
+            text = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        lines = text.splitlines()
+        touched = False
+        for issue in file_issues:
+            prop = str(issue.get("prop") or "").strip()
+            if not re.match(r"^[A-Za-z_$][\w$]*$", prop):
+                continue
+            line_no = max(1, int(issue.get("line") or 1))
+            start = max(0, line_no - 2)
+            end = min(len(lines), line_no + 8)
+            prop_pattern = re.compile(rf"\s+{re.escape(prop)}=\{{(?:[^{{}}]|\{{[^{{}}]*\}})*\}}")
+            for index in range(start, end):
+                next_line, replacements = prop_pattern.subn("", lines[index])
+                if replacements:
+                    lines[index] = next_line
+                    touched = True
+                    break
+        if not touched:
+            continue
+        path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
+        changed.append(rel)
+    return changed
+
+
 def _try_quick_ts6133_repair(req: AgentReq, execution: dict[str, object], emit) -> dict[str, object] | None:
     issues = _ts6133_issues_from_execution(execution)
     if not issues:
@@ -5528,6 +5605,62 @@ def _try_quick_ts6133_repair(req: AgentReq, execution: dict[str, object], emit) 
         "commands": commands,
         "shell": shell,
         "summary": f"Quick TS6133 repair changed {len(changed_paths)} file(s), validation ok={bool(shell.get('ok'))}.",
+    }
+    emit("tool_output", _harness_tool_output_payload(
+        "quick-repair",
+        "quick_repair",
+        project_root=project_root,
+        ok=bool(shell.get("ok")),
+        summary=str(result["summary"]),
+        paths=changed_paths,
+        commands=commands,
+        results=_shell_event_results(shell.get("results")),
+    ))
+    return result
+
+
+def _try_quick_ts2322_unsupported_prop_repair(req: AgentReq, execution: dict[str, object], emit) -> dict[str, object] | None:
+    issues = _ts2322_unsupported_prop_issues_from_execution(execution)
+    if not issues:
+        return None
+    project_root = str(req.project_root or ".").strip().strip("/") or "."
+    try:
+        project_dir = safe_join(_ws(), project_root)
+    except Exception:
+        return None
+    changed_paths = _remove_unsupported_jsx_props(project_dir, issues)
+    if not changed_paths:
+        return None
+
+    commands = list(dict.fromkeys(
+        str(command)
+        for command in list((execution.get("validation") or {}).get("commands") or [])
+        if str(command).strip()
+    ))
+    if not commands:
+        commands = _infer_validation_commands(project_dir)[:4]
+    if not commands:
+        return {"ok": False, "changed_paths": changed_paths, "summary": "Quick TS2322 prop repair edited files but found no validation command."}
+
+    emit("status", {"phase": "quick_repair", "message": "Backend quick repair removed unsupported JSX props before LLM repair..."})
+    _emit_command_start_events(emit, tool="quick-repair", phase="quick_repair", project_root=project_root, commands=commands, group="quick repair")
+    shell = _run_harness_shell_actions_internal(
+        ws_root_path=_ws(),
+        project_root=project_root,
+        actions=[AgentHarnessShellAction(command=command, cwd=project_root, reason="Quick TS2322 unsupported prop repair validation") for command in commands],
+        emit=emit,
+        tool="quick-repair",
+        phase="quick_repair",
+        group="quick repair",
+    )
+    result = {
+        "ok": bool(shell.get("ok")),
+        "changed_paths": changed_paths,
+        "issues": issues,
+        "commands": commands,
+        "shell": shell,
+        "summary": f"Quick TS2322 prop repair changed {len(changed_paths)} file(s), validation ok={bool(shell.get('ok'))}.",
+        "kind": "ts2322-unsupported-jsx-prop",
     }
     emit("tool_output", _harness_tool_output_payload(
         "quick-repair",
