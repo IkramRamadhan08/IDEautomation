@@ -145,6 +145,13 @@ _PLAN_ONLY_REPLY_RE = re.compile(
 _STRICT_AGENTIC_BLOCKED_TEXT = (
     "Agent stopped after repeated plan-only turns without taking a concrete action."
 )
+_HARD_VERIFIER_CHECKS = {
+    "has-work-output",
+    "valid-change-paths",
+    "unique-change-paths",
+    "non-empty-file-content",
+    "valid-shell-actions",
+}
 _MAX_AUTONOMOUS_TASK_LOOPS = 2
 
 APPORA_AUTO_SAFE_SHELL_COMMANDS = [
@@ -1516,8 +1523,6 @@ def _should_promote_readonly_output_to_command(
         return False
     if not (ctx.is_full_agent or ctx.mode_profile.build_mode == "hybrid"):
         return False
-    if not _looks_like_work_command_or_continuation(ctx, user_input):
-        return False
     return True
 
 
@@ -1538,6 +1543,19 @@ def _promote_intent_for_concrete_work(ctx: PreparedAgentContext, user_input: str
             "runtime promote ke command supaya verifier tidak membuang hasil valid."
         )[:240],
     })
+
+
+def _verifier_check_severity(name: str) -> str:
+    return "hard" if name in _HARD_VERIFIER_CHECKS else "advisory"
+
+
+def _is_blocking_verifier_check(check: dict[str, Any]) -> bool:
+    if not isinstance(check, dict) or check.get("ok") is not False:
+        return False
+    severity = str(check.get("severity") or "").strip().lower()
+    if severity:
+        return severity == "hard"
+    return str(check.get("name") or "") in _HARD_VERIFIER_CHECKS
 
 
 def _build_context_parts(ctx: PreparedAgentContext, req: Any) -> list[str]:
@@ -2056,7 +2074,7 @@ def _update_task_state_after_verify(ctx: PreparedAgentContext, state: AgentRunti
     nodes = [dict(item) for item in list(task_state.get("nodes") or []) if isinstance(item, dict)]
     changes = list(state.get("changes") or [])
     actions = list(state.get("actions") or [])
-    blocking = [item for item in checks if isinstance(item, dict) and item.get("ok") is False and item.get("name") != "full-agent-coverage"]
+    blocking = [item for item in checks if _is_blocking_verifier_check(item)]
 
     if not nodes:
         nodes = [{
@@ -2654,9 +2672,11 @@ def _verify_node(state: AgentRuntimeState) -> AgentRuntimeState:
         })
 
     def add(name: str, ok: bool, detail: str) -> None:
-        checks.append({"name": name, "ok": ok, "detail": detail[:240]})
+        severity = _verifier_check_severity(name)
+        checks.append({"name": name, "ok": ok, "detail": detail[:240], "severity": severity})
         if not ok:
-            ctx.trace_warnings.append({"phase": "verify", "message": f"{name}: {detail}"[:240]})
+            label = "blocking" if severity == "hard" else "advisory"
+            ctx.trace_warnings.append({"phase": "verify", "message": f"{label} {name}: {detail}"[:240]})
 
     if ctx.intent.should_write_files:
         add(

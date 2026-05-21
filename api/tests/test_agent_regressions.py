@@ -883,6 +883,29 @@ class AgentVerifierRegressionTests(unittest.TestCase):
         self.assertFalse(verification["relative-imports-resolve"]["ok"])
         self.assertIn("./Missing", verification["relative-imports-resolve"]["detail"])
 
+    def test_verifier_treats_static_code_findings_as_advisory_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src").mkdir(parents=True)
+            (project_dir / "src" / "App.tsx").write_text("export default function App() { return null }\n", encoding="utf-8")
+            ctx = self._ctx(ws_root)
+
+            state = {
+                "context": ctx,
+                "input": "fix app imports",
+                "changes": [{"path": "src/App.tsx", "new_content": "import Missing from './Missing';\nexport default function App() { return <Missing /> }\n"}],
+                "actions": [],
+            }
+            result = _verify_node(state)
+
+        verification = {item["name"]: item for item in result["context"].trace_verification}
+        self.assertFalse(verification["relative-imports-resolve"]["ok"])
+        self.assertEqual(verification["relative-imports-resolve"]["severity"], "advisory")
+        self.assertEqual(result["context"].trace_task_state["status"], "ready_for_execution")
+        self.assertEqual(result["context"].trace_task_state["blocking_checks"], [])
+        self.assertFalse(main_mod._trace_has_blocking_verifier_failures({"verification": result["context"].trace_verification}))
+
     def test_verifier_warns_on_large_rewrite_without_blocking(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ws_root = Path(tmp)
@@ -1030,7 +1053,7 @@ class AgentVerifierRegressionTests(unittest.TestCase):
             (project_dir / "src").mkdir(parents=True)
             (project_dir / "src" / "App.tsx").write_text("export default function App() { return null }\n", encoding="utf-8")
             req = SimpleNamespace(
-                input="fix app preview",
+                input="hi",
                 project_root="demo",
                 build_mode="full-agent",
                 active_file="src/App.tsx",
@@ -2573,7 +2596,7 @@ class AgentAutoExecuteRegressionTests(unittest.TestCase):
                     "intent": {"kind": "command", "should_write_files": True},
                     "trace": {
                         "verification": [
-                            {"name": "relative-imports-resolve", "ok": False, "detail": "Missing relative import."}
+                            {"name": "valid-change-paths", "ok": False, "detail": "Invalid path.", "severity": "hard"}
                         ],
                         "warnings": [],
                     },
@@ -2586,7 +2609,7 @@ class AgentAutoExecuteRegressionTests(unittest.TestCase):
                     "intent": {"kind": "command", "should_write_files": True},
                     "trace": {
                         "verification": [
-                            {"name": "relative-imports-resolve", "ok": True, "detail": "Imports resolve."}
+                            {"name": "valid-change-paths", "ok": True, "detail": "Paths are safe.", "severity": "hard"}
                         ],
                         "warnings": [],
                     },

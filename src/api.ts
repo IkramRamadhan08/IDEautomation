@@ -881,6 +881,7 @@ export type AgentRunTrace = {
     name: string;
     ok: boolean;
     detail: string;
+    severity?: "hard" | "advisory" | string;
   }>;
   warnings?: Array<{
     phase: string;

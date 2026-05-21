@@ -5227,14 +5227,30 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
     return execution
 
 
+_HARD_VERIFIER_CHECKS = {
+    "has-work-output",
+    "valid-change-paths",
+    "unique-change-paths",
+    "non-empty-file-content",
+    "valid-shell-actions",
+}
+
+
+def _is_blocking_verifier_failure(check: dict) -> bool:
+    if not isinstance(check, dict) or check.get("ok") is not False:
+        return False
+    severity = str(check.get("severity") or "").strip().lower()
+    if severity:
+        return severity == "hard"
+    return str(check.get("name") or "") in _HARD_VERIFIER_CHECKS
+
+
 def _trace_has_blocking_verifier_failures(trace: dict) -> bool:
     checks = trace.get("verification") if isinstance(trace, dict) else None
     if not isinstance(checks, list):
         return False
     for check in checks:
-        if not isinstance(check, dict):
-            continue
-        if check.get("ok") is False and str(check.get("name") or "") != "full-agent-coverage":
+        if _is_blocking_verifier_failure(check):
             return True
     return False
 
@@ -5247,7 +5263,7 @@ def _trace_verifier_failure_summary(trace: dict) -> str:
     for check in checks:
         if not isinstance(check, dict):
             continue
-        if check.get("ok") is not False or str(check.get("name") or "") == "full-agent-coverage":
+        if not _is_blocking_verifier_failure(check):
             continue
         name = str(check.get("name") or "verifier").strip()
         detail = str(check.get("detail") or "").strip()

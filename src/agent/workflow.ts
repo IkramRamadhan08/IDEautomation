@@ -553,8 +553,24 @@ function failedVerifierChecks(trace: AgentRunTrace | undefined) {
   return (trace?.verification || []).filter((check) => !check.ok);
 }
 
+const HARD_VERIFIER_CHECKS = new Set([
+  "has-work-output",
+  "valid-change-paths",
+  "unique-change-paths",
+  "non-empty-file-content",
+  "valid-shell-actions",
+]);
+
+type VerifierCheck = NonNullable<AgentRunTrace["verification"]>[number];
+
+function isBlockingVerifierCheck(check: VerifierCheck) {
+  const severity = typeof check.severity === "string" ? check.severity.toLowerCase() : "";
+  if (severity) return severity === "hard";
+  return HARD_VERIFIER_CHECKS.has(check.name);
+}
+
 function blockingVerifierChecks(trace: AgentRunTrace | undefined) {
-  return failedVerifierChecks(trace).filter((check) => check.name !== "full-agent-coverage");
+  return failedVerifierChecks(trace).filter(isBlockingVerifierCheck);
 }
 
 function verifierFailureSummary(trace: AgentRunTrace | undefined) {
