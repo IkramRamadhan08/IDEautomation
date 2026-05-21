@@ -125,6 +125,16 @@ _NODE_BUILTIN_MODULES = {
     "timers", "tls", "tty", "url", "util", "vm", "worker_threads", "zlib",
 }
 _CONTINUATION_ONLY_RE = re.compile(r"^\s*(lanju+t+|lanjutin|terus+|next|continue|go+|oke lanjut|yaudah lanjut)\s*[!.?]*\s*$", re.IGNORECASE)
+_WORK_CONTINUATION_RE = re.compile(r"^\s*(gas+|lanju+t+|lanjutin|terus+|next|continue|go+|oke lanjut|yaudah lanjut)\b", re.IGNORECASE)
+_READONLY_PROMOTE_WORK_RE = re.compile(
+    r"\b("
+    r"fix|build|ship|implement|create|add|remove|update|change|edit|refactor|repair|wire|connect|"
+    r"integrate|generate|scaffold|deploy|bikin|buat|tambah|tambahin|hapus|ubah|rombak|rapihin|"
+    r"benahin|benerin|perbaiki|perbaikin|implementasiin|terapin|terapkan|kerjain|garap|"
+    r"eksekusi|gaskeun|gaspol|gass+|maksimalin|naikin|sempurnakan"
+    r")\b",
+    re.IGNORECASE,
+)
 _PLAN_ONLY_REPLY_RE = re.compile(
     r"\b("
     r"akan|bakal|perlu|rencana|plan|planning|cek dulu|lihat dulu|inspect|review dulu|"
@@ -1479,6 +1489,57 @@ def _should_run_refinement(*, build_mode: str, instruction: str, active_rel: str
     return False
 
 
+def _has_active_work_evidence(ctx: PreparedAgentContext) -> bool:
+    if "ACTIVE WORK CONTINUATION:" in str(ctx.extra_context or ""):
+        return True
+    task_state = ctx.trace_task_state if isinstance(ctx.trace_task_state, dict) else {}
+    return str(task_state.get("status") or "").strip().lower() in {"planned", "current", "blocked", "ready_for_execution"}
+
+
+def _looks_like_work_command_or_continuation(ctx: PreparedAgentContext, text: str) -> bool:
+    raw = str(text or "").strip()
+    if _READONLY_PROMOTE_WORK_RE.search(raw):
+        return True
+    return bool(_WORK_CONTINUATION_RE.search(raw) and _has_active_work_evidence(ctx))
+
+
+def _should_promote_readonly_output_to_command(
+    ctx: PreparedAgentContext,
+    *,
+    user_input: str,
+    changes: list[dict[str, Any]],
+    actions: list[dict[str, Any]],
+) -> bool:
+    if ctx.intent.should_write_files or not ctx.auto_execute:
+        return False
+    if not (changes or actions):
+        return False
+    if not (ctx.is_full_agent or ctx.mode_profile.build_mode == "hybrid"):
+        return False
+    if not _looks_like_work_command_or_continuation(ctx, user_input):
+        return False
+    return True
+
+
+def _promote_intent_for_concrete_work(ctx: PreparedAgentContext, user_input: str) -> None:
+    original = ctx.intent
+    ctx.intent = AgentIntent(
+        kind="command",
+        confidence=max(original.confidence, 0.82),
+        rationale=f"{original.rationale}, promoted after concrete auto-execute work output",
+        should_write_files=True,
+        should_run_tools=True,
+        wants_app_builder=True,
+    )
+    ctx.trace_warnings.append({
+        "phase": "intent-promotion",
+        "message": (
+            "Intent awal read-only, tapi output auto-execute berisi kerja konkret untuk prompt implementasi; "
+            "runtime promote ke command supaya verifier tidak membuang hasil valid."
+        )[:240],
+    })
+
+
 def _build_context_parts(ctx: PreparedAgentContext, req: Any) -> list[str]:
     parts: list[str] = [
         f"Build mode: {ctx.mode_profile.build_mode}",
@@ -2573,6 +2634,25 @@ def _verify_node(state: AgentRuntimeState) -> AgentRuntimeState:
     spoken = str(state.get("spoken") or "")
     checks: list[dict[str, Any]] = []
 
+    if _should_promote_readonly_output_to_command(ctx, user_input=state["input"], changes=changes, actions=actions):
+        _promote_intent_for_concrete_work(ctx, state["input"])
+
+    raw_tool_actions = [
+        item for item in actions if isinstance(item, dict) and str(item.get("type") or "").lower() in {"tool", "mcp"}
+    ]
+    if raw_tool_actions:
+        actions = [
+            item for item in actions if not (isinstance(item, dict) and str(item.get("type") or "").lower() in {"tool", "mcp"})
+        ]
+        state["actions"] = actions
+        ctx.trace_warnings.append({
+            "phase": "verify",
+            "message": (
+                f"Dropped {len(raw_tool_actions)} raw tool/MCP action(s) before final apply; "
+                "read-only tooling must run inside the tooling loop, not survive as final actions."
+            )[:240],
+        })
+
     def add(name: str, ok: bool, detail: str) -> None:
         checks.append({"name": name, "ok": ok, "detail": detail[:240]})
         if not ok:
@@ -2696,7 +2776,7 @@ def _verify_node(state: AgentRuntimeState) -> AgentRuntimeState:
 
     task_state = _update_task_state_after_verify(ctx, state, checks)
     ctx.trace_verification = checks
-    return {"context": ctx, "task_state": task_state}
+    return {"context": ctx, "task_state": task_state, "actions": actions}
 
 
 def _strict_agentic_retry_node(state: AgentRuntimeState) -> AgentRuntimeState:

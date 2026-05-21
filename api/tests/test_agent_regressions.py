@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException, Request
 
-from api.agent_intent import classify_agent_intent
+from api.agent_intent import AgentIntent, classify_agent_intent
 from api.agent_evals import run_clara_contract_eval, validate_template_registry
 from api import agent as agent_mod
 from api import main as main_mod
@@ -1022,6 +1022,52 @@ class AgentVerifierRegressionTests(unittest.TestCase):
 
         verification = {item["name"]: item for item in result["context"].trace_verification}
         self.assertTrue(verification["external-dependencies-declared"]["ok"])
+
+    def test_verifier_promotes_concrete_auto_execute_work_and_drops_raw_tool_actions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src").mkdir(parents=True)
+            (project_dir / "src" / "App.tsx").write_text("export default function App() { return null }\n", encoding="utf-8")
+            req = SimpleNamespace(
+                input="fix app preview",
+                project_root="demo",
+                build_mode="full-agent",
+                active_file="src/App.tsx",
+                open_files=["src/App.tsx"],
+                current_content=None,
+                selection=None,
+                preview_url=None,
+                editor_status=None,
+                auto_execute=True,
+                asset_paths=[],
+            )
+            ctx = prepare_agent_context(req, ws_root)
+            ctx.intent = AgentIntent(
+                kind="conversation",
+                confidence=0.96,
+                rationale="forced regression fixture",
+                should_write_files=False,
+                should_run_tools=False,
+                wants_app_builder=False,
+            )
+            state = {
+                "context": ctx,
+                "input": req.input,
+                "spoken": "Aku nemu preview kosong dan sudah patch route awal.",
+                "changes": [{"path": "src/App.tsx", "new_content": "export default function App() { return <main>Ready</main> }\n"}],
+                "actions": [{"type": "tool", "tool": "repo_search", "arguments": {"query": "App"}}],
+            }
+            result = _verify_node(state)
+
+        verification = {item["name"]: item for item in result["context"].trace_verification}
+        self.assertTrue(result["context"].intent.should_write_files)
+        self.assertEqual(result["context"].intent.kind, "command")
+        self.assertTrue(verification["has-work-output"]["ok"])
+        self.assertTrue(verification["no-unexecuted-tool-actions"]["ok"])
+        self.assertNotIn("read-only-boundary", verification)
+        self.assertEqual(result["actions"], [])
+        self.assertTrue(any(warning["phase"] == "intent-promotion" for warning in result["context"].trace_warnings))
 
 
 class MemoryRetrievalRegressionTests(unittest.TestCase):

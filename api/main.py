@@ -5263,11 +5263,19 @@ def _build_backend_verifier_repair_prompt(req: AgentReq, trace: dict) -> str:
         if build_mode == "full-agent"
         else f"{persona}, stay scoped, but return a valid actionable fix."
     )
+    failure_summary = _trace_verifier_failure_summary(trace)
+    intent_repair_directive = (
+        "The previous pass produced concrete work while the runtime classified the request as read-only. "
+        "Treat this as an implementation continuation and return command-compatible output."
+        if "read-only-boundary" in failure_summary
+        else ""
+    )
     return "\n\n".join([
         str(req.input or "").strip(),
         mode_directive,
         "Your previous output failed the backend verifier before it could be safely applied.",
-        f"Verifier failures:\n{_trace_verifier_failure_summary(trace)}",
+        f"Verifier failures:\n{failure_summary}",
+        intent_repair_directive,
         "Return corrected JSON for the same user task. If this is a build/edit request, include valid file changes or valid shell actions. Do not return raw tool/MCP actions as the final output.",
     ]).strip()
 
