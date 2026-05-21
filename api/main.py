@@ -467,6 +467,61 @@ def _package_run_script_command(manager_cmd: list[str], script: str, port: int) 
     return [*manager_cmd, "run", script, "--", "--host", "127.0.0.1", "--strictPort", "--port", str(port)]
 
 
+def _declared_node_packages(package_data: dict) -> set[str]:
+    names: set[str] = set()
+    for key in ["dependencies", "devDependencies"]:
+        deps = package_data.get(key)
+        if isinstance(deps, dict):
+            names.update(str(name).strip() for name in deps if str(name).strip())
+    return names
+
+
+def _node_modules_contains(node_modules: Path, package_name: str) -> bool:
+    if not package_name:
+        return True
+    parts = package_name.split("/")
+    return (node_modules.joinpath(*parts) / "package.json").exists()
+
+
+def _appora_template_can_reuse_root_node_modules(package_data: dict) -> bool:
+    return package_data.get("apporaTemplate") is True
+
+
+def _ensure_preview_dependencies_ready(project_dir: Path, package_data: dict, logs: list[str]) -> bool:
+    declared = _declared_node_packages(package_data)
+    if not declared:
+        return True
+
+    project_node_modules = project_dir / "node_modules"
+    if project_node_modules.exists() and all(_node_modules_contains(project_node_modules, name) for name in declared):
+        logs.append("[runtime] Existing node_modules satisfies declared dependencies; skipping install.")
+        return True
+
+    root_node_modules = ROOT / "node_modules"
+    if (
+        not project_node_modules.exists()
+        and _appora_template_can_reuse_root_node_modules(package_data)
+        and root_node_modules.exists()
+        and all(_node_modules_contains(root_node_modules, name) for name in declared)
+    ):
+        try:
+            project_node_modules.symlink_to(root_node_modules, target_is_directory=True)
+            logs.append("[runtime] Reused Appora local node_modules for this starter template; skipping install.")
+            return True
+        except Exception as exc:
+            logs.append(f"[runtime] Could not reuse Appora node_modules ({exc}); falling back to package install.")
+
+    return False
+
+
+def _preview_install_timeout_seconds() -> int:
+    raw = os.getenv("APPORA_PREVIEW_INSTALL_TIMEOUT_SECONDS", "120").strip()
+    try:
+        return max(10, min(int(raw), 600))
+    except Exception:
+        return 120
+
+
 def _spoken_stream_chunks(text: str, *, max_chars: int = 28) -> list[str]:
     clean = " ".join(str(text or "").split())
     if not clean:
@@ -835,7 +890,7 @@ def _count_emoji_chars(text: str) -> int:
     return count
 
 
-_STARTER_RESIDUE_RE = re.compile(r"\b(vite|react \+ vite|seeded template|lorem ipsum|template starter|placeholder)\b", re.IGNORECASE)
+_STARTER_RESIDUE_RE = re.compile(r"\b(vite|react \+ vite|seeded template|lorem ipsum|template starter|starter|placeholder)\b", re.IGNORECASE)
 _GENERIC_SAAS_COPY_RE = re.compile(
     r"\b(streamline|seamless|reimagined|next[- ]generation|supercharge|unlock|scale faster|all[- ]in[- ]one|boost productivity|transform your workflow)\b",
     re.IGNORECASE,
@@ -1180,7 +1235,11 @@ def _build_preview_audit_result(
         detail = "Preview page has no visible H1 heading."
         issues.append(detail)
         add_issue("blocking", "content", detail, "Tambahkan H1 yang jelas di first viewport.")
-    if word_count < 40:
+    if word_count < 20:
+        detail = "Preview content is nearly empty or still showing a starter shell."
+        issues.append(detail)
+        add_issue("blocking", "content", detail, "Pastikan entrypoint memuat app baru dan isi first viewport dengan konten produk yang nyata.")
+    elif word_count < 40:
         detail = "Preview content is very sparse, which usually means the page feels unfinished."
         issues.append(detail)
         add_issue("warning", "content", detail, "Lengkapi copy dan section utama agar app tidak terasa placeholder.")
@@ -2479,11 +2538,12 @@ def run_start(req: RunStartReq, request: Request):
     pj_path = proj / "package.json"
     is_static = not pj_path.exists()
     preview_script = "dev"
+    package_data: dict = {}
 
     if not is_static:
         try:
-            import json
             data = json.loads(pj_path.read_text(encoding="utf-8"))
+            package_data = data if isinstance(data, dict) else {}
             scripts = data.get("scripts") or {}
             if isinstance(scripts, dict) and "dev" in scripts:
                 preview_script = "dev"
@@ -2516,18 +2576,37 @@ def run_start(req: RunStartReq, request: Request):
             )
 
         manager_name, manager_cmd = package_manager
-        install_cmd = _package_install_command(manager_name, manager_cmd)
-        logs.append(f"$ {_shell_join(install_cmd)}")
-        install = subprocess.run(install_cmd, cwd=str(proj), capture_output=True, text=True)
-        if manager_name != "npm":
-            logs.append(f"[runtime] Using {manager_name} because npm is not available.")
-        if install.stdout:
-            logs.extend([l for l in install.stdout.splitlines() if l.strip()])
-        if install.stderr:
-            logs.extend([l for l in install.stderr.splitlines() if l.strip()])
-        if install.returncode != 0:
-            tail = "\n".join((logs or [])[-120:])
-            raise HTTPException(400, f"Install failed\n\n--- package manager output (tail) ---\n{tail}")
+        dependencies_ready = _ensure_preview_dependencies_ready(proj, package_data, logs)
+        if not dependencies_ready:
+            install_cmd = _package_install_command(manager_name, manager_cmd)
+            logs.append(f"$ {_shell_join(install_cmd)}")
+            try:
+                install = subprocess.run(
+                    install_cmd,
+                    cwd=str(proj),
+                    capture_output=True,
+                    text=True,
+                    timeout=_preview_install_timeout_seconds(),
+                )
+            except subprocess.TimeoutExpired as exc:
+                if exc.stdout:
+                    logs.extend([l for l in str(exc.stdout).splitlines() if l.strip()])
+                if exc.stderr:
+                    logs.extend([l for l in str(exc.stderr).splitlines() if l.strip()])
+                tail = "\n".join((logs or [])[-120:])
+                raise HTTPException(
+                    400,
+                    f"Install timed out after {_preview_install_timeout_seconds()}s\n\n--- package manager output (tail) ---\n{tail}",
+                )
+            if manager_name != "npm":
+                logs.append(f"[runtime] Using {manager_name} because npm is not available.")
+            if install.stdout:
+                logs.extend([l for l in install.stdout.splitlines() if l.strip()])
+            if install.stderr:
+                logs.extend([l for l in install.stderr.splitlines() if l.strip()])
+            if install.returncode != 0:
+                tail = "\n".join((logs or [])[-120:])
+                raise HTTPException(400, f"Install failed\n\n--- package manager output (tail) ---\n{tail}")
 
         # strictPort so we know the port; if it's taken, user can run again (we'll pick a new port)
         cmd = _package_run_script_command(manager_cmd, preview_script, port)
@@ -3587,6 +3666,10 @@ def _preview_polish_debt(execution: dict[str, object]) -> list[dict[str, object]
 
 def _repair_resolves_parent_execution(parent_execution: dict[str, object], repair_execution: dict[str, object] | None) -> bool:
     if not isinstance(repair_execution, dict) or not bool(repair_execution.get("ok")):
+        return False
+    if _preview_polish_debt(repair_execution):
+        return False
+    if _execution_needs_repair(repair_execution):
         return False
 
     # A successful build/install replay does not prove that an earlier visual
@@ -4733,7 +4816,11 @@ def _auto_execute_preview_audit(req: AgentReq, project_root: str) -> dict[str, o
 def _project_has_preview_surface(project_dir: Path, out_changes: list[dict[str, object]]) -> bool:
     if (project_dir / "package.json").exists() or (project_dir / "index.html").exists():
         return True
-    frontend_suffixes = {".html", ".tsx", ".jsx", ".ts", ".js", ".css", ".scss", ".sass", ".vue", ".svelte"}
+    # A lone frontend-looking file is not enough to start a preview. The
+    # runner needs either a JS package or a static index.html; otherwise
+    # http.server only exposes a directory listing and the audit becomes
+    # noisy/flaky instead of useful execution evidence.
+    frontend_suffixes = {".html"}
     for change in out_changes:
         if not isinstance(change, dict):
             continue
@@ -5072,6 +5159,7 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
     execution["failure_analysis"] = _execution_failure_analysis(execution)
     for quick_repair_fn in (
         _try_quick_missing_package_repair,
+        _try_quick_ts2741_missing_required_prop_repair,
         _try_quick_ts6133_repair,
         _try_quick_ts2322_unsupported_prop_repair,
         _try_quick_preview_polish_repair,
@@ -5330,6 +5418,7 @@ def _run_backend_verifier_repair_pass(req: AgentReq, ws_root: Path, trace: dict,
 _TS6133_RE = re.compile(r"(?P<path>[^\s:(]+\.tsx?)\((?P<line>\d+),(?P<col>\d+)\):\s+error TS6133:\s+'(?P<name>[A-Za-z_$][\w$]*)'\s+is declared but its value is never read\.")
 _TS2322_LOCATION_RE = re.compile(r"(?P<path>[^\s:(]+\.tsx?)\((?P<line>\d+),(?P<col>\d+)\):\s+error TS2322:")
 _TS_PROP_NOT_EXIST_RE = re.compile(r"Property ['\"](?P<prop>[A-Za-z_$][\w$]*)['\"] does not exist on type")
+_TS2741_MISSING_REQUIRED_PROP_RE = re.compile(r"(?P<path>[^\s:(]+\.tsx?)\((?P<line>\d+),(?P<col>\d+)\):\s+error TS2741:\s+Property ['\"](?P<prop>[A-Za-z_$][\w$]*)['\"] is missing in type")
 _TS2307_MODULE_RE = re.compile(r"error TS2307:\s+Cannot find module ['\"](?P<module>[^'\"]+)['\"]")
 _VITE_IMPORT_RESOLVE_RE = re.compile(r"Failed to resolve import ['\"](?P<module>[^'\"]+)['\"]")
 _QUICK_INSTALL_PACKAGE_ALLOWLIST = {
@@ -5412,6 +5501,29 @@ def _ts2322_unsupported_prop_issues_from_execution(execution: dict[str, object])
     return issues[:16]
 
 
+def _ts2741_missing_required_prop_issues_from_execution(execution: dict[str, object]) -> list[dict[str, object]]:
+    issues: list[dict[str, object]] = []
+    seen: set[tuple[str, int, str]] = set()
+    for container_name in ("shell", "validation", "replay"):
+        container = execution.get(container_name)
+        if not isinstance(container, dict):
+            continue
+        for result in list(container.get("results") or []):
+            if not isinstance(result, dict):
+                continue
+            text = f"{result.get('stdout') or ''}\n{result.get('stderr') or ''}"
+            for match in _TS2741_MISSING_REQUIRED_PROP_RE.finditer(text):
+                path = str(match.group("path") or "").strip()
+                line = int(match.group("line") or 0)
+                prop = str(match.group("prop") or "").strip()
+                key = (path, line, prop)
+                if not path or not line or not prop or key in seen:
+                    continue
+                seen.add(key)
+                issues.append({"path": path, "line": line, "prop": prop})
+    return issues[:16]
+
+
 def _external_package_from_module_spec(module_spec: str) -> str:
     module_spec = str(module_spec or "").strip()
     if not module_spec or module_spec.startswith((".", "/", "#")):
@@ -5476,6 +5588,99 @@ def _missing_external_packages_from_execution(execution: dict[str, object], proj
     return packages[:8]
 
 
+def _find_import_statement_range(lines: list[str], line_index: int) -> tuple[int, int] | None:
+    start = max(0, min(line_index, len(lines) - 1))
+    while start >= 0:
+        stripped = lines[start].lstrip()
+        if stripped.startswith("import "):
+            break
+        if not stripped or stripped.endswith(";"):
+            return None
+        start -= 1
+    if start < 0:
+        return None
+    end = start
+    while end < len(lines) - 1 and ";" not in lines[end]:
+        end += 1
+    return start, end
+
+
+def _remove_unused_import_symbol(lines: list[str], line_index: int, name: str) -> bool:
+    span = _find_import_statement_range(lines, line_index)
+    if not span:
+        return False
+    start, end = span
+    statement = "\n".join(lines[start:end + 1])
+    if not re.search(rf"\b{re.escape(name)}\b", statement):
+        return False
+
+    compact = " ".join(part.strip() for part in lines[start:end + 1]).strip()
+    from_match = re.search(r"\sfrom\s+['\"][^'\"]+['\"]\s*;?\s*$", compact)
+    if not from_match:
+        del lines[start:end + 1]
+        return True
+    from_part = compact[from_match.start():].strip()
+    clause = compact[len("import "):from_match.start()].strip()
+    changed = False
+
+    if clause == name:
+        del lines[start:end + 1]
+        return True
+
+    if clause.startswith(name + ","):
+        clause = clause[len(name) + 1:].strip()
+        changed = True
+
+    brace_match = re.search(r"\{(?P<body>.*)\}", clause)
+    if brace_match:
+        body = brace_match.group("body")
+        specs = [item.strip() for item in body.split(",") if item.strip()]
+        kept = [
+            item
+            for item in specs
+            if re.split(r"\s+as\s+", item, flags=re.IGNORECASE)[0].strip() != name
+            and re.split(r"\s+as\s+", item, flags=re.IGNORECASE)[-1].strip() != name
+        ]
+        if len(kept) != len(specs):
+            changed = True
+            if kept:
+                clause = clause[:brace_match.start()] + "{ " + ", ".join(kept) + " }" + clause[brace_match.end():]
+            else:
+                clause = (clause[:brace_match.start()] + clause[brace_match.end():]).strip().strip(",").strip()
+
+    if not changed:
+        return False
+    if not clause:
+        del lines[start:end + 1]
+    else:
+        lines[start:end + 1] = [f"import {clause} {from_part}"]
+    return True
+
+
+def _is_type_only_context(lines: list[str], line_index: int) -> bool:
+    for probe in range(line_index, max(-1, line_index - 12), -1):
+        stripped = lines[probe].strip()
+        if re.match(r"^(type|interface)\s+", stripped):
+            return True
+        if stripped.startswith("function ") or stripped.startswith("export default function ") or "=> {" in stripped:
+            return False
+        if stripped == "};" or stripped == "}":
+            return False
+    return False
+
+
+def _function_body_insertion_index(lines: list[str], line_index: int) -> int | None:
+    start = max(0, min(line_index, len(lines) - 1))
+    for probe in range(start, max(-1, start - 24), -1):
+        stripped = lines[probe].strip()
+        if re.match(r"^(export\s+default\s+)?function\s+", stripped) or re.match(r"^(export\s+)?const\s+[A-Za-z_$][\w$]*\s*=", stripped):
+            for body_probe in range(probe, min(len(lines), probe + 32)):
+                if lines[body_probe].rstrip().endswith("{") and not re.match(r"^\s*(type|interface)\s+", lines[body_probe]):
+                    return body_probe + 1
+            return None
+    return None
+
+
 def _insert_void_usage_for_unused_symbols(project_dir: Path, issues: list[dict[str, object]]) -> list[str]:
     grouped: dict[str, list[dict[str, object]]] = {}
     for issue in issues:
@@ -5495,7 +5700,8 @@ def _insert_void_usage_for_unused_symbols(project_dir: Path, issues: list[dict[s
             continue
         lines = text.splitlines()
         insertions: dict[int, list[str]] = {}
-        for issue in file_issues:
+        touched = False
+        for issue in sorted(file_issues, key=lambda item: int(item.get("line") or 0), reverse=True):
             name = str(issue.get("name") or "").strip()
             if not re.match(r"^[A-Za-z_$][\w$]*$", name):
                 continue
@@ -5503,24 +5709,121 @@ def _insert_void_usage_for_unused_symbols(project_dir: Path, issues: list[dict[s
                 continue
             line_no = max(1, int(issue.get("line") or 1))
             idx = min(max(line_no - 1, 0), max(len(lines) - 1, 0))
-            target = idx
-            if "{" not in lines[target]:
-                for probe in range(idx, min(len(lines), idx + 8)):
-                    if "{" in lines[probe]:
-                        target = probe
-                        break
-            indent_match = re.match(r"^(\s*)", lines[target] if target < len(lines) else "")
+            if _remove_unused_import_symbol(lines, idx, name):
+                touched = True
+                continue
+            if _is_type_only_context(lines, idx):
+                continue
+            insertion_index = _function_body_insertion_index(lines, idx)
+            if insertion_index is None:
+                continue
+            indent_match = re.match(r"^(\s*)", lines[insertion_index] if insertion_index < len(lines) else "")
             indent = (indent_match.group(1) if indent_match else "") + "  "
-            insertions.setdefault(target + 1, []).append(f"{indent}void {name};")
-        if not insertions:
+            insertions.setdefault(insertion_index, []).append(f"{indent}void {name};")
+        if not insertions and not touched:
             continue
         next_lines: list[str] = []
         for index, line in enumerate(lines):
-            next_lines.append(line)
-            for insertion in insertions.get(index + 1, []):
+            for insertion in insertions.get(index, []):
                 next_lines.append(insertion)
+            next_lines.append(line)
+        for insertion in insertions.get(len(lines), []):
+            next_lines.append(insertion)
         path.write_text("\n".join(next_lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
         changed.append(rel)
+    return changed
+
+
+def _component_tag_at_line(lines: list[str], line_no: int) -> str:
+    start = max(0, line_no - 2)
+    end = min(len(lines), line_no + 4)
+    fragment = "\n".join(lines[start:end])
+    match = re.search(r"<(?P<tag>[A-Z][A-Za-z0-9_]*)\b", fragment)
+    return str(match.group("tag") or "") if match else ""
+
+
+def _resolve_relative_module(project_dir: Path, importer: Path, spec: str) -> Path | None:
+    if not spec.startswith("."):
+        return None
+    base = (importer.parent / spec).resolve()
+    candidates = [base]
+    if base.suffix:
+        candidates.append(base)
+    else:
+        for suffix in (".tsx", ".ts", ".jsx", ".js"):
+            candidates.append(base.with_suffix(suffix))
+        for suffix in (".tsx", ".ts", ".jsx", ".js"):
+            candidates.append(base / f"index{suffix}")
+    for candidate in candidates:
+        try:
+            if candidate.exists() and candidate.is_file() and (project_dir == candidate or project_dir in candidate.parents):
+                return candidate
+        except Exception:
+            continue
+    return None
+
+
+def _component_import_target(project_dir: Path, importer: Path, component: str, text: str) -> Path | None:
+    default_pattern = re.compile(rf"import\s+{re.escape(component)}\s+from\s+['\"](?P<spec>[^'\"]+)['\"]")
+    named_pattern = re.compile(rf"import\s+\{{[^}}]*\b{re.escape(component)}\b[^}}]*\}}\s+from\s+['\"](?P<spec>[^'\"]+)['\"]")
+    for pattern in (default_pattern, named_pattern):
+        match = pattern.search(text)
+        if not match:
+            continue
+        target = _resolve_relative_module(project_dir, importer, str(match.group("spec") or ""))
+        if target is not None:
+            return target
+    return None
+
+
+def _make_prop_optional_in_component(component_path: Path, prop: str) -> bool:
+    try:
+        text = component_path.read_text(encoding="utf-8")
+    except Exception:
+        return False
+    if not re.match(r"^[A-Za-z_$][\w$]*$", prop):
+        return False
+    prop_pattern = re.compile(rf"(?P<prefix>\b{re.escape(prop)})\s*:\s*(?P<type>[^;,\n}}]+)")
+    next_text, count = prop_pattern.subn(r"\g<prefix>?: \g<type>", text, count=1)
+    if count == 0 or next_text == text:
+        return False
+    next_text = re.sub(
+        rf"(<h[1-6][^>]*>\s*\{{{re.escape(prop)}\}}\s*</h[1-6]>)",
+        rf"{{{prop} ? \1 : null}}",
+        next_text,
+        count=2,
+    )
+    component_path.write_text(next_text, encoding="utf-8")
+    return True
+
+
+def _make_missing_required_props_optional(project_dir: Path, issues: list[dict[str, object]]) -> list[str]:
+    changed: list[str] = []
+    seen_targets: set[tuple[Path, str]] = set()
+    for issue in issues:
+        rel = str(issue.get("path") or "").strip().lstrip("/")
+        prop = str(issue.get("prop") or "").strip()
+        if not rel or ".." in rel.split("/") or prop not in {"title", "label", "description", "eyebrow"}:
+            continue
+        importer = (project_dir / rel).resolve()
+        try:
+            if project_dir != importer and project_dir not in importer.parents:
+                continue
+            text = importer.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        component = _component_tag_at_line(text.splitlines(), int(issue.get("line") or 1))
+        if not component:
+            continue
+        target = _component_import_target(project_dir, importer, component, text)
+        if target is None:
+            continue
+        key = (target, prop)
+        if key in seen_targets:
+            continue
+        seen_targets.add(key)
+        if _make_prop_optional_in_component(target, prop):
+            changed.append(target.relative_to(project_dir).as_posix())
     return changed
 
 
@@ -5605,6 +5908,62 @@ def _try_quick_ts6133_repair(req: AgentReq, execution: dict[str, object], emit) 
         "commands": commands,
         "shell": shell,
         "summary": f"Quick TS6133 repair changed {len(changed_paths)} file(s), validation ok={bool(shell.get('ok'))}.",
+    }
+    emit("tool_output", _harness_tool_output_payload(
+        "quick-repair",
+        "quick_repair",
+        project_root=project_root,
+        ok=bool(shell.get("ok")),
+        summary=str(result["summary"]),
+        paths=changed_paths,
+        commands=commands,
+        results=_shell_event_results(shell.get("results")),
+    ))
+    return result
+
+
+def _try_quick_ts2741_missing_required_prop_repair(req: AgentReq, execution: dict[str, object], emit) -> dict[str, object] | None:
+    issues = _ts2741_missing_required_prop_issues_from_execution(execution)
+    if not issues:
+        return None
+    project_root = str(req.project_root or ".").strip().strip("/") or "."
+    try:
+        project_dir = safe_join(_ws(), project_root)
+    except Exception:
+        return None
+    changed_paths = _make_missing_required_props_optional(project_dir, issues)
+    if not changed_paths:
+        return None
+
+    commands = list(dict.fromkeys(
+        str(command)
+        for command in list((execution.get("validation") or {}).get("commands") or [])
+        if str(command).strip()
+    ))
+    if not commands:
+        commands = _infer_validation_commands(project_dir)[:4]
+    if not commands:
+        return {"ok": False, "changed_paths": changed_paths, "summary": "Quick TS2741 prop repair edited files but found no validation command."}
+
+    emit("status", {"phase": "quick_repair", "message": "Backend quick repair relaxed missing required UI props before LLM repair..."})
+    _emit_command_start_events(emit, tool="quick-repair", phase="quick_repair", project_root=project_root, commands=commands, group="quick repair")
+    shell = _run_harness_shell_actions_internal(
+        ws_root_path=_ws(),
+        project_root=project_root,
+        actions=[AgentHarnessShellAction(command=command, cwd=project_root, reason="Quick TS2741 missing prop repair validation") for command in commands],
+        emit=emit,
+        tool="quick-repair",
+        phase="quick_repair",
+        group="quick repair",
+    )
+    result = {
+        "ok": bool(shell.get("ok")),
+        "kind": "ts2741-missing-required-prop",
+        "changed_paths": changed_paths,
+        "issues": issues,
+        "commands": commands,
+        "shell": shell,
+        "summary": f"Quick TS2741 prop repair changed {len(changed_paths)} file(s), validation ok={bool(shell.get('ok'))}.",
     }
     emit("tool_output", _harness_tool_output_payload(
         "quick-repair",

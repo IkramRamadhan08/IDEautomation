@@ -1363,6 +1363,28 @@ class PreviewAuditRegressionTests(unittest.TestCase):
         self.assertTrue(any(item["category"] == "assets" for item in audit["issue_details"]))
         self.assertIn("repair_brief", audit)
         self.assertIn("visual_summary", audit)
+
+    def test_preview_audit_blocks_stale_starter_shell(self) -> None:
+        snapshot = {
+            "title": "Task tracker",
+            "meta_description": "Task tracker",
+            "headings": ["Starter"],
+            "buttons": [],
+            "links": [],
+            "word_count": 4,
+            "image_count": 0,
+            "images_missing_alt": 0,
+            "interactive_count": 0,
+            "excerpt": "Starter Make this useful.",
+            "console_errors": [],
+            "page_errors": [],
+        }
+        audit = _build_preview_audit_result("http://127.0.0.1:4173", snapshot, audit_mode="browser")
+
+        self.assertFalse(audit["ok"])
+        blockers = [item for item in audit["issue_details"] if item["severity"] == "blocking"]
+        self.assertTrue(any(item["category"] == "content" for item in blockers))
+        self.assertTrue(any(item["category"] == "production-polish" for item in blockers))
         self.assertEqual(audit["visual_summary"]["mode"], "browser")
         self.assertTrue(audit["visual_summary"]["top_blockers"])
         self.assertIn("Top issues:", audit["repair_brief"])
@@ -1845,9 +1867,9 @@ class HybridSeedRegressionTests(unittest.TestCase):
         )
 
         app_tsx = files["demo/src/App.tsx"]
-        self.assertIn('path="/workspace"', app_tsx)
-        self.assertIn('path="/integrations"', app_tsx)
-        self.assertNotIn('path="/dashboard"', app_tsx)
+        self.assertIn('path: "/workspace"', app_tsx)
+        self.assertIn('path: "/integrations"', app_tsx)
+        self.assertNotIn('path: "/dashboard"', app_tsx)
         self.assertIn("demo/src/pages/Workspace.tsx", files)
         self.assertIn("demo/src/pages/Integrations.tsx", files)
         self.assertIn("demo/src/pages/AppSettings.tsx", files)
@@ -1862,7 +1884,7 @@ class HybridSeedRegressionTests(unittest.TestCase):
             instruction="Create a landing page with testimonials, FAQ, pricing, and contact form.",
         )
 
-        self.assertIn('path="/contact"', files["demo/src/App.tsx"])
+        self.assertIn('path: "/contact"', files["demo/src/App.tsx"])
         self.assertIn("Requested section", files["demo/src/pages/Home.tsx"])
         self.assertIn("Testimonials", files["demo/src/pages/Home.tsx"])
         self.assertIn("FAQ", files["demo/src/pages/Home.tsx"])
@@ -1879,8 +1901,8 @@ class HybridSeedRegressionTests(unittest.TestCase):
         )
 
         app_tsx = files["demo/src/App.tsx"]
-        self.assertIn('path="/docs"', app_tsx)
-        self.assertNotIn('path="/workspace"', app_tsx)
+        self.assertIn('path: "/docs"', app_tsx)
+        self.assertNotIn('path: "/workspace"', app_tsx)
         self.assertIn("demo/src/pages/Docs.tsx", files)
         self.assertNotIn("demo/src/pages/Workspace.tsx", files)
         self.assertNotIn("demo/src/pages/Integrations.tsx", files)
@@ -1894,9 +1916,9 @@ class HybridSeedRegressionTests(unittest.TestCase):
         )
 
         app_tsx = files["demo/src/App.tsx"]
-        self.assertIn('path="/dashboard"', app_tsx)
-        self.assertNotIn('path="/workspace"', app_tsx)
-        self.assertNotIn('path="/contact"', app_tsx)
+        self.assertIn('path: "/dashboard"', app_tsx)
+        self.assertNotIn('path: "/workspace"', app_tsx)
+        self.assertNotIn('path: "/contact"', app_tsx)
         self.assertIn("demo/src/pages/Dashboard.tsx", files)
         self.assertNotIn("demo/src/pages/Workspace.tsx", files)
         self.assertNotIn("demo/src/pages/Integrations.tsx", files)
@@ -2228,9 +2250,21 @@ class AgentAutoExecuteRegressionTests(unittest.TestCase):
             "validation": {"ok": True, "ran": 1, "failed": 0},
             "preview_audit": {"ok": True, "skipped": False, "issue_details": []},
         }
+        preview_warning_repair = {
+            "ok": True,
+            "validation": {"ok": True, "ran": 1, "failed": 0},
+            "preview_audit": {
+                "ok": True,
+                "skipped": False,
+                "issue_details": [
+                    {"severity": "warning", "category": "product-depth", "detail": "Product depth masih tipis."},
+                ],
+            },
+        }
 
         self.assertFalse(main_mod._repair_resolves_parent_execution(parent_execution, build_only_repair))
         self.assertFalse(main_mod._repair_resolves_parent_execution(parent_execution, preview_skipped_repair))
+        self.assertFalse(main_mod._repair_resolves_parent_execution(parent_execution, preview_warning_repair))
         self.assertTrue(main_mod._repair_resolves_parent_execution(parent_execution, preview_clean_repair))
 
     def test_preview_polish_warnings_keep_execution_in_repair_lane(self) -> None:
@@ -2355,6 +2389,112 @@ class AgentAutoExecuteRegressionTests(unittest.TestCase):
                 self.assertIn("void title;", text)
                 self.assertIn("void description;", text)
                 self.assertTrue(any(data.get("tool") == "quick-repair" for event, data in events if event == "tool_output"))
+        finally:
+            CURRENT_SESSION_ID.reset(session_token)
+            STATE.get("sessions", {}).pop(session_id, None)
+
+    def test_quick_ts6133_repair_removes_unused_import_without_touching_type_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "demo"
+            (project / "src" / "components").mkdir(parents=True)
+            app_shell = project / "src" / "components" / "AppShell.tsx"
+            app_shell.write_text(
+                "import Button from './ui/Button';\n"
+                "import Card from './ui/Card';\n"
+                "import type { ReactNode } from 'react';\n"
+                "\n"
+                "type Props = {\n"
+                "  title: string;\n"
+                "  description: string;\n"
+                "  children: ReactNode;\n"
+                "};\n"
+                "\n"
+                "export default function AppShell({ title, description, children }: Props) {\n"
+                "  return <main>{children}</main>;\n"
+                "}\n",
+                encoding="utf-8",
+            )
+
+            changed = main_mod._insert_void_usage_for_unused_symbols(
+                project,
+                [
+                    {"path": "src/components/AppShell.tsx", "line": 1, "name": "Button"},
+                    {"path": "src/components/AppShell.tsx", "line": 2, "name": "Card"},
+                    {"path": "src/components/AppShell.tsx", "line": 11, "name": "title"},
+                    {"path": "src/components/AppShell.tsx", "line": 11, "name": "description"},
+                ],
+            )
+
+            text = app_shell.read_text(encoding="utf-8")
+            self.assertEqual(changed, ["src/components/AppShell.tsx"])
+            self.assertNotIn("import Button", text)
+            self.assertNotIn("import Card", text)
+            self.assertNotIn("void Button", text)
+            self.assertNotIn("void Card", text)
+            self.assertIn("title: string;", text)
+            self.assertIn("description: string;", text)
+            self.assertIn("void title;", text)
+            self.assertIn("void description;", text)
+
+    def test_quick_ts2741_repair_relaxes_missing_required_ui_prop(self) -> None:
+        session_id = "quick-ts2741-repair-test"
+        STATE.get("sessions", {}).pop(session_id, None)
+        session_token = CURRENT_SESSION_ID.set(session_id)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                project = root / "demo"
+                (project / "src" / "components" / "ui").mkdir(parents=True)
+                (project / "src" / "pages").mkdir(parents=True)
+                card = project / "src" / "components" / "ui" / "Card.tsx"
+                card.write_text(
+                    "import type { ReactNode } from 'react';\n"
+                    "export default function Card(props: { title: string; children: ReactNode }) {\n"
+                    "  const { title, children } = props;\n"
+                    "  return <section><h2>{title}</h2><div>{children}</div></section>;\n"
+                    "}\n",
+                    encoding="utf-8",
+                )
+                (project / "src" / "pages" / "Dashboard.tsx").write_text(
+                    "import Card from '../components/ui/Card';\n"
+                    "export default function Dashboard() {\n"
+                    "  return <Card><p>Total</p></Card>;\n"
+                    "}\n",
+                    encoding="utf-8",
+                )
+                STATE["sessions"][session_id] = {
+                    "workspace": root,
+                    "runners": {},
+                    "agent_jobs": {},
+                    "oauth_pending": {},
+                    "google_user": None,
+                }
+                execution = {
+                    "validation": {
+                        "commands": ["npm run build"],
+                        "results": [
+                            {
+                                "ok": False,
+                                "command": "npm run build",
+                                "stderr": "src/pages/Dashboard.tsx(3,10): error TS2741: Property 'title' is missing in type '{ children: Element; }' but required in type '{ title: string; children: ReactNode; }'.",
+                            }
+                        ],
+                    },
+                }
+
+                with patch("api.main._run_harness_shell_actions_internal", return_value={"ok": True, "results": []}):
+                    result = main_mod._try_quick_ts2741_missing_required_prop_repair(
+                        main_mod.AgentReq(input="fix", project_root="demo"),
+                        execution,
+                        lambda _event, _data: None,
+                    )
+
+                self.assertTrue(result["ok"])
+                self.assertEqual(result["changed_paths"], ["src/components/ui/Card.tsx"])
+                text = card.read_text(encoding="utf-8")
+                self.assertIn("title?: string", text)
+                self.assertIn("{title ? <h2>{title}</h2> : null}", text)
         finally:
             CURRENT_SESSION_ID.reset(session_token)
             STATE.get("sessions", {}).pop(session_id, None)
@@ -3694,6 +3834,42 @@ class PreviewRunnerRegressionTests(unittest.TestCase):
         self.assertIn(["npm", "run", "dev", "--", "--host", "127.0.0.1", "--strictPort", "--port", "4322"], commands)
         self.assertNotIn(["npm", "run", "preview", "--", "--host", "127.0.0.1", "--strictPort", "--port", "4322"], commands)
 
+    def test_preview_runner_reuses_root_node_modules_for_appora_templates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "demo"
+            project.mkdir(parents=True)
+            (project / "package.json").write_text(
+                json.dumps({
+                    "apporaTemplate": True,
+                    "scripts": {"dev": "vite"},
+                    "dependencies": {"react": "^19.0.0", "react-dom": "^19.0.0"},
+                    "devDependencies": {"vite": "^7.0.0", "typescript": "^5.0.0", "@vitejs/plugin-react": "^5.0.0"},
+                }),
+                encoding="utf-8",
+            )
+            commands: list[list[str]] = []
+
+            def fake_popen(cmd, **_kwargs):
+                commands.append(list(cmd))
+                return SimpleNamespace(pid=12345, stdout=["ready\n"])
+
+            with patch("api.main._ws", return_value=root), \
+                patch("api.main._hydrate_hosted_project", return_value=None), \
+                patch("api.main._ensure_runner_capacity", return_value=None), \
+                patch("api.main._resolve_package_manager", return_value=("npm", ["npm"])), \
+                patch("api.main._next_port", return_value=4323), \
+                patch("api.main._is_serverless_runtime", return_value=False), \
+                patch("subprocess.run") as fake_run, \
+                patch("subprocess.Popen", side_effect=fake_popen):
+                result = main_mod.run_start(main_mod.RunStartReq(project_root="demo"), Request({"type": "http", "method": "POST", "path": "/api/run/start", "headers": []}))
+            node_modules_exists = (project / "node_modules").exists()
+
+        self.assertTrue(result["ok"])
+        fake_run.assert_not_called()
+        self.assertTrue(node_modules_exists)
+        self.assertIn(["npm", "run", "dev", "--", "--host", "127.0.0.1", "--strictPort", "--port", "4323"], commands)
+
 
 class ProjectTemplateRegressionTests(unittest.TestCase):
     def test_template_registry_renders_runnable_react_project(self) -> None:
@@ -3715,9 +3891,10 @@ class ProjectTemplateRegressionTests(unittest.TestCase):
         self.assertIn("src/main.tsx", files)
         self.assertIn("README.md", files)
         self.assertIn(".voiceide/memory/project.md", files)
-        self.assertIn("react-router-dom", files["package.json"])
-        self.assertIn("v7_startTransition", files["src/main.tsx"])
-        self.assertIn("v7_relativeSplatPath", files["src/main.tsx"])
+        self.assertIn('"apporaTemplate": true', files["package.json"])
+        self.assertNotIn("react-router-dom", files["package.json"])
+        self.assertNotIn("BrowserRouter", files["src/main.tsx"])
+        self.assertIn("currentPath={path}", files["src/App.tsx"])
         self.assertIn("Template: AI Tool App", files[".voiceide/memory/project.md"])
         self.assertIn("Selected work", portfolio_files["src/pages/Home.tsx"])
 

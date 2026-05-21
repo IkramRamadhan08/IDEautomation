@@ -1192,7 +1192,10 @@ def _module_exports(content: str) -> tuple[bool, set[str]]:
             exported = re.split(r"\s+as\s+", item, flags=re.IGNORECASE)[-1].strip()
             if exported and re.match(r"^[A-Za-z_$][\w$]*$", exported):
                 named.add(exported)
-    return bool(re.search(r"\bexport\s+default\b", text)), named
+    has_default = bool(re.search(r"\bexport\s+default\b", text))
+    if has_default:
+        named.add("default")
+    return has_default, named
 
 
 def _import_clause_requirements(clause: str) -> tuple[bool, list[str]]:

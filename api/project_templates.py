@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from html import escape
+import json
+import re
 from typing import Any
 
 from api.hybrid import build_hybrid_seed
@@ -124,18 +127,44 @@ def render_project_template(*, template_id: str | None, project_root: str, proje
 
 
 def _apply_template_polish(files: dict[str, str], *, template: ProjectTemplate, project_name: str) -> None:
+    _apply_template_identity(files, project_name=project_name)
+
     if template.id == "saas-dashboard":
-        files["src/pages/Dashboard.tsx"] = _saas_dashboard_page(project_name)
+        page = _saas_dashboard_page(project_name)
+        files["src/pages/Dashboard.tsx"] = page
+        files["src/pages/Home.tsx"] = _as_home_page(page)
     elif template.id == "admin-crud":
-        files["src/pages/Dashboard.tsx"] = _admin_crud_page(project_name)
+        page = _admin_crud_page(project_name)
+        files["src/pages/Dashboard.tsx"] = page
+        files["src/pages/Home.tsx"] = _as_home_page(page)
     elif template.id == "ai-tool-app":
-        files["src/pages/Dashboard.tsx"] = _ai_tool_page(project_name)
+        files["src/pages/Home.tsx"] = _as_home_page(_ai_tool_page(project_name))
     elif template.id == "landing-pricing":
         files["src/pages/Home.tsx"] = _landing_home_page(project_name)
     elif template.id == "portfolio":
         files["src/pages/Home.tsx"] = _portfolio_home_page(project_name)
 
     files["src/app.css"] = files.get("src/app.css", "") + _template_extra_css()
+
+
+def _apply_template_identity(files: dict[str, str], *, project_name: str) -> None:
+    safe_name = (project_name or "Appora Project").strip() or "Appora Project"
+    html = files.get("index.html")
+    if html:
+        files["index.html"] = re.sub(r"<title>.*?</title>", f"<title>{escape(safe_name)}</title>", html, count=1, flags=re.DOTALL)
+
+    app = files.get("src/App.tsx")
+    if app:
+        files["src/App.tsx"] = re.sub(
+            r"<AppShell title=(?:\"[^\"]*\"|\{[^}]+\}) description=",
+            f"<AppShell title={json.dumps(safe_name)} description=",
+            app,
+            count=1,
+        )
+
+
+def _as_home_page(source: str) -> str:
+    return source.replace("export default function DashboardPage()", "export default function HomePage()", 1)
 
 
 def _template_readme(*, template: ProjectTemplate, project_name: str) -> str:

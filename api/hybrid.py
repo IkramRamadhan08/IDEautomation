@@ -152,13 +152,13 @@ def build_hybrid_seed(project_root: str, project_name: str, instruction: str) ->
         features_title = "Features"
         features_items = [
             {"title": "Design system", "body": "CSS variables + consistent spacing, radii, shadows."},
-            {"title": "Navigation", "body": "Router + active links + layout shell."},
+            {"title": "Navigation", "body": "Client-side pages, active links, and layout shell without extra router dependencies."},
             {"title": "States", "body": "Empty/loading/error patterns you can extend."},
             {"title": "Polish", "body": "Focus states, contrast, responsive grid."},
         ]
         pricing_title = "Pricing"
         pricing_items = [
-            {"name": "Starter", "price": "$0", "desc": "For prototyping and demos", "perks": ["Basic pages", "Theme toggle", "Router"]},
+            {"name": "Starter", "price": "$0", "desc": "For prototyping and demos", "perks": ["Basic pages", "Theme toggle", "Client navigation"]},
             {"name": "Pro", "price": "$19", "desc": "For real products", "perks": ["Better UX", "More components", "Polish"]},
             {"name": "Team", "price": "$49", "desc": "For teams", "perks": ["Shared workflows", "Design tokens", "Scalable layout"]},
         ]
@@ -199,6 +199,25 @@ def build_hybrid_seed(project_root: str, project_name: str, instruction: str) ->
     landing_sections_json = json.dumps(landing_sections, ensure_ascii=False)
     features_items_json = json.dumps(features_items, ensure_ascii=False)
     pricing_items_json = json.dumps(pricing_items, ensure_ascii=False)
+    route_entries = ['{ path: "/", element: <HomePage /> }']
+    if template == "app":
+        route_entries.extend([
+            '{ path: "/workspace", element: <WorkspacePage /> }',
+            '{ path: "/integrations", element: <IntegrationsPage /> }',
+            '{ path: "/settings", element: <SettingsPage /> }',
+        ])
+    else:
+        route_entries.extend([
+            '{ path: "/features", element: <FeaturesPage /> }',
+            '{ path: "/pricing", element: <PricingPage /> }',
+        ])
+        if template == "landing":
+            route_entries.append('{ path: "/contact", element: <ContactPage /> }')
+        elif template == "docs":
+            route_entries.append('{ path: "/docs", element: <DocsPage /> }')
+        elif template == "dashboard":
+            route_entries.append('{ path: "/dashboard", element: <DashboardPage /> }')
+    route_entries_tsx = ",\n    ".join(route_entries)
 
     files = {
         "package.json": f'''{{
@@ -206,6 +225,7 @@ def build_hybrid_seed(project_root: str, project_name: str, instruction: str) ->
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "apporaTemplate": true,
   "scripts": {{
     "dev": "vite",
     "build": "tsc -b && vite build",
@@ -213,8 +233,7 @@ def build_hybrid_seed(project_root: str, project_name: str, instruction: str) ->
   }},
   "dependencies": {{
     "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "react-router-dom": "^6.27.0"
+    "react-dom": "^19.1.0"
   }},
   "devDependencies": {{
     "@types/react": "^19.1.2",
@@ -254,7 +273,7 @@ def build_hybrid_seed(project_root: str, project_name: str, instruction: str) ->
     "module": "ESNext",
     "skipLibCheck": true,
     "moduleResolution": "Bundler",
-    "allowImportingTsExtensions": false,
+    "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
@@ -295,19 +314,16 @@ export default defineConfig({
 ''',
         "src/main.tsx": '''import React from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter } from "react-router-dom";
-import App from "./App";
+import App from "./App.tsx";
 import "./app.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-      <App />
-    </BrowserRouter>
+    <App />
   </React.StrictMode>
 );
 ''',
-        "src/App.tsx": f'''import {{ Route, Routes }} from "react-router-dom";
+        "src/App.tsx": f'''import {{ useEffect, useMemo, useState }} from "react";
 import AppShell from "./components/AppShell";
 
 import HomePage from "./pages/Home";
@@ -323,34 +339,53 @@ import NotFoundPage from "./pages/NotFound";
 
 const NAV_ITEMS: Array<[string, string]> = {nav_json} as any;
 
+function normalizePath(path: string) {{
+  const clean = (path || "/").split("#")[0].split("?")[0] || "/";
+  return clean.startsWith("/") ? clean : "/" + clean;
+}}
+
 export default function App() {{
+  const [path, setPath] = useState(() => normalizePath(window.location.pathname));
+
+  useEffect(() => {{
+    const onPopState = () => setPath(normalizePath(window.location.pathname));
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }}, []);
+
+  const navigate = (nextPath: string) => {{
+    const normalized = normalizePath(nextPath);
+    if (normalized !== path) {{
+      window.history.pushState(null, "", normalized);
+      setPath(normalized);
+    }}
+  }};
+
+  const routes = useMemo(() => [
+    {route_entries_tsx}
+  ], []);
+
+  const activeRoute = routes.find((route) => route.path === path);
+
   return (
-    <AppShell title={json.dumps(title)} description={json.dumps(description)} navItems={{NAV_ITEMS}}>
-      <Routes>
-        <Route path="/" element={{<HomePage />}} />
-        {('<Route path="/workspace" element={<WorkspacePage />} />' if template == 'app' else '<Route path="/features" element={<FeaturesPage />} />')}
-        {('<Route path="/integrations" element={<IntegrationsPage />} />' if template == 'app' else '<Route path="/pricing" element={<PricingPage />} />')}
-        {('<Route path="/settings" element={<SettingsPage />} />' if template == 'app' else '')}
-        {('<Route path="/contact" element={<ContactPage />} />' if template == 'landing' else '')}
-        {('<Route path="/docs" element={<DocsPage />} />' if template == 'docs' else '')}
-        {('<Route path="/dashboard" element={<DashboardPage />} />' if template == 'dashboard' else '')}
-        <Route path="*" element={{<NotFoundPage />}} />
-      </Routes>
+    <AppShell title={json.dumps(title)} description={json.dumps(description)} navItems={{NAV_ITEMS}} currentPath={{path}} onNavigate={{navigate}}>
+      {{activeRoute ? activeRoute.element : <NotFoundPage onNavigate={{navigate}} />}}
     </AppShell>
   );
 }}
 ''',
         "src/components/AppShell.tsx": '''import type { ReactNode } from "react";
-import { NavLink } from "react-router-dom";
 import ThemeToggle from "./ui/ThemeToggle";
 
 export default function AppShell(props: {
   title: string;
   description: string;
   navItems: Array<[string, string]>;
+  currentPath: string;
+  onNavigate: (path: string) => void;
   children: ReactNode;
 }) {
-  const { title, description, navItems, children } = props;
+  const { title, description, navItems, currentPath, onNavigate, children } = props;
 
   return (
     <div className="app">
@@ -361,9 +396,17 @@ export default function AppShell(props: {
         </div>
         <nav className="nav">
           {navItems.map(([href, label]) => (
-            <NavLink key={href} to={href} className={({ isActive }) => "navLink" + (isActive ? " active" : "")}>
+            <a
+              key={href}
+              href={href}
+              className={"navLink" + (currentPath === href ? " active" : "")}
+              onClick={(event) => {
+                event.preventDefault();
+                onNavigate(href);
+              }}
+            >
               {label}
-            </NavLink>
+            </a>
           ))}
         </nav>
         <div className="topbarActions">
@@ -691,19 +734,19 @@ export default function ContactPage() {
   );
 }
 ''',
-        "src/pages/NotFound.tsx": '''import { Link } from "react-router-dom";
-
-export default function NotFoundPage() {
+        "src/pages/NotFound.tsx": '''export default function NotFoundPage(props: { onNavigate: (path: string) => void }) {
   return (
     <div className="stack">
       <h1 className="pageTitle">404</h1>
       <p className="muted">Page not found.</p>
-      <p>
-        <Link to="/" className="link">Go back home</Link>
-      </p>
+      <button className="btn btnGhost" type="button" onClick={() => props.onNavigate("/")}>Go back home</button>
     </div>
   );
 }
+''',
+        "src/App.jsx": '''export { default } from "./App.tsx";
+''',
+        "src/styles.css": '''@import "./app.css";
 ''',
         "src/app.css": ''':root {
   --bg: #0b1220;
@@ -764,7 +807,8 @@ a { color: inherit; }
   padding: 14px 16px;
 }
 
-.brandTitle { font-weight: 900; letter-spacing: -0.02em; }
+.brand { min-width: 0; }
+.brandTitle { font-weight: 900; letter-spacing: -0.02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .brandSub { font-size: 12px; color: var(--muted); max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .nav { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
@@ -833,6 +877,15 @@ a { color: inherit; }
 .link:hover { text-decoration: underline; }
 .muted { color: var(--muted); }
 .pre { white-space: pre-wrap; margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 13px; }
+
+@media (max-width: 720px) {
+  .topbar { align-items: stretch; flex-direction: column; }
+  .nav { justify-content: flex-start; }
+  .topbarActions { align-self: flex-start; }
+  .footerInner { align-items: flex-start; flex-direction: column; }
+  .heroInner { padding: 20px; }
+  .heroTitle { font-size: 2.1rem; }
+}
 ''',
     }
 
