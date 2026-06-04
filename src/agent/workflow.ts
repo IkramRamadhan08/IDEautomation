@@ -119,6 +119,7 @@ type WorkflowArgs = {
   previewUrl: string;
   selectedProject: string;
   attachedImagePath?: string | null;
+  attachedImageAlias?: string | null;
   activeFile: string;
   openFiles: string[];
   buffers: Record<string, FileBuffer>;
@@ -324,11 +325,21 @@ function toolEventName(data: Record<string, unknown>) {
 }
 
 function formatPreviewAuditReport(audit: PreviewAuditResult, maxChars = 4000) {
+  const evidencePack = audit.evidence_pack && typeof audit.evidence_pack === "object"
+    ? `evidence_pack:\n${JSON.stringify(audit.evidence_pack, null, 2)}`
+    : null;
   const issueDetails = audit.issue_details && audit.issue_details.length > 0
     ? `issue_details:\n- ${audit.issue_details.map((issue) => `${issue.severity}: ${issue.category} - ${issue.detail}${issue.suggested_fix ? ` (fix: ${issue.suggested_fix})` : ""}`).join("\n- ")}`
     : null;
   const qualitySection = audit.quality_checks && audit.quality_checks.length > 0
     ? `quality_checks:\n- ${audit.quality_checks.map((check) => `${check.ok ? "ok" : "warn"}: ${check.label} - ${check.detail}`).join("\n- ")}`
+    : null;
+  const repairTargets = audit.repair_targets && audit.repair_targets.length > 0
+    ? `repair_targets:\n- ${audit.repair_targets.map((target) => {
+      const files = target.likely_files?.length ? ` files=${target.likely_files.join(",")}` : "";
+      const selectors = target.selectors?.length ? ` selectors=${target.selectors.join(",")}` : "";
+      return `${target.priority}: ${target.kind}${files}${selectors} - ${target.action}`;
+    }).join("\n- ")}`
     : null;
   const browserDetails = [
     audit.viewport?.width && audit.viewport?.height ? `desktop_viewport: ${audit.viewport.width}x${audit.viewport.height}` : null,
@@ -344,6 +355,9 @@ function formatPreviewAuditReport(audit: PreviewAuditResult, maxChars = 4000) {
   const sections = [
     `summary: ${audit.summary}`,
     `audit_mode: ${audit.audit_mode}`,
+    audit.repair_brief ? `repair_brief: ${audit.repair_brief}` : null,
+    repairTargets,
+    evidencePack,
     browserDetails || null,
     audit.title ? `title: ${audit.title}` : "title: (missing)",
     audit.meta_description ? `meta: ${audit.meta_description}` : "meta: (missing)",
@@ -421,6 +435,19 @@ function toAuditSnapshot(label: string, trace: AgentRunTrace, makeId: () => stri
       actions: trace.task_state.actions,
       blockingChecks: trace.task_state.blocking_checks || [],
       nodes: trace.task_state.nodes || [],
+      horizon: trace.task_state.horizon ? {
+        enabled: trace.task_state.horizon.enabled,
+        goal: trace.task_state.horizon.goal,
+        projectRoot: trace.task_state.horizon.project_root,
+        intent: trace.task_state.horizon.intent,
+        complexity: trace.task_state.horizon.complexity,
+        status: trace.task_state.horizon.status,
+        currentCheckpoint: trace.task_state.horizon.current_checkpoint,
+        checkpoints: trace.task_state.horizon.checkpoints || [],
+        completionCriteria: trace.task_state.horizon.completion_criteria || [],
+        riskRegister: trace.task_state.horizon.risk_register || [],
+        blockingChecks: trace.task_state.horizon.blocking_checks || [],
+      } : undefined,
     } : undefined,
     verification: trace.verification || [],
     validationRuns: evidence?.validationRuns || [],
@@ -627,6 +654,7 @@ export async function runAgentWorkflow({
   previewUrl,
   selectedProject,
   attachedImagePath,
+  attachedImageAlias,
   activeFile,
   openFiles,
   buffers,
@@ -1303,6 +1331,7 @@ export async function runAgentWorkflow({
       selectedProject,
       buildMode,
       attachedImagePath ? [attachedImagePath] : undefined,
+      attachedImagePath && attachedImageAlias ? { [attachedImagePath]: attachedImageAlias } : undefined,
       activeFile ? (workingBuffers[activeFile]?.content ?? null) : null,
       openFiles,
       currentPreviewUrl || null,
@@ -1640,9 +1669,9 @@ export async function runAgentWorkflow({
       role: "tool",
       tone: "default",
       text: buildMode === "full-agent"
-        ? "Free-tier guard aktif, tapi Clara tetap boleh repair hasil build yang gagal supaya full preview lebih reliable."
+        ? "Free-tier guard aktif, tapi Appora Agent tetap boleh repair hasil build yang gagal supaya full preview lebih reliable."
         : "Free-tier guard aktif: agent hemat panggilan model dan context supaya limit provider nggak cepat mentok.",
-      meta: buildMode === "full-agent" ? "Full Preview: maksimal 2 repair" : "Raka: maksimal 1 repair untuk validasi/shell",
+      meta: buildMode === "full-agent" ? "Full Preview: maksimal 2 repair" : "Workspace: maksimal 1 repair untuk validasi/shell",
     });
   }
 

@@ -70,12 +70,16 @@ def project_is_runnable(project_dir: Path) -> bool:
     try:
         data = json.loads(package_json.read_text(encoding="utf-8"))
         scripts = data.get("scripts") or {}
-        if not isinstance(scripts, dict) or "dev" not in scripts:
+        if not isinstance(scripts, dict) or not any(name in scripts for name in ("dev", "build", "preview", "start")):
             return False
     except Exception:
         return False
 
-    return all((project_dir / rel).exists() for rel in ["index.html", "src/main.tsx", "src/App.tsx"])
+    if not (project_dir / "index.html").exists():
+        return False
+    main_candidates = ("src/main.tsx", "src/main.jsx", "src/main.ts", "src/main.js")
+    app_candidates = ("src/App.tsx", "src/App.jsx", "src/App.ts", "src/App.js")
+    return any((project_dir / rel).exists() for rel in main_candidates) and any((project_dir / rel).exists() for rel in app_candidates)
 
 
 def project_looks_like_bootstrap(project_dir: Path) -> bool:

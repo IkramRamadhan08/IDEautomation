@@ -8,7 +8,7 @@ InteractionKind = Literal["command", "conversation", "mixed", "inspection"]
 
 _WRITE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\b(fix|build|ship|implement|create|add|remove|update|change|edit|refactor|repair|wire|connect|integrate|generate|scaffold|run|start|launch|deploy)\b", re.IGNORECASE), "explicit write/build verb"),
-    (re.compile(r"\b(bikin|buat|tambahin|tambah|hapus|ubah|rombak|rapihin|benahin|benerin|perbaiki|perbaikin|fix|jalanin|pasang|sambungin|integrasi|implementasiin|terapin|terapkan|kerjain|garap|eksekusi|gaskeun|gaspol|gasss+|maksimalin|naikin)\b", re.IGNORECASE), "explicit Indonesian write/build verb"),
+    (re.compile(r"\b(bikin|bikinin|buat|buatin|tambahin|tambah|hapus|ubah|rombak|rapihin|benahin|benerin|perbaiki|perbaikin|fix|jalanin|pasang|sambungin|integrasi|implementasiin|terapin|terapkan|kerjain|garap|eksekusi|gaskeun|gaspol|gasss+|maksimalin|naikin)\b", re.IGNORECASE), "explicit Indonesian write/build verb"),
 ]
 
 _INSPECTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
@@ -28,7 +28,7 @@ _CONVERSATION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 ]
 
 _EXPLICIT_WRITE_REQUEST_RE = re.compile(
-    r"\b(can you|please|tolong|implement|build|fix|bikin|buat|tambahin|ubah|rombak|rapihin|benahin|benerin|perbaiki|implementasiin|terapin|terapkan|kerjain|garap|eksekusi|gaskeun|gaspol|gasss+|maksimalin|naikin)\b",
+    r"\b(can you|please|tolong|implement|build|fix|bikin|bikinin|buat|buatin|tambahin|ubah|rombak|rapihin|benahin|benerin|perbaiki|implementasiin|terapin|terapkan|kerjain|garap|eksekusi|gaskeun|gaspol|gasss+|maksimalin|naikin)\b",
     re.IGNORECASE,
 )
 _FOLLOWUP_WRITE_RE = re.compile(r"^\s*(gas|lanjut|lanjutin|go|execute|eksekusi|oke lanjut|yaudah lanjut)\b", re.IGNORECASE)
@@ -227,7 +227,10 @@ def classify_agent_intent(
         kind = "conversation"
 
     should_write_files = kind in {"command", "mixed"} and (explicit_write_request or (write_score >= 1.95 and has_write_object))
-    should_run_tools = should_write_files and (write_score + inspection_score) >= 2.15
+    should_run_tools = should_write_files and (
+        (write_score + inspection_score) >= 2.15
+        or (build_mode == "full-agent" and has_write_object and word_count >= 5)
+    )
 
     dominant = max(write_score, inspection_score, conversation_score, 0.001)
     total = max(write_score + inspection_score + conversation_score, 0.001)

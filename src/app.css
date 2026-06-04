@@ -540,8 +540,7 @@ a {
 
 :root[data-app-theme="light"] .hybridEditorPane,
 :root[data-app-theme="light"] .hybridExplorerPane,
-:root[data-app-theme="light"] .fullAgentRail,
-:root[data-app-theme="light"] .fullAgentCenterStage,
+:root[data-app-theme="light"] .fullPreviewHeader,
 :root[data-app-theme="light"] .fullAgentPreview,
 :root[data-app-theme="light"] .hybridSidePane {
   background: rgba(255, 255, 255, 0.72);
@@ -1179,6 +1178,35 @@ a {
   font-weight: 700;
 }
 
+.agentOrbAssetChip {
+  align-items: center;
+  gap: 8px;
+  border-color: rgba(97, 232, 255, 0.18);
+  background: rgba(97, 232, 255, 0.08);
+}
+
+.attachedImageAlias {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(97, 232, 255, 0.22);
+  background: rgba(97, 232, 255, 0.12);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.attachedImageHint {
+  min-width: 0;
+  flex: 1 1 140px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 .attachedImagePath {
   color: var(--muted);
   font-size: 12px;
@@ -1765,47 +1793,53 @@ a {
 }
 
 .fullAgentWorkspaceShell {
-  padding: 16px;
-  gap: 16px;
-  background:
-    radial-gradient(circle at 16% 0%, rgba(156, 255, 95, 0.13), transparent 30%),
-    radial-gradient(circle at 84% 0%, rgba(97, 232, 255, 0.12), transparent 32%),
-    linear-gradient(180deg, rgba(7, 16, 21, 0.98), rgba(5, 10, 14, 1));
+  flex-direction: column;
+  padding: 10px;
+  gap: 10px;
+  background: #050a0e;
 }
 
-.fullAgentRail {
-  width: min(320px, 23vw);
+.fullPreviewHeader {
+  min-height: 46px;
   flex-shrink: 0;
   display: flex;
-  flex-direction: column;
-  overflow: hidden;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid rgba(209, 250, 229, 0.1);
+  border-radius: 10px;
+  background: rgba(3, 8, 12, 0.82);
 }
 
-.fullAgentCenterStage {
-  flex: 1 1 0;
+.fullPreviewMeta {
   min-width: 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
 }
 
-.fullAgentStageIntro {
-  flex-shrink: 0;
+.fullPreviewProject {
+  min-width: 0;
+  max-width: min(520px, 42vw);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .fullAgentPreview {
+  width: 100%;
   min-width: 0;
   min-height: 0;
+  flex: 1 1 auto;
   display: flex;
-}
-
-.fullAgentLayoutSolo .fullAgentPreview {
-  flex: 1;
-}
-
-.fullAgentMissionBody {
-  gap: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(209, 250, 229, 0.1);
+  border-radius: 10px;
+  background: rgba(3, 8, 12, 0.94);
 }
 
 .missionCard {
@@ -3638,8 +3672,7 @@ a {
   font-weight: 900;
 }
 
-.splineAgentBadge.clara { background: #ff9ad5; }
-.splineAgentBadge.raka { background: #84e6ff; }
+.splineAgentBadge.agent { background: #84e6ff; }
 
 .splineAgentPanels ul {
   margin: 8px 0 0;
@@ -6573,24 +6606,14 @@ a {
   overflow: hidden;
 }
 
-.agentOrb.raka .agentOrbButton {
+.agentOrb.appora .agentOrbButton {
   border-color: rgba(97, 232, 255, 0.24);
   background: linear-gradient(135deg, rgba(156, 255, 95, 0.95), rgba(97, 232, 255, 0.88));
 }
 
-.agentOrb.clara .agentOrbButton {
-  border-color: rgba(97, 232, 255, 0.24);
-  background: linear-gradient(135deg, rgba(97, 232, 255, 0.9), rgba(156, 255, 95, 0.86));
-}
-
-.agentOrb.raka .agentOrbBubble.playful,
-.agentOrb.raka .agentOrbBubble.curious {
+.agentOrb.appora .agentOrbBubble.playful,
+.agentOrb.appora .agentOrbBubble.curious {
   background: rgba(8, 31, 34, 0.96);
-}
-
-.agentOrb.clara .agentOrbBubble.playful,
-.agentOrb.clara .agentOrbBubble.curious {
-  background: rgba(35, 18, 36, 0.96);
 }
 
 .agentOrbButton::after {
@@ -6664,12 +6687,8 @@ a {
   line-height: 1;
 }
 
-.agentOrb.raka .agentOrbPersonaMark {
+.agentOrb.appora .agentOrbPersonaMark {
   background: rgba(6, 78, 59, 0.82);
-}
-
-.agentOrb.clara .agentOrbPersonaMark {
-  background: rgba(131, 24, 67, 0.82);
 }
 
 .orbEye,
@@ -6835,9 +6854,6 @@ a {
     width: min(280px, 30vw);
   }
 
-  .fullAgentRail {
-    width: min(280px, 28vw);
-  }
 }
 
 @media (max-width: 1024px) {
@@ -6945,11 +6961,23 @@ a {
   .hybridExplorerPane,
   .hybridSidePane,
   .sidebarPane,
-  .fullAgentRail,
-  .fullAgentCenterStage,
   .fullAgentPreview,
   .fullAgentPreviewPane {
     width: 100%;
+  }
+
+  .fullPreviewHeader {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .fullPreviewHeader .btn {
+    justify-content: center;
+    width: 100%;
+  }
+
+  .fullPreviewProject {
+    max-width: 100%;
   }
 
   .hybridEditorPane {
@@ -7178,8 +7206,7 @@ a {
 
 :root[data-app-theme="light"] .hybridEditorPane,
 :root[data-app-theme="light"] .hybridExplorerPane,
-:root[data-app-theme="light"] .fullAgentRail,
-:root[data-app-theme="light"] .fullAgentCenterStage,
+:root[data-app-theme="light"] .fullPreviewHeader,
 :root[data-app-theme="light"] .fullAgentPreview,
 :root[data-app-theme="light"] .hybridSidePane {
   background: rgba(255, 255, 255, 0.72);
@@ -7274,10 +7301,8 @@ a {
   color: rgba(17, 23, 23, 0.74);
 }
 
-:root[data-app-theme="light"] .agentOrb.raka .agentOrbBubble.playful,
-:root[data-app-theme="light"] .agentOrb.raka .agentOrbBubble.curious,
-:root[data-app-theme="light"] .agentOrb.clara .agentOrbBubble.playful,
-:root[data-app-theme="light"] .agentOrb.clara .agentOrbBubble.curious,
+:root[data-app-theme="light"] .agentOrb.appora .agentOrbBubble.playful,
+:root[data-app-theme="light"] .agentOrb.appora .agentOrbBubble.curious,
 :root[data-app-theme="light"] .agentOrbBubble.sleepy,
 :root[data-app-theme="light"] .agentOrbBubble.sleeping,
 :root[data-app-theme="light"] .agentOrbBubble.celebrate,
@@ -7293,6 +7318,17 @@ a {
   background: rgba(255, 255, 255, 0.7);
   border-color: rgba(17, 23, 23, 0.1);
   color: rgba(17, 23, 23, 0.72);
+}
+
+:root[data-app-theme="light"] .agentOrbAssetChip {
+  background: rgba(15, 131, 149, 0.08);
+  border-color: rgba(15, 131, 149, 0.16);
+}
+
+:root[data-app-theme="light"] .attachedImageAlias {
+  background: rgba(15, 131, 149, 0.1);
+  border-color: rgba(15, 131, 149, 0.18);
+  color: #0f8395;
 }
 
 :root[data-app-theme="light"] .agentStatusPill.thinking {

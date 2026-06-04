@@ -59,19 +59,19 @@ const PROFILES: Record<BuildMode, BuildModeProfile> = {
   "full-agent": {
     mode: "full-agent",
     label: "Full Preview",
-    personaName: "Clara",
-    personaRole: "Preview-first builder",
-    topbarSubtitle: "Preview besar di tengah, agent tetap handle build sampai hasilnya runnable",
-    settingsDescription: "Full Preview memberi ruang terbesar ke preview dan tetap mendorong build end-to-end.",
-    modeSummary: "Best when you want a preview-first workspace while the agent pushes the product end to end.",
-    requestEditorStatus: "Agent lagi build produk ini sampai preview-nya rapi...",
+    personaName: "Appora Agent",
+    personaRole: "Autonomous coder",
+    topbarSubtitle: "Preview besar di tengah, agent yang sama tetap handle build sampai runnable",
+    settingsDescription: "Full Preview memberi ruang terbesar ke preview dengan kemampuan agent yang sama.",
+    modeSummary: "Best when you want a preview-first workspace while Appora Agent pushes the product end to end.",
+    requestEditorStatus: "Appora Agent lagi build produk ini sampai preview-nya rapi...",
     idleLines: [
-      "Clara standby. Kasih brief, nanti aku jahit sampai jadi produk.",
+      "Appora Agent standby. Kasih brief, nanti aku jahit sampai jadi produk.",
       "Kalau mau pasrahkan build-nya, aku ambil alih dari sini.",
       "Aku lagi mikirin cara bikin ini berasa kayak produk beneran.",
     ],
     playfulLines: [
-      "Clara aktif. Aku bisa jadi terlalu niat kalau disuruh polish.",
+      "Appora Agent aktif. Aku bisa jadi terlalu niat kalau disuruh polish.",
       "Kalau brief-nya setengah matang, biar aku yang matengin.",
       "Aku udah siap nyapu edge case sambil benahin copy.",
     ],
@@ -81,43 +81,43 @@ const PROFILES: Record<BuildMode, BuildModeProfile> = {
       "Sip, aku lihat struktur app-nya sebelum mulai ngebut.",
     ],
     sleepyLines: [
-      "Kalau ada produk yang mau dibangun, bangunin Clara ya.",
+      "Kalau ada produk yang mau dibangun, bangunin Appora Agent ya.",
       "Aku mulai ngantuk. Kasih target build yang jelas dong.",
     ],
     sleepingLines: [
-      "zZz... Clara tidur sampai ada produk yang harus diship.",
+      "zZz... Appora Agent tidur sampai ada produk yang harus diship.",
       "...tidur sambil mimpi layout yang rapi dan CTA yang masuk akal...",
     ],
     celebrateLines: [
       "Nah, ini baru kelihatan kayak produk ✨",
       "Cakep. Hasilnya makin siap dipamerin.",
-      "Sip, Clara suka arah build yang ini.",
+      "Sip, Appora Agent suka arah build yang ini.",
     ],
     surprisedLines: [
-      "Eh, ada gerakan. Clara bangun.",
+      "Eh, ada gerakan. Appora Agent bangun.",
       "Oke, aku on lagi. Mari bikin ini jadi serius.",
     ],
     errorLines: [
-      "Ada yang jebol dikit. Clara benerin.",
+      "Ada yang jebol dikit. Appora Agent benerin.",
       "Oke, ada ledakan kecil. Aku ambil alih debugging-nya.",
     ],
   },
   hybrid: {
     mode: "hybrid",
-    label: "Raka",
-    personaName: "Raka",
-    personaRole: "Live coding agent",
-    topbarSubtitle: "Agent watches your editor, files, and preview while you stay in control",
-    settingsDescription: "Agent stays close to your active file, current preview, and the exact problem you're solving.",
+    label: "Workspace",
+    personaName: "Appora Agent",
+    personaRole: "Autonomous coder",
+    topbarSubtitle: "Agent yang sama mantau editor, file, dan preview saat kamu tetap pegang kontrol",
+    settingsDescription: "Workspace mode tetap memakai kemampuan agent penuh, tapi fokus ke active file dan masalah terdekat.",
     modeSummary: "Best when you are still driving the code and want sharp help at the hard parts.",
-    requestEditorStatus: "Agent lagi mantau context editormu dan bantu di titik yang susah...",
+    requestEditorStatus: "Appora Agent lagi mantau context editormu dan bantu di titik yang susah...",
     idleLines: [
-      "Raka jagain context-mu. Kalau mentok, panggil aja.",
+      "Appora Agent jagain context-mu. Kalau mentok, panggil aja.",
       "Aku lihat alur coding-mu. Lempar bagian susahnya ke sini.",
       "Kamu yang nyetir, aku yang bantu pas belokannya tajam.",
     ],
     playfulLines: [
-      "Raka standby. Aku nggak takeover kok, kecuali kamu minta.",
+      "Appora Agent standby. Aku nggak takeover kok, kecuali kamu minta.",
       "Kalau bug-nya licin, aku bantu pegangin.",
       "Aku diem dulu, tapi kalau kamu mentok aku nyamber.",
     ],
@@ -127,11 +127,11 @@ const PROFILES: Record<BuildMode, BuildModeProfile> = {
       "Sip, aku lihat dulu kenapa bagian ini terasa seret.",
     ],
     sleepyLines: [
-      "Kalau sudah ada bagian susah, bangunin Raka ya.",
+      "Kalau sudah ada bagian susah, bangunin Appora Agent ya.",
       "Masih sepi. Aku standby kalau kamu butuh assist.",
     ],
     sleepingLines: [
-      "zZz... Raka tidur tipis sambil jaga repo.",
+      "zZz... Appora Agent tidur tipis sambil jaga repo.",
       "...ngorok kecil sambil nunggu ada bug yang bandel...",
     ],
     celebrateLines: [
@@ -140,11 +140,11 @@ const PROFILES: Record<BuildMode, BuildModeProfile> = {
       "Cakep, sekarang kamu bisa lanjut gas lagi.",
     ],
     surprisedLines: [
-      "Eh, oke. Raka bangun, kita lihat bagian ini.",
+      "Eh, oke. Appora Agent bangun, kita lihat bagian ini.",
       "Gerak dikit langsung kebaca. Aku bantu cek.",
     ],
     errorLines: [
-      "Ada yang meledak kecil. Raka bantu bongkar.",
+      "Ada yang meledak kecil. Appora Agent bantu bongkar.",
       "Sip, error ketemu. Kita beresin pelan-pelan.",
     ],
   },
@@ -356,8 +356,8 @@ export function buildRepairPrompt(
   if (previewAuditReport?.trim()) {
     sections.push(
       buildMode === "full-agent"
-        ? `The live preview still feels weak or unfinished. Improve the implementation until the result feels production-ready.\n\nPreview audit:\n${previewAuditReport.trim()}`
-        : `The live preview still has local UX or clarity issues around the current task. Fix them without taking over unrelated areas.\n\nPreview audit:\n${previewAuditReport.trim()}`
+        ? `The live preview still feels weak or unfinished. Use the preview evidence pack as ground truth: fix the listed DOM/viewport/runtime issues, prioritize blocking issues before polish warnings, and make concrete component/CSS/source changes rather than install-only actions.\n\nPreview audit:\n${previewAuditReport.trim()}`
+        : `The live preview still has local UX or clarity issues around the current task. Use the preview evidence pack as ground truth, fix the listed selectors/viewport/runtime issues, and avoid taking over unrelated areas.\n\nPreview audit:\n${previewAuditReport.trim()}`
     );
   }
 

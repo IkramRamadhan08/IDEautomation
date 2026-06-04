@@ -15,6 +15,7 @@ import subprocess
 import uuid
 import zipfile
 from html import escape, unescape
+from types import SimpleNamespace
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request as URLRequest, urlopen
 
@@ -53,6 +54,7 @@ from api.settings_router import build_settings_router
 from api.fs import list_tree, read_text, write_text, diff_text, safe_join
 from api.agent_mcp import discover_mcp_servers, list_mcp_tools
 from api.agent_memory import get_agent_memory_overview, sync_project_docs_to_supabase
+from api.agent_observability import build_agent_observability
 from api.agent_runtime import (
     APPORA_AUTO_SAFE_SHELL_COMMANDS,
     APPORA_BLOCKED_OR_APPROVAL_SHELL_COMMANDS,
@@ -362,6 +364,144 @@ def _hydrate_hosted_projects(ws_root: Path) -> None:
             _hydrate_hosted_project(ws_root, root)
 
 
+def _bootstrap_missing_agent_project(ws_root: Path, project_root: str) -> dict[str, object] | None:
+    root = str(project_root or ".").strip().strip("/") or "."
+    if root == ".":
+        return None
+    project_dir = safe_join(ws_root, root)
+    if project_dir.exists():
+        return None
+
+    package_name = re.sub(r"[^a-z0-9-]+", "-", root.lower()).strip("-") or "appora-project"
+    files = {
+        "package.json": json.dumps(
+            {
+                "name": package_name,
+                "version": "0.1.0",
+                "private": True,
+                "type": "module",
+                "apporaTemplate": True,
+                "scripts": {
+                    "dev": "vite",
+                    "build": "tsc -b && vite build",
+                    "preview": "vite preview",
+                },
+                "dependencies": {
+                    "@vitejs/plugin-react": "latest",
+                    "vite": "latest",
+                    "typescript": "latest",
+                    "react": "latest",
+                    "react-dom": "latest",
+                },
+                "devDependencies": {},
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        "index.html": (
+            "<!doctype html>\n"
+            "<html lang=\"en\">\n"
+            "  <head>\n"
+            "    <meta charset=\"UTF-8\" />\n"
+            "    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\n"
+            "    <meta name=\"description\" content=\"Appora agent workspace waiting for a production build.\" />\n"
+            "    <title>Appora Agent Workspace</title>\n"
+            "  </head>\n"
+            "  <body>\n"
+            "    <div id=\"root\"></div>\n"
+            "    <script type=\"module\" src=\"/src/main.tsx\"></script>\n"
+            "  </body>\n"
+            "</html>\n"
+        ),
+        "tsconfig.json": json.dumps(
+            {
+                "compilerOptions": {
+                    "target": "ES2020",
+                    "useDefineForClassFields": True,
+                    "lib": ["DOM", "DOM.Iterable", "ES2020"],
+                    "allowJs": False,
+                    "skipLibCheck": True,
+                    "esModuleInterop": True,
+                    "allowSyntheticDefaultImports": True,
+                    "strict": True,
+                    "forceConsistentCasingInFileNames": True,
+                    "module": "ESNext",
+                    "moduleResolution": "Node",
+                    "resolveJsonModule": True,
+                    "isolatedModules": True,
+                    "noEmit": True,
+                    "jsx": "react-jsx",
+                },
+                "include": ["src"],
+                "references": [],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        "tsconfig.node.json": json.dumps(
+            {
+                "compilerOptions": {
+                    "composite": True,
+                    "skipLibCheck": True,
+                    "module": "ESNext",
+                    "moduleResolution": "Node",
+                    "allowSyntheticDefaultImports": True,
+                },
+                "include": ["vite.config.ts"],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        "vite.config.ts": "import { defineConfig } from 'vite';\nimport react from '@vitejs/plugin-react';\n\nexport default defineConfig({ plugins: [react()] });\n",
+        "src/main.tsx": (
+            "import React from 'react';\n"
+            "import { createRoot } from 'react-dom/client';\n"
+            "import './styles.css';\n"
+            "import App from './App';\n\n"
+            "createRoot(document.getElementById('root')!).render(\n"
+            "  <React.StrictMode>\n"
+            "    <App />\n"
+            "  </React.StrictMode>,\n"
+            ");\n"
+        ),
+        "src/App.tsx": (
+            "export default function App() {\n"
+            "  return (\n"
+            "    <main className=\"workspaceShell\">\n"
+            "      <p className=\"eyebrow\">Appora workspace</p>\n"
+            "      <h1>Ready for a production build</h1>\n"
+            "      <p>Replace this bootstrap shell with the requested product experience.</p>\n"
+            "    </main>\n"
+            "  );\n"
+            "}\n"
+        ),
+        "src/styles.css": (
+            ":root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }\n"
+            "* { box-sizing: border-box; }\n"
+            "body { margin: 0; min-width: 320px; min-height: 100vh; background: #f6f4ef; color: #161616; }\n"
+            ".workspaceShell { min-height: 100vh; display: grid; place-content: center; gap: 12px; padding: 32px; }\n"
+            ".eyebrow { margin: 0; text-transform: uppercase; letter-spacing: .08em; font-size: 12px; color: #6f5b35; }\n"
+            "h1 { margin: 0; max-width: 760px; font-size: clamp(40px, 8vw, 80px); line-height: .95; }\n"
+            "p { max-width: 640px; font-size: 18px; line-height: 1.6; }\n"
+        ),
+    }
+    for rel, content in files.items():
+        write_text(ws_root, f"{root}/{rel}", content)
+
+    package_data = _read_json(project_dir / "package.json") or {}
+    dependency_logs: list[str] = []
+    _ensure_preview_dependencies_ready(project_dir, package_data, dependency_logs)
+    return {
+        "project_root": root,
+        "created": True,
+        "paths": [f"{root}/{path}" for path in files],
+        "dependency_logs": dependency_logs,
+    }
+
+
 def _read_json(path: Path) -> dict | None:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -474,6 +614,31 @@ def _declared_node_packages(package_data: dict) -> set[str]:
         if isinstance(deps, dict):
             names.update(str(name).strip() for name in deps if str(name).strip())
     return names
+
+
+def _preview_launch_kind(package_data: dict) -> tuple[str, str | None]:
+    scripts = package_data.get("scripts") or {}
+    if isinstance(scripts, dict) and "dev" in scripts:
+        return "script", "dev"
+    if isinstance(scripts, dict) and "preview" in scripts:
+        return "script", "preview"
+    if "vite" in _declared_node_packages(package_data):
+        return "vite", None
+    return "static", None
+
+
+def _package_vite_command(project_dir: Path, manager_name: str, manager_cmd: list[str], port: int) -> list[str]:
+    local_vite = project_dir / "node_modules" / ".bin" / "vite"
+    args = ["--host", "127.0.0.1", "--strictPort", "--port", str(port)]
+    if local_vite.exists():
+        return [str(local_vite), *args]
+    if manager_name == "pnpm":
+        return [*manager_cmd, "exec", "vite", *args]
+    if manager_name == "yarn":
+        return [*manager_cmd, "vite", *args]
+    if manager_name == "bun":
+        return [*manager_cmd, "x", "vite", *args]
+    return [*manager_cmd, "exec", "vite", "--", *args]
 
 
 def _node_modules_contains(node_modules: Path, package_name: str) -> bool:
@@ -843,6 +1008,10 @@ def _resolve_node_binary() -> str | None:
     return shutil.which("node")
 
 
+def _resolve_agent_browser_binary() -> str | None:
+    return shutil.which("agent-browser")
+
+
 def _playwright_audit_script() -> Path:
     return ROOT / "scripts" / "preview-audit.mjs"
 
@@ -859,8 +1028,20 @@ def _project_uses_playwright(project_dir: Path) -> bool:
     return False
 
 
-def _browser_preview_audit_ready(project_dir: Path) -> bool:
+def _playwright_preview_audit_ready(project_dir: Path) -> bool:
     return bool(_resolve_node_binary() and _playwright_audit_script().exists())
+
+
+def _browser_preview_audit_ready(project_dir: Path) -> bool:
+    return bool(_resolve_agent_browser_binary() or _playwright_preview_audit_ready(project_dir))
+
+
+def _browser_preview_audit_backend(project_dir: Path) -> str:
+    if _resolve_agent_browser_binary():
+        return "agent-browser"
+    if _playwright_preview_audit_ready(project_dir):
+        return "playwright"
+    return "html"
 
 
 def _normalize_preview_url(preview_url: str) -> str:
@@ -879,7 +1060,10 @@ def _clean_html_text(fragment: str) -> str:
 
 def _count_emoji_chars(text: str) -> int:
     count = 0
+    ui_symbols = {"✓", "✔", "✕", "✖", "×"}
     for char in str(text or ""):
+        if char in ui_symbols:
+            continue
         code = ord(char)
         if (
             0x1F300 <= code <= 0x1FAFF
@@ -891,7 +1075,7 @@ def _count_emoji_chars(text: str) -> int:
 
 
 _STARTER_RESIDUE_RE = re.compile(
-    r"\b(vite|react \+ vite|seeded template|lorem ipsum|template starter|starter|placeholder\s+(?:copy|content|text|section|card|page))\b",
+    r"\b(vite\s*\+\s*react|react\s*\+\s*vite|click on the vite and react logos|vite logo|edit src/app|seeded template|lorem ipsum|template starter|starter|placeholder\s+(?:copy|content|text|section|card|page))\b",
     re.IGNORECASE,
 )
 _GENERIC_SAAS_COPY_RE = re.compile(
@@ -942,6 +1126,26 @@ def _scan_project_quality_signals(project_dir: Path) -> dict[str, object]:
         "error": [r"\berror\b", r"failed", r"retry", r"try again", r"catch \("],
         "empty": [r"empty state", r"no results", r"no items", r"not found", r"belum ada", r"empty"],
         "labels": [r"<label\b", r"htmlFor=", r"aria-label=", r"aria-labelledby="],
+        "dynamic_state_required": [
+            r"\bfetch\s*\(",
+            r"\baxios\.",
+            r"\buseEffect\s*\(",
+            r"\buseQuery\s*\(",
+            r"\buseSWR\s*\(",
+            r"\bsupabase\.",
+            r"\bprisma\.",
+            r"\b<form\b",
+            r"\b<input\b",
+            r"\b<textarea\b",
+            r"\b<select\b",
+            r"\bsearch\b",
+            r"\bfilter\b",
+            r"\btable\b",
+            r"\bdashboard\b",
+            r"\bkanban\b",
+            r"\bcheckout\b",
+            r"\blogin\b",
+        ],
     }
     hits = {key: False for key in patterns}
     metrics: dict[str, int] = {
@@ -994,7 +1198,67 @@ def _scan_project_quality_signals(project_dir: Path) -> dict[str, object]:
                 layout_overflow_risks.append(f"{path.relative_to(project_dir).as_posix()}:{line}: {snippet[:140]}")
         if all(hits.values()) and all(value > 0 for value in metrics.values()):
             break
-    return {**hits, **metrics, "layout_overflow_risks": layout_overflow_risks}
+    repair_candidate_files = [
+        path.relative_to(project_dir).as_posix()
+        for path in candidates[:20]
+        if path.suffix.lower() in {".tsx", ".jsx", ".ts", ".js", ".css", ".html"}
+    ]
+    return {**hits, **metrics, "layout_overflow_risks": layout_overflow_risks, "repair_candidate_files": repair_candidate_files}
+
+
+def _preview_dynamic_state_required(snapshot: dict, rendered_text: str, project_signals: dict[str, object] | None = None) -> bool:
+    signals = project_signals or {}
+    if bool(signals.get("dynamic_state_required")):
+        return True
+    if any(bool(signals.get(name)) for name in ("loading", "error", "empty")):
+        return True
+    form_count = max(0, int(snapshot.get("form_count") or 0))
+    input_count = max(0, int(snapshot.get("input_count") or 0))
+    table_count = max(0, int(snapshot.get("table_count") or 0))
+    if form_count > 0 or input_count > 0 or table_count > 0:
+        return True
+    text = " ".join(
+        [
+            str(snapshot.get("title") or ""),
+            " ".join(str(item) for item in (snapshot.get("headings") or [])),
+            " ".join(str(item) for item in (snapshot.get("subheadings") or [])),
+            " ".join(str(item) for item in (snapshot.get("buttons") or [])),
+            " ".join(str(item) for item in (snapshot.get("links") or [])),
+        ]
+    ).lower()
+    if any(token in text for token in [
+        "dashboard",
+        "kanban",
+        "task",
+        "cart",
+        "checkout",
+        "search",
+        "filter",
+        "upload",
+        "login",
+        "sign in",
+        "sign up",
+        "booking",
+        "order",
+        "invoice",
+        "analytics",
+        "admin",
+    ]):
+        return True
+    buttons = [str(item).strip().lower() for item in (snapshot.get("buttons") or []) if str(item).strip()]
+    passive = ("configure", "disabled", "lihat", "view", "see", "bahas", "contact", "kontak")
+    action_buttons = [label for label in buttons if not any(token in label for token in passive)]
+    return len(action_buttons) >= 2
+
+
+def _dense_app_surface_ok(*, interactive_count: int, card_like_count: int, product_surface_count: int, table_count: int, word_count: int) -> bool:
+    if interactive_count >= 8 and word_count >= 80 and table_count >= 1 and card_like_count >= 4:
+        return True
+    if interactive_count >= 8 and word_count >= 100 and card_like_count >= 6:
+        return True
+    if interactive_count >= 10 and word_count >= 70 and product_surface_count >= 2 and card_like_count >= 4:
+        return True
+    return interactive_count >= 12 and word_count >= 100 and product_surface_count >= 2 and card_like_count >= 4
 
 
 def _build_quality_checks(snapshot: dict, *, project_signals: dict[str, object] | None = None) -> list[dict[str, str | bool]]:
@@ -1015,6 +1279,8 @@ def _build_quality_checks(snapshot: dict, *, project_signals: dict[str, object] 
     card_like_count = max(0, int(snapshot.get("card_like_count") or 0))
     product_surface_count = max(0, int(snapshot.get("product_surface_count") or 0))
     table_count = max(0, int(snapshot.get("table_count") or 0))
+    interactive_count = max(0, int(snapshot.get("interactive_count") or 0))
+    word_count = max(0, int(snapshot.get("word_count") or 0))
     rendered_text = " ".join(
         [
             str(snapshot.get("title") or ""),
@@ -1032,6 +1298,17 @@ def _build_quality_checks(snapshot: dict, *, project_signals: dict[str, object] 
     source_emoji_count = max(0, int(project_signals.get("emoji_count") or 0))
     layout_overflow_risk_count = max(0, int(project_signals.get("layout_overflow_risk_count") or 0))
     generic_copy_count = len(_generic_copy_terms(rendered_text)) + max(0, int(project_signals.get("generic_copy_count") or 0))
+    dynamic_state_required = _preview_dynamic_state_required(snapshot, rendered_text, project_signals)
+    dense_app_surface = _dense_app_surface_ok(
+        interactive_count=interactive_count,
+        card_like_count=card_like_count,
+        product_surface_count=product_surface_count,
+        table_count=table_count,
+        word_count=word_count,
+    )
+    product_depth_ok = (
+        section_count >= 5 and (product_surface_count >= 2 or table_count >= 1 or card_like_count >= 4)
+    ) or dense_app_surface
     checks: list[dict[str, str | bool]] = []
     checks.append({
         "id": "responsive-foundation",
@@ -1126,10 +1403,10 @@ def _build_quality_checks(snapshot: dict, *, project_signals: dict[str, object] 
     checks.append({
         "id": "product-depth",
         "label": "Product depth",
-        "ok": section_count >= 5 and (product_surface_count >= 2 or table_count >= 1 or card_like_count >= 4),
+        "ok": product_depth_ok,
         "detail": (
-            "Struktur halaman punya kedalaman produk: section cukup, surface/mock/card/dashboard terlihat."
-            if section_count >= 5 and (product_surface_count >= 2 or table_count >= 1 or card_like_count >= 4)
+            "Struktur halaman punya kedalaman produk/app: section, surface, card, atau interaksi cukup terlihat."
+            if product_depth_ok
             else f"Kedalaman produk masih tipis (sections={section_count}, surfaces={product_surface_count}, cards={card_like_count}, tables={table_count})."
         ),
     })
@@ -1142,22 +1419,160 @@ def _build_quality_checks(snapshot: dict, *, project_signals: dict[str, object] 
     checks.append({
         "id": "state-loading",
         "label": "Loading state",
-        "ok": bool(project_signals.get("loading")),
-        "detail": "Ada sinyal loading/skeleton state di source." if project_signals.get("loading") else "Belum ketemu loading/skeleton state yang jelas di source.",
+        "ok": bool(project_signals.get("loading")) or not dynamic_state_required,
+        "detail": (
+            "Ada sinyal loading/skeleton state di source."
+            if project_signals.get("loading")
+            else (
+                "Loading state tidak wajib untuk halaman statis/presentational ini."
+                if not dynamic_state_required
+                else "Belum ketemu loading/skeleton state yang jelas di source."
+            )
+        ),
     })
     checks.append({
         "id": "state-error",
         "label": "Error state",
-        "ok": bool(project_signals.get("error")),
-        "detail": "Ada sinyal error/retry handling di source." if project_signals.get("error") else "Belum ketemu error/retry state yang jelas di source.",
+        "ok": bool(project_signals.get("error")) or not dynamic_state_required,
+        "detail": (
+            "Ada sinyal error/retry handling di source."
+            if project_signals.get("error")
+            else (
+                "Error/retry state tidak wajib untuk halaman statis/presentational ini."
+                if not dynamic_state_required
+                else "Belum ketemu error/retry state yang jelas di source."
+            )
+        ),
     })
     checks.append({
         "id": "state-empty",
         "label": "Empty state",
-        "ok": bool(project_signals.get("empty")),
-        "detail": "Ada sinyal empty/no-results state di source." if project_signals.get("empty") else "Belum ketemu empty/no-results state yang jelas di source.",
+        "ok": bool(project_signals.get("empty")) or not dynamic_state_required,
+        "detail": (
+            "Ada sinyal empty/no-results state di source."
+            if project_signals.get("empty")
+            else (
+                "Empty/no-results state tidak wajib untuk halaman statis/presentational ini."
+                if not dynamic_state_required
+                else "Belum ketemu empty/no-results state yang jelas di source."
+            )
+        ),
     })
     return checks
+
+
+def _preview_file_refs(*values: object) -> list[str]:
+    refs: list[str] = []
+    pattern = re.compile(r"\b((?:src|app|pages|components|styles|public|lib|api)/[\w./-]+\.(?:tsx|jsx|ts|js|css|scss|html|json))(?::\d+)?\b")
+    for value in values:
+        text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False) if value is not None else ""
+        for match in pattern.finditer(text):
+            rel = match.group(1).strip()
+            if rel and rel not in refs:
+                refs.append(rel)
+    return refs[:8]
+
+
+def _preview_repair_candidates(project_signals: dict[str, object] | None, *fallback_values: object) -> list[str]:
+    candidates: list[str] = []
+    signals = project_signals or {}
+    for value in list(signals.get("repair_candidate_files") or []):
+        rel = str(value or "").strip()
+        if rel and rel not in candidates:
+            candidates.append(rel)
+    for rel in _preview_file_refs(*fallback_values):
+        if rel not in candidates:
+            candidates.append(rel)
+    css_first = [item for item in candidates if item.endswith((".css", ".scss"))]
+    component_first = [item for item in candidates if item.endswith((".tsx", ".jsx", ".ts", ".js"))]
+    html_first = [item for item in candidates if item.endswith(".html")]
+    return [*component_first, *css_first, *html_first][:8]
+
+
+def _build_preview_repair_targets(
+    *,
+    issue_details: list[dict[str, str]],
+    snapshot: dict,
+    project_signals: dict[str, object] | None,
+    runtime_errors: list[str],
+    layout_overflow_risks: list[str],
+    unlabeled_interactive: list[str],
+    mobile_text_overflow_nodes: list[str],
+    small_tap_targets: list[str],
+    broken_images: list[str],
+    fixed_overlays: list[str],
+    mobile_fixed_overlays: list[str],
+) -> list[dict[str, object]]:
+    targets: list[dict[str, object]] = []
+    candidates = _preview_repair_candidates(project_signals, runtime_errors, layout_overflow_risks)
+    css_candidates = [item for item in candidates if item.endswith((".css", ".scss"))]
+    component_candidates = [item for item in candidates if item.endswith((".tsx", ".jsx", ".ts", ".js", ".html"))]
+
+    def add(kind: str, priority: str, action: str, *, selectors: list[str] | None = None, likely_files: list[str] | None = None, evidence: list[str] | None = None) -> None:
+        existing = {str(item.get("kind") or "") for item in targets}
+        if kind in existing:
+            return
+        targets.append({
+            "kind": kind,
+            "priority": priority,
+            "selectors": list(selectors or [])[:8],
+            "likely_files": list(likely_files or candidates)[:8],
+            "evidence": list(evidence or [])[:8],
+            "action": action[:360],
+        })
+
+    if runtime_errors:
+        add(
+            "runtime",
+            "critical",
+            "Fix the browser runtime exception first; inspect referenced stack files, imports, undefined symbols, and render-time data assumptions.",
+            likely_files=_preview_file_refs(runtime_errors) or component_candidates or candidates,
+            evidence=runtime_errors,
+        )
+
+    responsive_selectors = [*mobile_text_overflow_nodes, *small_tap_targets, *fixed_overlays, *mobile_fixed_overlays]
+    has_responsive_issue = bool(responsive_selectors or snapshot.get("mobile_overflow_x") or any(item.get("category") == "responsive" for item in issue_details))
+    if has_responsive_issue:
+        add(
+            "responsive",
+            "high",
+            "Fix mobile layout at the listed selectors: remove fixed/min widths, add wrapping/overflow containers, resize tap targets, and retest mobile viewport.",
+            selectors=responsive_selectors,
+            likely_files=css_candidates or component_candidates or candidates,
+            evidence=[*layout_overflow_risks, *responsive_selectors],
+        )
+
+    if unlabeled_interactive:
+        add(
+            "accessibility",
+            "high",
+            "Give each listed interactive element visible text or an aria-label, preserving real click/navigation behavior.",
+            selectors=unlabeled_interactive,
+            likely_files=component_candidates or candidates,
+            evidence=unlabeled_interactive,
+        )
+
+    if broken_images:
+        add(
+            "assets",
+            "high",
+            "Repair broken image references by using existing public assets, uploaded assets, generated CSS visuals, or removing the broken media.",
+            selectors=broken_images,
+            likely_files=component_candidates or candidates,
+            evidence=broken_images,
+        )
+
+    polish_categories = {str(item.get("category") or "") for item in issue_details}
+    if polish_categories & {"metadata", "production-polish", "product-depth", "copy-specificity", "content", "interaction"}:
+        add(
+            "product_polish",
+            "medium",
+            "Improve the primary product surface: specific title/meta/copy, deeper domain sections, useful cards/tables/workflows, and real navigation/CTA behavior.",
+            likely_files=component_candidates or candidates,
+            evidence=[str(item.get("detail") or "") for item in issue_details if str(item.get("category") or "") in polish_categories],
+        )
+
+    return targets[:6]
 
 
 def _build_preview_audit_result(
@@ -1299,7 +1714,17 @@ def _build_preview_audit_result(
         issues.append(detail)
         suffix = f" Examples: {' | '.join(layout_overflow_risks[:3])}" if layout_overflow_risks else ""
         add_issue("warning", "responsive", f"{detail}{suffix}", "Ganti fixed/min-width besar, 100vw, max-content, atau nowrap dengan max-width:100%, overflow wrappers, dan responsive grid.")
-    if section_count < 5 or (product_surface_count < 2 and table_count < 1 and card_like_count < 4):
+    dense_app_surface = _dense_app_surface_ok(
+        interactive_count=interactive_count,
+        card_like_count=card_like_count,
+        product_surface_count=product_surface_count,
+        table_count=table_count,
+        word_count=word_count,
+    )
+    product_depth_ok = (
+        section_count >= 5 and (product_surface_count >= 2 or table_count >= 1 or card_like_count >= 4)
+    ) or dense_app_surface
+    if not product_depth_ok:
         detail = f"Product surface feels thin for a professional build (sections={section_count}, surfaces={product_surface_count}, cards={card_like_count}, tables={table_count})."
         issues.append(detail)
         add_issue("warning", "product-depth", detail, "Tambahkan product mock/workflow/security/pricing/detail section yang spesifik dan terlihat usable.")
@@ -1320,6 +1745,8 @@ def _build_preview_audit_result(
         issues.append(detail)
         for check in quality_failures:
             check_id = str(check.get("id") or "")
+            if check_id == "product-depth" and any(item.get("category") == "product-depth" for item in issue_details):
+                continue
             severity = "blocking" if check_id in {"responsive-overflow", "a11y-interactive-labels", "mobile-text-fit", "image-loads", "blocking-overlays", "starter-residue"} else "warning"
             add_issue(severity, check_id or "quality", str(check.get("detail") or detail), "Perbaiki area quality check terkait.")
 
@@ -1342,10 +1769,14 @@ def _build_preview_audit_result(
     ]
     viewport = snapshot.get("viewport") if isinstance(snapshot.get("viewport"), dict) else {}
     mobile_viewport = snapshot.get("mobile_viewport") if isinstance(snapshot.get("mobile_viewport"), dict) else {}
+    screenshot_path = str(snapshot.get("screenshot_path") or "").strip()
+    screenshot_viewport = str(snapshot.get("screenshot_viewport") or "").strip()
     visual_summary = {
         "mode": audit_mode,
         "title": title,
         "primary_heading": headings[0] if headings else "",
+        "screenshot_path": screenshot_path,
+        "screenshot_viewport": screenshot_viewport,
         "desktop_viewport": viewport,
         "mobile_viewport": mobile_viewport,
         "desktop_overflow_x": bool(snapshot.get("desktop_overflow_x")),
@@ -1388,6 +1819,59 @@ def _build_preview_audit_result(
             f"{item.get('severity')} {item.get('category')}: {item.get('detail')}"
             for item in issue_details[:5]
         ))
+    if screenshot_path:
+        repair_brief_parts.append(f"Screenshot evidence: {screenshot_path} ({screenshot_viewport or 'viewport unknown'}).")
+
+    repair_targets = _build_preview_repair_targets(
+        issue_details=issue_details,
+        snapshot=snapshot,
+        project_signals=project_signals,
+        runtime_errors=[*page_errors, *console_errors],
+        layout_overflow_risks=layout_overflow_risks,
+        unlabeled_interactive=unlabeled_interactive,
+        mobile_text_overflow_nodes=mobile_text_overflow_nodes,
+        small_tap_targets=small_tap_targets,
+        broken_images=broken_images,
+        fixed_overlays=fixed_overlays,
+        mobile_fixed_overlays=mobile_fixed_overlays,
+    )
+    if repair_targets:
+        first_target = repair_targets[0]
+        likely = ", ".join(str(item) for item in list(first_target.get("likely_files") or [])[:3])
+        repair_brief_parts.append(
+            f"Repair target: {first_target.get('kind')} priority={first_target.get('priority')} files={likely or '(inspect source)'}."
+        )
+
+    repair_brief = " ".join(repair_brief_parts)[:2000]
+    evidence_pack = {
+        "audit_mode": audit_mode,
+        "preview_url": preview_url,
+        "repair_brief": repair_brief,
+        "screenshot_path": screenshot_path,
+        "screenshot_viewport": screenshot_viewport,
+        "desktop_viewport": viewport,
+        "mobile_viewport": mobile_viewport,
+        "desktop_overflow_x": bool(snapshot.get("desktop_overflow_x")),
+        "mobile_overflow_x": bool(snapshot.get("mobile_overflow_x")),
+        "top_blockers": [item for item in issue_details if item.get("severity") == "blocking"][:5],
+        "top_warnings": [item for item in issue_details if item.get("severity") == "warning"][:5],
+        "runtime_errors": [*page_errors, *console_errors][:8],
+        "unlabeled_interactive": unlabeled_interactive[:6],
+        "mobile_text_overflow_nodes": mobile_text_overflow_nodes[:6],
+        "small_tap_targets": small_tap_targets[:6],
+        "broken_images": broken_images[:6],
+        "fixed_overlays": [*fixed_overlays, *mobile_fixed_overlays][:6],
+        "repair_targets": repair_targets,
+        "source_candidates": _preview_repair_candidates(project_signals, layout_overflow_risks, [*page_errors, *console_errors]),
+        "source_evidence": {
+            "layout_overflow_risks": layout_overflow_risks[:6],
+            "inline_style_count": inline_style_count,
+            "any_cast_count": any_cast_count,
+            "generic_copy_terms": generic_copy_terms[:6],
+            "starter_residue": starter_terms[:6],
+        },
+        "excerpt": excerpt[:600],
+    }
 
     return {
         "ok": blocking_count == 0,
@@ -1425,7 +1909,9 @@ def _build_preview_audit_result(
         "issue_details": issue_details,
         "quality_checks": quality_checks,
         "visual_summary": visual_summary,
-        "repair_brief": " ".join(repair_brief_parts)[:2000],
+        "evidence_pack": evidence_pack,
+        "repair_targets": repair_targets,
+        "repair_brief": repair_brief,
         "excerpt": excerpt,
         "summary": "; ".join(summary_parts),
     }
@@ -1527,6 +2013,257 @@ def _fetch_preview_html(preview_url: str, attempts: int = 3) -> str:
     raise HTTPException(502, f"Preview audit fetch failed: {last_error}")
 
 
+_AGENT_BROWSER_SNAPSHOT_JS = r"""(() => {
+  const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+  const cssPath = (node) => {
+    if (!node || !node.tagName) return '';
+    const parts = [];
+    let current = node;
+    while (current && current.nodeType === Node.ELEMENT_NODE && parts.length < 4) {
+      const tag = current.tagName.toLowerCase();
+      const id = current.getAttribute('id');
+      if (id) {
+        parts.unshift(`${tag}#${id}`);
+        break;
+      }
+      const cls = clean(current.getAttribute('class') || '').split(/\s+/).filter(Boolean).slice(0, 2).join('.');
+      parts.unshift(cls ? `${tag}.${cls}` : tag);
+      current = current.parentElement;
+    }
+    return parts.join(' > ');
+  };
+  const listText = (selector, limit = 8) => Array.from(document.querySelectorAll(selector))
+    .map((node) => clean(node.textContent || node.getAttribute?.('aria-label') || ''))
+    .filter(Boolean)
+    .slice(0, limit);
+  const buttonNodes = Array.from(document.querySelectorAll('button, [role="button"], input[type="button"], input[type="submit"]'));
+  const buttonText = buttonNodes
+    .map((node) => clean(node.textContent || node.getAttribute('aria-label') || node.getAttribute('value') || ''))
+    .filter(Boolean)
+    .slice(0, 8);
+  const linkText = Array.from(document.querySelectorAll('a'))
+    .map((node) => clean(node.textContent || node.getAttribute('aria-label') || ''))
+    .filter(Boolean)
+    .slice(0, 8);
+  const bodyText = clean(document.body?.innerText || '');
+  const imageNodes = Array.from(document.querySelectorAll('img'));
+  const formFields = Array.from(document.querySelectorAll('input, textarea, select'));
+  const interactiveNodes = Array.from(document.querySelectorAll('button, [role="button"], a[href], input, textarea, select, summary, [tabindex]:not([tabindex="-1"])'));
+  const labeledInputCount = formFields.filter((field) => {
+    const id = clean(field.getAttribute('id') || '');
+    return Boolean(
+      clean(field.getAttribute('aria-label') || '') ||
+      clean(field.getAttribute('aria-labelledby') || '') ||
+      field.closest('label') ||
+      (id && document.querySelector(`label[for="${id}"]`))
+    );
+  }).length;
+  const unlabeledInteractive = interactiveNodes
+    .filter((node) => !clean(node.textContent || node.getAttribute('aria-label') || node.getAttribute('title') || node.getAttribute('value') || node.getAttribute('alt') || ''))
+    .map(cssPath)
+    .filter(Boolean)
+    .slice(0, 8);
+  const smallTapTargets = interactiveNodes
+    .map((node) => ({ node, rect: node.getBoundingClientRect() }))
+    .filter(({ rect }) => rect.width > 0 && rect.height > 0 && (rect.width < 32 || rect.height < 32))
+    .map(({ node, rect }) => `${cssPath(node)} (${Math.round(rect.width)}x${Math.round(rect.height)})`)
+    .slice(0, 8);
+  const fixedOverlays = Array.from(document.querySelectorAll('*'))
+    .filter((node) => {
+      const style = window.getComputedStyle(node);
+      const rect = node.getBoundingClientRect();
+      return style.position === 'fixed' && rect.width > window.innerWidth * 0.8 && rect.height > window.innerHeight * 0.8 && style.pointerEvents !== 'none';
+    })
+    .map(cssPath)
+    .filter(Boolean)
+    .slice(0, 4);
+  const textOverflowNodes = Array.from(document.querySelectorAll('button, a, h1, h2, h3, p, span, label, input'))
+    .filter((node) => node.scrollWidth > node.clientWidth + 4 && node.clientWidth > 0)
+    .map((node) => `${cssPath(node)} "${clean(node.textContent || node.getAttribute('value') || '').slice(0, 60)}"`)
+    .filter(Boolean)
+    .slice(0, 8);
+  const productSurfaceNodes = Array.from(document.querySelectorAll('[class*="dashboard" i], [class*="panel" i], [class*="metric" i], [class*="chart" i], [class*="table" i], [class*="workflow" i], [class*="preview" i], table, [role="table"]'));
+  const cardLikeNodes = Array.from(document.querySelectorAll('article, [class*="card" i], [class*="panel" i], [class*="tile" i]'));
+  return {
+    title: clean(document.title || ''),
+    meta_description: clean(document.querySelector('meta[name="description"]')?.getAttribute('content') || ''),
+    viewport_meta: Boolean(document.querySelector('meta[name="viewport"]')),
+    document_lang: clean(document.documentElement.getAttribute('lang') || ''),
+    headings: listText('h1', 3),
+    subheadings: listText('h2', 4),
+    buttons: buttonText,
+    links: linkText,
+    form_count: document.querySelectorAll('form').length,
+    section_count: document.querySelectorAll('section, article').length,
+    nav_count: document.querySelectorAll('nav, [role="navigation"]').length,
+    table_count: document.querySelectorAll('table, [role="table"]').length,
+    card_like_count: cardLikeNodes.length,
+    product_surface_count: productSurfaceNodes.length,
+    input_count: formFields.length,
+    labeled_input_count: labeledInputCount,
+    landmark_count: document.querySelectorAll('main, nav, header, footer, aside, section[aria-label], [role="main"], [role="navigation"], [role="contentinfo"]').length,
+    main_count: document.querySelectorAll('main, [role="main"]').length,
+    button_count: buttonNodes.length,
+    interactive_count: interactiveNodes.length,
+    unlabeled_interactive: unlabeledInteractive,
+    small_tap_targets: smallTapTargets,
+    fixed_overlays: fixedOverlays,
+    text_overflow_nodes: textOverflowNodes,
+    word_count: bodyText ? bodyText.split(/\s+/).filter(Boolean).length : 0,
+    image_count: imageNodes.length,
+    images_missing_alt: imageNodes.filter((img) => !clean(img.getAttribute('alt') || '')).length,
+    broken_images: imageNodes.filter((img) => img.complete && img.naturalWidth === 0).map((img) => clean(img.getAttribute('src') || cssPath(img))).filter(Boolean).slice(0, 6),
+    scroll_width: Math.max(document.documentElement?.scrollWidth || 0, document.body?.scrollWidth || 0),
+    viewport_width: window.innerWidth || document.documentElement?.clientWidth || 0,
+    viewport_height: window.innerHeight || document.documentElement?.clientHeight || 0,
+    excerpt: bodyText.slice(0, 1200)
+  };
+})()"""
+
+
+def _parse_agent_browser_json(stdout: str) -> object:
+    text = (stdout or "").strip()
+    if not text:
+        raise ValueError("empty output")
+    return json.loads(text)
+
+
+def _agent_browser_run(agent_browser: str, session: str, args: list[str], *, timeout: int = PREVIEW_BROWSER_AUDIT_TIMEOUT_SECONDS) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [agent_browser, "--session-name", session, *args],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def _agent_browser_eval_snapshot(agent_browser: str, session: str) -> dict:
+    proc = _agent_browser_run(agent_browser, session, ["eval", _AGENT_BROWSER_SNAPSHOT_JS])
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or proc.stdout or "agent-browser eval failed").strip()[:300])
+    payload = _parse_agent_browser_json(proc.stdout)
+    if not isinstance(payload, dict):
+        raise RuntimeError("agent-browser returned non-object snapshot")
+    return payload
+
+
+def _agent_browser_console_messages(agent_browser: str, session: str) -> tuple[list[str], list[str]]:
+    console_errors: list[str] = []
+    page_errors: list[str] = []
+    try:
+        proc = _agent_browser_run(agent_browser, session, ["console"], timeout=8)
+        for line in (proc.stdout or "").splitlines():
+            clean = re.sub(r"\s+", " ", line).strip()
+            if not clean:
+                continue
+            if clean.startswith("[error]") or clean.startswith("[warning]"):
+                console_errors.append(clean[:240])
+    except Exception:
+        pass
+    try:
+        proc = _agent_browser_run(agent_browser, session, ["errors"], timeout=8)
+        for line in (proc.stdout or "").splitlines():
+            clean = re.sub(r"\s+", " ", line).strip()
+            if clean and not clean.startswith("✓") and clean not in {"✗", "✗ "}:
+                page_errors.append(clean[:240])
+    except Exception:
+        pass
+    return console_errors[:8], page_errors[:6]
+
+
+def _looks_like_transient_loading_snapshot(snapshot: dict) -> bool:
+    excerpt = str(snapshot.get("excerpt") or "").lower()
+    headings = " ".join(str(item) for item in (snapshot.get("headings") or [])).lower()
+    word_count = int(snapshot.get("word_count") or 0)
+    return word_count <= 8 and bool(re.search(r"\b(loading|memuat|please wait|spinner|preparing)\b", f"{headings} {excerpt}"))
+
+
+def _run_agent_browser_preview_audit(
+    preview_url: str,
+    project_dir: Path,
+    max_excerpt_chars: int = 800,
+    *,
+    project_signals: dict[str, object] | None = None,
+) -> tuple[dict | None, str | None]:
+    agent_browser = _resolve_agent_browser_binary()
+    if not agent_browser:
+        return None, "agent-browser CLI is not installed, so preview audit fell back to Playwright/HTML inspection."
+
+    session = f"appora-preview-{_sha256_text(preview_url)[:12]}-{uuid.uuid4().hex[:6]}"
+    try:
+        for args in (["set", "viewport", "1440", "900"], ["open", preview_url], ["wait", str(PREVIEW_BROWSER_AUDIT_SETTLE_MS)]):
+            proc = _agent_browser_run(agent_browser, session, args)
+            if proc.returncode != 0:
+                detail = (proc.stderr or proc.stdout or "command failed").strip()[:240]
+                return None, f"agent-browser audit command failed ({detail}), so preview audit fell back to Playwright/HTML inspection."
+
+        desktop_snapshot = _agent_browser_eval_snapshot(agent_browser, session)
+        if _looks_like_transient_loading_snapshot(desktop_snapshot):
+            _agent_browser_run(agent_browser, session, ["wait", str(max(900, PREVIEW_BROWSER_AUDIT_SETTLE_MS))])
+            desktop_snapshot = _agent_browser_eval_snapshot(agent_browser, session)
+
+        screenshot_path = str(Path(os.getenv("TMPDIR", "/tmp")) / f"appora-preview-audit-{_sha256_text(preview_url)[:16]}.png")
+        try:
+            screenshot_proc = _agent_browser_run(agent_browser, session, ["screenshot", screenshot_path], timeout=8)
+            if screenshot_proc.returncode == 0 and Path(screenshot_path).exists():
+                desktop_snapshot["screenshot_path"] = screenshot_path
+                desktop_snapshot["screenshot_viewport"] = "desktop"
+        except Exception:
+            pass
+
+        proc = _agent_browser_run(agent_browser, session, ["set", "viewport", "390", "844"])
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or "viewport command failed").strip()[:240]
+            return None, f"agent-browser mobile viewport failed ({detail}), so preview audit fell back to Playwright/HTML inspection."
+        _agent_browser_run(agent_browser, session, ["wait", str(min(PREVIEW_BROWSER_AUDIT_SETTLE_MS, 500))])
+        mobile_snapshot = _agent_browser_eval_snapshot(agent_browser, session)
+        if _looks_like_transient_loading_snapshot(mobile_snapshot):
+            _agent_browser_run(agent_browser, session, ["wait", str(max(900, PREVIEW_BROWSER_AUDIT_SETTLE_MS))])
+            mobile_snapshot = _agent_browser_eval_snapshot(agent_browser, session)
+
+        console_errors, page_errors = _agent_browser_console_messages(agent_browser, session)
+        snapshot = {
+            **desktop_snapshot,
+            "viewport": {
+                "width": desktop_snapshot.get("viewport_width"),
+                "height": desktop_snapshot.get("viewport_height"),
+            },
+            "mobile_viewport": {
+                "width": mobile_snapshot.get("viewport_width"),
+                "height": mobile_snapshot.get("viewport_height"),
+            },
+            "mobile_headings": mobile_snapshot.get("headings") or [],
+            "mobile_buttons": mobile_snapshot.get("buttons") or [],
+            "mobile_links": mobile_snapshot.get("links") or [],
+            "mobile_unlabeled_interactive": mobile_snapshot.get("unlabeled_interactive") or [],
+            "mobile_small_tap_targets": mobile_snapshot.get("small_tap_targets") or [],
+            "mobile_text_overflow_nodes": mobile_snapshot.get("text_overflow_nodes") or [],
+            "mobile_fixed_overlays": mobile_snapshot.get("fixed_overlays") or [],
+            "mobile_scroll_width": mobile_snapshot.get("scroll_width"),
+            "mobile_viewport_width": mobile_snapshot.get("viewport_width"),
+            "mobile_overflow_x": int(mobile_snapshot.get("scroll_width") or 0) > int(mobile_snapshot.get("viewport_width") or 0) + 8,
+            "desktop_overflow_x": int(desktop_snapshot.get("scroll_width") or 0) > int(desktop_snapshot.get("viewport_width") or 0) + 8,
+            "console_errors": console_errors,
+            "page_errors": page_errors,
+        }
+        return _build_preview_audit_result(
+            preview_url,
+            snapshot,
+            audit_mode="agent-browser",
+            max_excerpt_chars=max_excerpt_chars,
+            project_signals=project_signals,
+        ), None
+    except subprocess.TimeoutExpired:
+        return None, "agent-browser audit timed out, so preview audit fell back to Playwright/HTML inspection."
+    except Exception as exc:
+        return None, f"agent-browser audit failed ({str(exc)[:240]}), so preview audit fell back to Playwright/HTML inspection."
+    finally:
+        try:
+            _agent_browser_run(agent_browser, session, ["close"], timeout=5)
+        except Exception:
+            pass
+
+
 def _run_playwright_preview_audit(
     preview_url: str,
     project_dir: Path,
@@ -1534,7 +2271,7 @@ def _run_playwright_preview_audit(
     *,
     project_signals: dict[str, object] | None = None,
 ) -> tuple[dict | None, str | None]:
-    if not _browser_preview_audit_ready(project_dir):
+    if not _playwright_preview_audit_ready(project_dir):
         return None, "Playwright browser audit is not ready in this project/runtime yet, so preview audit fell back to HTML inspection."
 
     node_bin = _resolve_node_binary()
@@ -1767,6 +2504,16 @@ _SAFE_COMMAND_PREFIXES = (
     ("ruby", "-c"),
     ("dotnet", "test"),
     ("terraform", "validate"),
+    ("deno", "test"),
+    ("deno", "check"),
+    ("cmake", "--build"),
+    ("cmake", "-S"),
+    ("make", "test"),
+    ("swift", "test"),
+    ("mix", "test"),
+    ("docker", "compose", "config"),
+    ("docker-compose", "config"),
+    ("kubectl", "apply", "--dry-run=client"),
     ("tsc",),
     ("vite", "build"),
     ("vitest",),
@@ -1787,6 +2534,12 @@ _DESTRUCTIVE_GIT_ARGS = {"reset", "clean", "checkout", "restore", "rebase"}
 _SHELL_CHAIN_OPERATORS = {"&&"}
 _SHELL_UNSAFE_TOKENS = {";", "|", "||", "&", ">", ">>", "<", "<<", "$(", "`"}
 _SAFE_READ_COMMANDS = {"pwd", "ls", "find", "cat", "head", "tail", "wc"}
+
+
+def _strip_harmless_capture_redirect(command: str) -> tuple[str, bool]:
+    clean = str(command or "").strip()
+    next_clean = re.sub(r"\s+(?:2>&1|1>&2)\s*$", "", clean).strip()
+    return next_clean, next_clean != clean
 
 
 def _is_safe_cd_command(parts: list[str]) -> bool:
@@ -1846,7 +2599,7 @@ def _command_policy_decision_for_parts(clean: str, parts: list[str], *, access_m
         return CommandPolicyDecision(ok=True, command=clean, risk_level="safe", reason="Command baca/inspect relatif workspace boleh auto-run.", requires_approval=False)
 
     if access_mode == "trusted":
-        if executable in {"npm", "pnpm", "yarn", "bun", "npx", "node", "python", "python3", "pip", "pip3", "go", "cargo", "mvn", "gradle", "gradlew", "composer", "bundle", "ruby", "dotnet", "terraform", "tsx", "ts-node", "vite", "vitest", "jest", "eslint", "prettier", "playwright"}:
+        if executable in {"npm", "pnpm", "yarn", "bun", "npx", "node", "python", "python3", "pip", "pip3", "go", "cargo", "mvn", "gradle", "gradlew", "composer", "bundle", "ruby", "dotnet", "terraform", "deno", "cmake", "make", "swift", "mix", "docker", "docker-compose", "kubectl", "tsx", "ts-node", "vite", "vitest", "jest", "eslint", "prettier", "playwright"}:
             return CommandPolicyDecision(ok=True, command=clean, risk_level="safe", reason="Trusted Project mode: command project-scoped boleh auto-run.", requires_approval=False)
         if executable == "git":
             return CommandPolicyDecision(ok=True, command=clean, risk_level="safe", reason="Trusted Project mode: git non-destruktif boleh auto-run.", requires_approval=False)
@@ -1893,7 +2646,7 @@ def _agent_access_mode_for_project(project_root: str | None) -> str:
 
 
 def _command_policy_decision(command: str, *, access_mode: str | None = None, project_root: str | None = None) -> CommandPolicyDecision:
-    clean = str(command or "").strip()
+    clean, _stripped_capture = _strip_harmless_capture_redirect(command)
     resolved_access_mode = str(access_mode or _agent_access_mode_for_project(project_root)).strip().lower()
     if resolved_access_mode not in {"safe", "trusted"}:
         resolved_access_mode = "safe"
@@ -2578,22 +3331,16 @@ def run_start(req: RunStartReq, request: Request):
     # Check if this is a static project (no package.json or no runnable preview script)
     pj_path = proj / "package.json"
     is_static = not pj_path.exists()
-    preview_script = "dev"
     package_data: dict = {}
+    preview_launch_kind = "static"
+    preview_script: str | None = None
 
     if not is_static:
         try:
             data = json.loads(pj_path.read_text(encoding="utf-8"))
             package_data = data if isinstance(data, dict) else {}
-            scripts = data.get("scripts") or {}
-            if isinstance(scripts, dict) and "dev" in scripts:
-                preview_script = "dev"
-                is_static = False
-            elif isinstance(scripts, dict) and "preview" in scripts:
-                preview_script = "preview"
-                is_static = False
-            else:
-                is_static = True
+            preview_launch_kind, preview_script = _preview_launch_kind(package_data)
+            is_static = preview_launch_kind == "static"
         except Exception:
             is_static = True
 
@@ -2650,7 +3397,10 @@ def run_start(req: RunStartReq, request: Request):
                 raise HTTPException(400, f"Install failed\n\n--- package manager output (tail) ---\n{tail}")
 
         # strictPort so we know the port; if it's taken, user can run again (we'll pick a new port)
-        cmd = _package_run_script_command(manager_cmd, preview_script, port)
+        if preview_launch_kind == "vite":
+            cmd = _package_vite_command(proj, manager_name, manager_cmd, port)
+        else:
+            cmd = _package_run_script_command(manager_cmd, preview_script or "dev", port)
         logs.append(f"$ {_shell_join(cmd)}")
         proc = subprocess.Popen(cmd, cwd=str(proj), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
 
@@ -3154,6 +3904,17 @@ def preview_audit(req: PreviewAuditReq):
         requested_mode = "auto"
 
     if requested_mode != "html":
+        browser_audit, browser_warning = _run_agent_browser_preview_audit(
+            preview_url,
+            project_dir,
+            max_excerpt_chars=max_excerpt_chars,
+            project_signals=project_signals,
+        )
+        if browser_audit:
+            return browser_audit
+        if browser_warning:
+            warnings.append(browser_warning)
+
         browser_audit, browser_warning = _run_playwright_preview_audit(
             preview_url,
             project_dir,
@@ -3161,6 +3922,8 @@ def preview_audit(req: PreviewAuditReq):
             project_signals=project_signals,
         )
         if browser_audit:
+            if warnings:
+                browser_audit["runtime_warnings"] = [*browser_audit.get("runtime_warnings", []), *warnings]
             return browser_audit
         if browser_warning:
             warnings.append(browser_warning)
@@ -3277,6 +4040,7 @@ class AgentReq(BaseModel):
     preview_url: str | None = None
     editor_status: str | None = None
     asset_paths: list[str] | None = None
+    asset_aliases: dict[str, str] | None = None
     stream: bool = False
     background: bool = False
     auto_execute: bool = False
@@ -3291,6 +4055,8 @@ class ImageAssetResp(BaseModel):
     ok: bool
     path: str
     name: str
+    title: str | None = None
+    alias: str | None = None
     content_type: str | None = None
     size: int
 
@@ -3306,7 +4072,10 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
     memory_overview = get_agent_memory_overview(ws_root, project_root=proj_root)
     stack = detect_project_stack(project_dir) if project_dir.exists() else None
     node_runtime = bool(_resolve_node_binary())
+    agent_browser_ready = bool(_resolve_agent_browser_binary())
+    playwright_audit_ready = bool(project_dir.exists() and _playwright_preview_audit_ready(project_dir))
     browser_audit_ready = bool(project_dir.exists() and _browser_preview_audit_ready(project_dir))
+    preview_audit_backend = _browser_preview_audit_backend(project_dir) if project_dir.exists() else "html"
     supabase_enabled = has_supabase()
     friendly_free_tier = bool(getattr(settings_mod.settings, "friendly_free_tier_mode", True))
     context_budget = int(getattr(settings_mod.settings, "agent_context_char_budget", 48_000 if friendly_free_tier else 140_000) or 48_000)
@@ -3326,19 +4095,14 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "mcp": "MCP (Model Context Protocol) is an interoperability layer to standardize how the agent connects to external data sources and tools. MCP servers expose tools, but MCP itself is not a tool.",
             "skills": "Skills are higher-level workflow abstractions: curated instructions + prompting + decision logic + (optionally) one or more tools/MCP calls, to keep complex agentic work consistent, auditable, and scoped.",
         },
-        "personas": {
-            "clara": {
-                "build_mode": "full-agent",
-                "name": "Clara",
-                "vibe": "full preview product builder",
-                "default_scope": "broad, end-to-end delivery with the browser preview as the main surface",
+        "agent": {
+            "name": "Appora Agent",
+            "vibe": "autonomous coder",
+            "modes": {
+                "full-agent": "Preview-first surface for end-to-end delivery.",
+                "hybrid": "Workspace/editor-first surface for focused coding.",
             },
-            "raka": {
-                "build_mode": "hybrid",
-                "name": "Raka",
-                "vibe": "live coding copilot",
-                "default_scope": "surgical edits near the active file, preserve user architecture",
-            },
+            "same_capabilities": True,
         },
         "supports": {
             "graph_runtime": True,
@@ -3361,11 +4125,12 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "supabase_rag_ready": supabase_rag_ready,
             "component_library_awareness": True,
             "headless_browser_runtime": browser_audit_ready,
-            "playwright_preview_audit": browser_audit_ready,
+            "agent_browser_preview_audit": agent_browser_ready,
+            "playwright_preview_audit": playwright_audit_ready,
             "webcontainer_runtime": False,
             "browser_dom_audit": browser_audit_ready,
             "preview_quality_checks": True,
-            "preview_audit_mode": "browser" if browser_audit_ready else "html",
+            "preview_audit_mode": preview_audit_backend,
             "tool_actions": ["shell", "mcp", "tool"],
             "streaming_transport": True,
             "native_provider_token_streaming": True,
@@ -3410,7 +4175,8 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "playwright": bool(stack.has_playwright) if stack else False,
             "webcontainer": bool(stack.has_webcontainer) if stack else False,
             "node_runtime": node_runtime,
-            "preview_audit_mode": "browser" if browser_audit_ready else "html",
+            "agent_browser": agent_browser_ready,
+            "preview_audit_mode": preview_audit_backend,
         },
         "local_tools": [
             {
@@ -3517,8 +4283,15 @@ def _sanitize_uploaded_filename(name: str) -> str:
     return f"{stem[:50]}{suffix}"
 
 
+def _sanitize_asset_alias(value: str | None, fallback: str = "image") -> str:
+    raw = (value or "").strip().lstrip("@")
+    alias = "".join(ch.lower() if ch.isalnum() else "-" for ch in raw).strip("-")
+    alias = re.sub(r"-{2,}", "-", alias)
+    return (alias or fallback)[:40]
+
+
 @app.post("/api/assets/image", response_model=ImageAssetResp)
-async def upload_image_asset(project_root: str = Form("."), file: UploadFile = File(...)):
+async def upload_image_asset(project_root: str = Form("."), file: UploadFile = File(...), title: str | None = Form(None)):
     ws_root = _ws()
     proj_root = (project_root or ".").strip() or "."
     _hydrate_hosted_project(ws_root, proj_root)
@@ -3546,7 +4319,9 @@ async def upload_image_asset(project_root: str = Form("."), file: UploadFile = F
     candidate.write_bytes(data)
 
     rel = str(candidate.relative_to(ws_root))
-    return ImageAssetResp(ok=True, path=rel, name=candidate.name, content_type=content_type or None, size=len(data))
+    fallback_alias = _sanitize_asset_alias(candidate.stem, "image")
+    alias = _sanitize_asset_alias(title, fallback_alias)
+    return ImageAssetResp(ok=True, path=rel, name=candidate.name, title=title or alias, alias=alias, content_type=content_type or None, size=len(data))
 
 
 @app.get("/api/agent/jobs/{job_id}")
@@ -3572,6 +4347,22 @@ def agent_job_events(job_id: str, after_id: int = 0, limit: int = 200):
     remote = list_agent_job_events(owner_id=owner_id, job_id=job_id, after_id=max(0, int(after_id or 0)), limit=limit)
     if remote is not None:
         return {"ok": True, "events": remote, "source": "supabase"}
+    raise HTTPException(404, "agent job not found")
+
+
+@app.get("/api/agent/jobs/{job_id}/observability")
+def agent_job_observability(job_id: str):
+    owner_id = CURRENT_USER_ID.get()
+    local = _local_agent_jobs().get(job_id)
+    if isinstance(local, dict):
+        events = list(local.get("events") or [])
+        result = local.get("result") if isinstance(local.get("result"), dict) else {}
+        return {"ok": True, "observability": build_agent_observability(events, result=result), "source": "session"}
+    remote = get_agent_job(owner_id=owner_id, job_id=job_id)
+    if remote:
+        events = list_agent_job_events(owner_id=owner_id, job_id=job_id, after_id=0, limit=1000) or []
+        result = remote.get("result") if isinstance(remote.get("result"), dict) else {}
+        return {"ok": True, "observability": build_agent_observability(events, result=result), "source": "supabase"}
     raise HTTPException(404, "agent job not found")
 
 
@@ -3690,7 +4481,236 @@ def _prepare_agent_out_changes(ws_root: Path, normalized_changes: list) -> list[
     return out_changes
 
 
+def _merge_repair_changes(base_changes: list[dict[str, object]], repair_changes: list[dict[str, object]]) -> list[dict[str, object]]:
+    if not repair_changes:
+        return list(base_changes)
+    merged: list[dict[str, object]] = []
+    index_by_path: dict[str, int] = {}
+    for change in list(base_changes or []):
+        if not isinstance(change, dict):
+            continue
+        path = str(change.get("path") or "").strip()
+        if not path:
+            continue
+        index_by_path[path] = len(merged)
+        merged.append(change)
+    for change in list(repair_changes or []):
+        if not isinstance(change, dict):
+            continue
+        path = str(change.get("path") or "").strip()
+        if not path:
+            continue
+        if path in index_by_path:
+            merged[index_by_path[path]] = change
+        else:
+            index_by_path[path] = len(merged)
+            merged.append(change)
+    return merged
+
+
+_FINAL_INERT_BUTTON_RE = re.compile(r"<(?P<tag>button|Button)\b(?P<attrs>[^>]*)>(?P<body>.*?)</(?P=tag)>", re.IGNORECASE | re.DOTALL)
+
+
+def _gate_inert_final_buttons_in_changes(changes: list[dict[str, object]]) -> tuple[list[dict[str, object]], list[str]]:
+    gated_paths: list[str] = []
+    next_changes: list[dict[str, object]] = []
+    for change in list(changes or []):
+        if not isinstance(change, dict):
+            continue
+        path = str(change.get("path") or "").strip()
+        content = change.get("new_content")
+        if not path or not isinstance(content, str) or PurePosixPath(path).suffix.lower() not in {".tsx", ".jsx", ".html"}:
+            next_changes.append(change)
+            continue
+        touched = False
+
+        def repl(match: re.Match[str]) -> str:
+            nonlocal touched
+            tag = str(match.group("tag") or "")
+            attrs = str(match.group("attrs") or "")
+            body = str(match.group("body") or "")
+            body_text = re.sub(r"<[^>]+>", " ", body)
+            body_text = re.sub(r"\s+", " ", body_text).strip()
+            if not body_text:
+                return match.group(0)
+            lowered_attrs = attrs.lower()
+            if any(marker in lowered_attrs for marker in ("onclick=", "href=", "to=", "disabled", "aria-disabled", "aschild")):
+                return match.group(0)
+            if re.search(r"\btype\s*=\s*['\"]submit['\"]", attrs, flags=re.IGNORECASE):
+                return match.group(0)
+            touched = True
+            spacer = "" if attrs.endswith(" ") or not attrs else " "
+            return f"<{tag}{attrs}{spacer}type=\"button\" disabled aria-disabled=\"true\">{body}</{tag}>"
+
+        next_content = _FINAL_INERT_BUTTON_RE.sub(repl, content)
+        if touched:
+            gated_paths.append(path)
+            next_change = dict(change)
+            next_change["new_content"] = next_content
+            next_changes.append(next_change)
+        else:
+            next_changes.append(change)
+    return next_changes, gated_paths
+
+
+def _neutralize_fake_business_data(content: str) -> tuple[str, bool]:
+    next_content = str(content or "")
+    replacements: tuple[tuple[str, str], ...] = (
+        (r"href\s*=\s*['\"](?:https?://)?(?:wa\.me|api\.whatsapp\.com)[^'\"]*['\"]", 'aria-disabled="true" data-contact-status="kontak-belum-dikonfigurasi"'),
+        (r"(?:\+?62|0)8\d{7,13}\b", "kontak-belum-dikonfigurasi"),
+        (r"\b[A-Za-z0-9._%+-]+@(?:example|demo|test|domain)[A-Za-z0-9.-]*\b", "email-belum-dikonfigurasi"),
+        (r"\b(?:example\.com|example\.id|test@example|demo@example|nama@domain)\b", "domain-belum-dikonfigurasi"),
+        (r"\b(?:Jl\.?|Jalan)\s+(?:Contoh|Dummy|Sample|Placeholder)\b[^<\n]{0,80}", "Alamat belum dikonfigurasi"),
+        (r"\bNo\.\s*123\b", "Nomor belum dikonfigurasi"),
+        (r"\b(?:alamat|nomor|no hp|whatsapp|wa)\s*:\s*(?:contoh|dummy|isi|ganti|placeholder)\b", "Kontak belum dikonfigurasi"),
+        (r"\bsejak\s+(?:19|20)\d{2}\b", "siap dikonfigurasi"),
+        (r"\b(?:\d+(?:[.,]\d+)?\s*[Kk]\+|\d{3,}\+)\s+(?:pelanggan|customer|pesanan|order|transaksi|cabang)\b", "banyak pelanggan"),
+        (r"\b\d+(?:[.,]\d+)?\s*(?:rating|bintang|star)\b", "ulasan pelanggan"),
+        (r"\b(?:buka|jam\s+operasional|open)\s+\d{1,2}[:.]\d{2}\s*(?:-|sampai|–)\s*\d{1,2}[:.]\d{2}\b", "Jam operasional belum dikonfigurasi"),
+        (r"\[(?:tambahkan|isi|ganti|placeholder)[^\]]+\]", "Kontak belum dikonfigurasi"),
+    )
+    for pattern, replacement in replacements:
+        next_content = re.sub(pattern, replacement, next_content, flags=re.IGNORECASE)
+    return next_content, next_content != content
+
+
+def _gate_fake_business_data_in_changes(changes: list[dict[str, object]]) -> tuple[list[dict[str, object]], list[str]]:
+    gated_paths: list[str] = []
+    next_changes: list[dict[str, object]] = []
+    for change in list(changes or []):
+        if not isinstance(change, dict):
+            continue
+        path = str(change.get("path") or "").strip()
+        content = change.get("new_content")
+        if not path or not isinstance(content, str) or PurePosixPath(path).suffix.lower() not in {".tsx", ".jsx", ".html", ".css"}:
+            next_changes.append(change)
+            continue
+        next_content, touched = _neutralize_fake_business_data(content)
+        if touched:
+            gated_paths.append(path)
+            next_change = dict(change)
+            next_change["new_content"] = next_content
+            next_changes.append(next_change)
+        else:
+            next_changes.append(change)
+    return next_changes, gated_paths
+
+
+def _reverify_merged_verifier_output(req: AgentReq, ws_root: Path, changes: list[dict[str, object]], actions: list[dict]) -> dict:
+    from . import agent_runtime as runtime
+
+    project_root = str(req.project_root or ".").strip().strip("/") or "."
+    try:
+        project_dir = safe_join(ws_root, project_root)
+    except Exception:
+        project_dir = ws_root
+
+    all_files: list[str] = []
+    if project_dir.exists():
+        try:
+            for path in _iter_project_export_files(project_dir):
+                all_files.append(str(PurePosixPath(path.relative_to(project_dir))))
+        except Exception:
+            all_files = []
+
+    relevant_files: dict[str, str] = {}
+    for change in list(changes or []):
+        if not isinstance(change, dict):
+            continue
+        path = str(change.get("path") or "").strip()
+        content = change.get("new_content")
+        if not path or not isinstance(content, str):
+            continue
+        local_path = runtime._localize_project_rel(path, project_root)
+        relevant_files[path.lstrip("/")] = content
+        if local_path:
+            relevant_files[local_path] = content
+
+    ctx = SimpleNamespace(
+        project_root=project_root,
+        project_dir=project_dir,
+        all_files=all_files,
+        relevant_files=relevant_files,
+        attached_assets=list(getattr(req, "asset_paths", None) or []),
+        attached_asset_aliases=dict(getattr(req, "asset_aliases", None) or {}),
+        is_full_agent=str(getattr(req, "build_mode", "") or "").strip() == "full-agent",
+    )
+
+    def severity(name: str) -> str:
+        return runtime._verifier_check_severity(name)
+
+    def check(name: str, ok: bool, detail: str) -> dict[str, object]:
+        return {"name": name, "ok": ok, "detail": str(detail)[:240], "severity": severity(name)}
+
+    invalid_paths = [
+        str(item.get("path") or "")
+        for item in changes
+        if not isinstance(item, dict)
+        or not str(item.get("path") or "").strip()
+        or ".." in str(item.get("path") or "").split("/")
+    ]
+    change_paths = [
+        str(item.get("path") or "").strip().lstrip("/")
+        for item in changes
+        if isinstance(item, dict) and str(item.get("path") or "").strip()
+    ]
+    duplicate_paths = sorted({path for path in change_paths if change_paths.count(path) > 1})
+    empty_files = [
+        str(item.get("path") or "")
+        for item in changes
+        if isinstance(item, dict)
+        and isinstance(item.get("new_content"), str)
+        and not item.get("new_content")
+        and not runtime._allows_empty_file(str(item.get("path") or ""))
+    ]
+    shell_actions = [item for item in actions if isinstance(item, dict) and str(item.get("type") or "").lower() == "shell"]
+    invalid_shell = [item for item in shell_actions if not isinstance(item.get("command"), str) or not str(item.get("command") or "").strip()]
+    missing_imports = runtime._missing_relative_imports(ctx, changes)
+    missing_dependencies = runtime._missing_external_dependencies(ctx, changes, actions)
+    root_route_issues = runtime._root_route_entrypoint_issues(ctx, changes)
+    style_issues = runtime._frontend_style_runtime_issues(ctx, changes)
+    asset_quality_issues = runtime._frontend_asset_quality_issues(ctx, changes)
+    referenced_asset_issues = runtime._mentioned_uploaded_asset_usage_issues(ctx, changes, str(req.input or ""))
+    business_issues = runtime._frontend_business_data_honesty_issues(ctx, changes)
+    interaction_issues = runtime._frontend_interaction_integrity_issues(ctx, changes)
+    maintainability_issues = runtime._frontend_maintainability_integrity_issues(ctx, changes)
+    raw_tool_actions = [
+        item for item in actions if isinstance(item, dict) and str(item.get("type") or "").lower() in {"tool", "mcp"}
+    ]
+
+    checks = [
+        check("has-work-output", bool(changes or actions), "Build request produced file changes or runtime actions." if changes or actions else "Build request produced no file changes/actions."),
+        check("valid-change-paths", not invalid_paths, "All change paths look project-relative." if not invalid_paths else f"Invalid paths: {', '.join(invalid_paths[:5])}"),
+        check("unique-change-paths", not duplicate_paths, "No duplicate file changes." if not duplicate_paths else f"Duplicate change paths: {', '.join(duplicate_paths[:8])}"),
+        check("non-empty-file-content", not empty_files, "Changed files have content." if not empty_files else f"Empty outputs: {', '.join(empty_files[:5])}"),
+        check("valid-shell-actions", not invalid_shell, "Shell actions have commands." if not invalid_shell else f"{len(invalid_shell)} shell action(s) missing command."),
+        check("relative-imports-resolve", not missing_imports, "Changed relative imports resolve against the project tree." if not missing_imports else f"Missing relative imports: {', '.join(missing_imports[:6])}"),
+        check("external-dependencies-declared", not missing_dependencies, "Changed external imports are declared or installed by shell actions." if not missing_dependencies else f"Undeclared external imports: {', '.join(missing_dependencies[:6])}"),
+        check("root-route-entrypoint", not root_route_issues, "SPA entrypoint renders a real page at '/'." if not root_route_issues else "; ".join(root_route_issues[:2])),
+        check("frontend-style-runtime", not style_issues, "Frontend styling runtime matches the project setup." if not style_issues else "; ".join(style_issues[:2])),
+        check("frontend-asset-quality", not asset_quality_issues, "Frontend media/assets avoid fake placeholder sources." if not asset_quality_issues else "; ".join(asset_quality_issues[:2])),
+        check("referenced-asset-usage", not referenced_asset_issues, "Explicit @asset references are used in the implementation." if not referenced_asset_issues else "; ".join(referenced_asset_issues[:2])),
+        check("frontend-business-data-honesty", not business_issues, "Frontend does not invent fake business contact/data." if not business_issues else "; ".join(business_issues[:2])),
+        check("frontend-interaction-integrity", not interaction_issues, "Frontend interactions are wired, valid anchors, or visibly gated." if not interaction_issues else "; ".join(interaction_issues[:2])),
+        check("frontend-maintainability-integrity", not maintainability_issues, "Frontend implementation stays maintainable for product-scale UI." if not maintainability_issues else "; ".join(maintainability_issues[:2])),
+        check("no-unexecuted-tool-actions", not raw_tool_actions, "No raw tool/MCP actions remain in final output." if not raw_tool_actions else f"{len(raw_tool_actions)} raw tool/MCP action(s) were not executed."),
+    ]
+    if ctx.is_full_agent:
+        checks.append(check("full-agent-coverage", len(changes) >= 2 or bool(actions), "Full-agent output touches multiple files or uses project tooling." if len(changes) >= 2 or actions else "Full-agent output may be too small for an app-level task."))
+    return {"verification": checks, "warnings": [{"phase": "verifier-repair", "message": "Merged repair output was re-verified before backend apply."}]}
+
+
 def _execution_needs_repair(execution: dict[str, object]) -> bool:
+    if not execution:
+        return False
+    if _execution_has_primary_failure(execution):
+        return True
+    if _preview_polish_debt(execution):
+        return True
+    return False
+
+
+def _execution_has_primary_failure(execution: dict[str, object]) -> bool:
     if not execution:
         return False
     apply = execution.get("apply")
@@ -3708,8 +4728,6 @@ def _execution_needs_repair(execution: dict[str, object]) -> bool:
     preview_audit = execution.get("preview_audit")
     if isinstance(preview_audit, dict) and preview_audit.get("ok") is False and not preview_audit.get("skipped"):
         return True
-    if _preview_polish_debt(execution):
-        return True
     return False
 
 
@@ -3721,6 +4739,8 @@ def _preview_audit_failed(execution: dict[str, object]) -> bool:
 _PREVIEW_POLISH_DEBT_CATEGORIES = {
     "metadata",
     "mobile-tap-targets",
+    "responsive",
+    "source-overflow-risk",
     "source-quality",
     "source-type-discipline",
     "visual-polish",
@@ -3741,6 +4761,37 @@ def _preview_polish_debt(execution: dict[str, object]) -> list[dict[str, object]
         if category not in _PREVIEW_POLISH_DEBT_CATEGORIES:
             continue
         debts.append(issue)
+    return debts[:8]
+
+
+def _preview_polish_debt_requires_llm_repair(execution: dict[str, object]) -> bool:
+    categories = {
+        str(item.get("category") or "").strip()
+        for item in _preview_polish_debt(execution)
+        if isinstance(item, dict)
+    }
+    return bool(categories & {
+        "product-depth",
+        "copy-specificity",
+        "source-quality",
+        "source-type-discipline",
+        "mobile-tap-targets",
+        "responsive",
+        "source-overflow-risk",
+        "visual-polish",
+    })
+
+
+def _preview_state_readiness_debt(execution: dict[str, object]) -> list[dict[str, object]]:
+    preview_audit = execution.get("preview_audit")
+    if not isinstance(preview_audit, dict) or preview_audit.get("skipped") or preview_audit.get("ok") is not True:
+        return []
+    debts: list[dict[str, object]] = []
+    for issue in list(preview_audit.get("issue_details") or []):
+        if not isinstance(issue, dict) or issue.get("severity") != "warning":
+            continue
+        if str(issue.get("category") or "").strip() in {"state-loading", "state-error", "state-empty"}:
+            debts.append(issue)
     return debts[:8]
 
 
@@ -4138,6 +5189,19 @@ def _execution_completion_report(execution: dict[str, object]) -> dict[str, obje
     criteria: list[dict[str, str]] = []
     residual_risks: list[str] = []
     ok = bool(execution.get("ok"))
+    primary_failure = _execution_has_primary_failure(execution)
+    repairs = execution.get("repairs")
+    repair_attempted = bool(isinstance(repairs, list) and repairs)
+    last_repair_execution = repairs[-1].get("execution") if isinstance(repairs, list) and repairs and isinstance(repairs[-1], dict) else None
+    clean_repair_success = bool(
+        isinstance(last_repair_execution, dict)
+        and last_repair_execution.get("ok")
+        and not _execution_has_primary_failure(last_repair_execution)
+        and not _preview_polish_debt(last_repair_execution)
+    )
+    polish_debt = _preview_polish_debt(execution)
+    effective_polish_debt = [] if clean_repair_success else polish_debt
+    polish_only_after_repair = bool(ok and effective_polish_debt and repair_attempted and not primary_failure)
 
     apply_result = execution.get("apply")
     if isinstance(apply_result, dict):
@@ -4201,21 +5265,19 @@ def _execution_completion_report(execution: dict[str, object]) -> dict[str, obje
             if polish_debt:
                 criteria.append(_criterion(
                     "preview-polish",
-                    "failed" if ok else "pending",
+                    "warning" if polish_only_after_repair else ("failed" if ok else "pending"),
                     f"warnings_to_polish={len(polish_debt)} categories={', '.join(sorted({str(item.get('category') or '') for item in polish_debt})[:4])}",
                 ))
                 residual_risks.append(f"Preview polish still has {len(polish_debt)} production warning(s).")
     else:
         criteria.append(_criterion("preview", "skipped", "No preview surface or preview URL was available for this run."))
 
-    repairs = execution.get("repairs")
     repaired_success = False
     if isinstance(repairs, list) and repairs:
-        last_execution = repairs[-1].get("execution") if isinstance(repairs[-1], dict) else None
-        repaired_success = bool(isinstance(last_execution, dict) and last_execution.get("ok"))
+        repaired_success = bool(isinstance(last_repair_execution, dict) and last_repair_execution.get("ok"))
         criteria.append(_criterion(
             "repair-loop",
-            "passed" if repaired_success else "failed",
+            "passed" if repaired_success else ("warning" if polish_only_after_repair else "failed"),
             f"attempts={len(repairs)}",
         ))
     else:
@@ -4249,17 +5311,28 @@ def _execution_completion_report(execution: dict[str, object]) -> dict[str, obje
             residual_risks.append(f"Next move: {next_move}")
 
     failed_labels = [item["label"] for item in criteria if item.get("status") == "failed"]
-    polish_debt = _preview_polish_debt(execution)
-    completion_state = "complete" if ok and not polish_debt else ("polish-needed" if ok else "blocked")
+    hard_failed_labels = [label for label in failed_labels if label != "preview-polish"]
+    hard_failed = bool(hard_failed_labels)
+    completion_state = (
+        "blocked"
+        if hard_failed
+        else (
+            "complete"
+            if ok and not effective_polish_debt
+            else ("complete-with-warnings" if polish_only_after_repair else ("polish-needed" if ok else "blocked"))
+        )
+    )
     if completion_state == "complete":
         summary = "Complete: backend execution criteria passed or were intentionally skipped."
+    elif completion_state == "complete-with-warnings":
+        summary = f"Complete with warnings: validation passed, but preview audit still has {len(effective_polish_debt)} production warning(s)."
     elif completion_state == "polish-needed":
-        summary = f"Polish needed: preview audit still has {len(polish_debt)} production warning(s)."
+        summary = f"Polish needed: preview audit still has {len(effective_polish_debt)} production warning(s)."
     else:
-        summary = f"Blocked: {', '.join(failed_labels) or 'execution'} still failing."
+        summary = f"Blocked: {', '.join(hard_failed_labels or failed_labels) or 'execution'} still failing."
 
     return {
-        "ok": ok and not polish_debt,
+        "ok": bool(not hard_failed and ok and (not effective_polish_debt or completion_state == "complete-with-warnings")),
         "state": completion_state,
         "summary": summary,
         "criteria": criteria,
@@ -4295,6 +5368,7 @@ def _execution_repair_report(execution: dict[str, object], max_chars: int = 9000
             "summary": preview_audit.get("summary"),
             "repair_brief": preview_audit.get("repair_brief"),
             "visual_summary": preview_audit.get("visual_summary"),
+            "evidence_pack": preview_audit.get("evidence_pack"),
             "issue_details": list(preview_audit.get("issue_details") or [])[:8],
         }
     report = json.dumps(
@@ -4315,6 +5389,28 @@ def _execution_repair_report(execution: dict[str, object], max_chars: int = 9000
         indent=2,
     )
     return report[:max_chars]
+
+
+def _preview_repair_targets_report(execution: dict[str, object]) -> str:
+    preview_audit = execution.get("preview_audit")
+    if not isinstance(preview_audit, dict):
+        return ""
+    evidence_pack = preview_audit.get("evidence_pack") if isinstance(preview_audit.get("evidence_pack"), dict) else {}
+    targets = [item for item in list(evidence_pack.get("repair_targets") or []) if isinstance(item, dict)]
+    if not targets:
+        return ""
+    lines = ["PREVIEW REPAIR TARGETS:"]
+    for index, target in enumerate(targets[:6], start=1):
+        files = ", ".join(str(item) for item in list(target.get("likely_files") or [])[:5]) or "(inspect relevant component/CSS files)"
+        selectors = ", ".join(str(item) for item in list(target.get("selectors") or [])[:5]) or "(none)"
+        evidence = " | ".join(str(item) for item in list(target.get("evidence") or [])[:4])
+        lines.append(
+            f"{index}. {target.get('kind')} priority={target.get('priority')} files={files} selectors={selectors} action={target.get('action')}"
+        )
+        if evidence:
+            lines.append(f"   evidence: {evidence[:600]}")
+    lines.append("Use these targets as the repair worklist. Change the listed source files/selectors before rerunning preview; shell/install-only actions are not sufficient for preview blockers.")
+    return "\n".join(lines)
 
 
 def _execution_changed_paths(execution: dict[str, object]) -> list[str]:
@@ -4691,7 +5787,7 @@ def _emit_command_end_events(emit, *, tool: str, phase: str, project_root: str, 
 
 
 def _normalize_project_scoped_shell_command(command: str, *, cwd_label: str, project_root: str) -> tuple[str, str, str | None]:
-    clean = str(command or "").strip()
+    clean, stripped_capture = _strip_harmless_capture_redirect(command)
     current_cwd = str(cwd_label or ".").strip().strip("/") or "."
     root = str(project_root or ".").strip().strip("/") or "."
     try:
@@ -4700,19 +5796,51 @@ def _normalize_project_scoped_shell_command(command: str, *, cwd_label: str, pro
         return clean, current_cwd, None
     normalized_parts = list(parts)
     note_parts: list[str] = []
+    if stripped_capture:
+        note_parts.append("Removed harmless shell stream redirection; Appora already captures stdout and stderr.")
+
+    def target_points_to_project(target_value: str) -> bool:
+        target = str(target_value or "").strip().strip("\"'")
+        if not target:
+            return False
+        target_posix = target.replace("\\", "/").rstrip("/")
+        root_posix = root.replace("\\", "/").rstrip("/")
+        root_name = PurePosixPath(root_posix).name
+        if target_posix in {root_posix, f"./{root_posix}", root_name, f"./{root_name}", "."}:
+            return True
+        return bool(root_name and PurePosixPath(target_posix).name == root_name)
+
     if len(parts) >= 4 and parts[0] == "cd" and parts[2] in _SHELL_CHAIN_OPERATORS:
         target = str(parts[1] or "").strip().strip("/")
         if target and not target.startswith(("/", "~")) and ".." not in PurePosixPath(target.replace("\\", "/")).parts:
-            root_name = PurePosixPath(root).name
-            target_is_project = target in {root, f"./{root}", root_name, f"./{root_name}", "."}
-            if target_is_project:
+            if target_points_to_project(target):
                 normalized_parts = parts[3:]
                 if normalized_parts:
                     current_cwd = root if current_cwd == "." and target not in {".", "./."} else current_cwd
                     note_parts.append(f"Normalized redundant `cd {target} &&` because backend already runs shell commands inside the project cwd.")
+    elif len(parts) >= 5 and parts[0] == "cd" and str(parts[1]).lower() == "/d" and parts[3] in _SHELL_CHAIN_OPERATORS:
+        target = str(parts[2] or "").strip()
+        if target_points_to_project(target):
+            normalized_parts = parts[4:]
+            if normalized_parts:
+                current_cwd = root if current_cwd == "." else current_cwd
+                note_parts.append(
+                    f"Normalized Windows-style `cd /d {target} &&` because Appora runs shell commands inside the Linux project cwd."
+                )
     if len(normalized_parts) >= 3 and normalized_parts[0] == "python" and normalized_parts[1] == "-m" and normalized_parts[2] in {"compileall", "pytest", "unittest"}:
         normalized_parts[0] = "python3"
         note_parts.append("Normalized `python` to `python3` for Appora's local Python runtime.")
+    if current_cwd == root and root != "." and normalized_parts:
+        for index, value in enumerate(list(normalized_parts)):
+            raw = str(value or "")
+            if raw == root:
+                normalized_parts[index] = "."
+                note_parts.append("Localized project-root path argument because command cwd is already the project root.")
+                continue
+            prefix = root.rstrip("/") + "/"
+            if raw.startswith(prefix):
+                normalized_parts[index] = raw[len(prefix):] or "."
+                note_parts.append("Localized project-prefixed path argument because command cwd is already the project root.")
     normalized_command = shlex.join(normalized_parts)
     if normalized_command == clean and not note_parts:
         return clean, current_cwd, None
@@ -4987,27 +6115,36 @@ def _run_backend_repair_pass(req: AgentReq, execution: dict[str, object], emit, 
     project_root = str(req.project_root or ".").strip().strip("/") or "."
     failure_analysis = _execution_failure_analysis(execution)
     polish_debt = _preview_polish_debt(execution)
+    state_readiness_debt = _preview_state_readiness_debt(execution)
     emit("status", {"phase": "executing_repair", "message": f"Backend harness running repair pass {repair_index} from execution evidence..."})
     repair_prompt = "\n\n".join([
-        f"BACKEND AUTO-EXECUTE REPAIR PASS {repair_index}:",
-        "The previous backend execution produced failing apply/shell/validation evidence.",
-        "If build/validation already passes but preview audit still has production-polish warnings, treat those warnings as the active objective and return concrete source fixes.",
-        "Production-polish warning fixes include: specific document title/meta description, accessible tap target sizing, removing loose any/as any, eliminating generic copy, and improving visible product depth.",
-        "Repair the project now with concrete file changes and only safe project-scoped shell actions if needed.",
-        "If earlier repair passes failed, use their evidence and choose a different concrete fix.",
-        "Use the failure_analysis signature to detect repeated failures. If repeated_failure is true, change strategy instead of making the same local edit again.",
-        "Use failure_analysis.summary and failure_analysis.suggested_next_move as the repair objective.",
-        "If command failures were already replayed successfully by earlier repairs, focus the remaining preview, responsive, source-quality, or apply blockers.",
-        "If the active failure is preview_audit/responsive/visual quality, return CSS/layout/component changes; install-only shell actions do not resolve preview blockers.",
-        "If the active failure is a TypeScript/JSX parse error, rewrite the complete failing component/file into valid TSX instead of patching a small JSX fragment.",
-        "Prefer simple, balanced JSX structure over clever inline expressions during repair; one valid full-file replacement is better than multiple risky local patches.",
-        "Do not repeat the same failing command blindly unless your changes address the failure.",
-        f"Original user request:\n{req.input}",
-        f"Failure analysis:\n{json.dumps(failure_analysis, ensure_ascii=False, indent=2)}",
-        f"Preview polish debt:\n{json.dumps(polish_debt, ensure_ascii=False, indent=2)}",
-        f"Current file context after failed execution:\n{_repair_file_context(project_root, execution)}",
-        f"Repair replay plan:\n{_repair_replay_plan(execution)}",
-        f"Execution evidence:\n{_execution_repair_report(execution)}",
+        part for part in [
+            f"BACKEND AUTO-EXECUTE REPAIR PASS {repair_index}:",
+            "The previous backend execution produced failing apply/shell/validation/preview evidence.",
+            "If build/validation already passes but preview audit still has production-polish warnings, treat those warnings as the active objective and return concrete source fixes.",
+            "Production-polish warning fixes include: specific document title/meta description, accessible tap target sizing, removing loose any/as any, eliminating generic copy, and improving visible product depth.",
+            "If failure_analysis.primary_failure starts with preview audit, do not return shell-only or install-only actions; return concrete TSX/CSS/HTML source changes and let backend rerun build/preview.",
+            "Repair the project now with concrete file changes and only safe project-scoped shell actions if needed.",
+            "If a scaffold generator command such as npm create/npx init was blocked, do not retry it. Create or repair package.json, index.html, src files, and CSS directly, then use npm install/npm run build.",
+            "If earlier repair passes failed, use their evidence and choose a different concrete fix.",
+            "Use the failure_analysis signature to detect repeated failures. If repeated_failure is true, change strategy instead of making the same local edit again.",
+            "Use failure_analysis.summary and failure_analysis.suggested_next_move as the repair objective.",
+            "If command failures were already replayed successfully by earlier repairs, focus the remaining preview, responsive, source-quality, or apply blockers.",
+            "If the active failure is preview_audit/responsive/visual quality, return CSS/layout/component changes; install-only shell actions do not resolve preview blockers.",
+            "If the active failure is a TypeScript/JSX parse error, rewrite the complete failing component/file into valid TSX instead of patching a small JSX fragment.",
+            "Prefer simple, balanced JSX structure over clever inline expressions during repair; one valid full-file replacement is better than multiple risky local patches.",
+            "If the only remaining preview issues are state-loading/state-error/state-empty, do not redesign or rewrite the page. Add small relevant loading/error/empty UI branches near the existing data/form/list flow, or explain why the page is static if no dynamic flow exists.",
+            "Do not repeat the same failing command blindly unless your changes address the failure.",
+            f"Original user request:\n{req.input}",
+            f"Failure analysis:\n{json.dumps(failure_analysis, ensure_ascii=False, indent=2)}",
+            f"Preview polish debt:\n{json.dumps(polish_debt, ensure_ascii=False, indent=2)}",
+            f"Preview state-readiness debt:\n{json.dumps(state_readiness_debt, ensure_ascii=False, indent=2)}",
+            _preview_repair_targets_report(execution),
+            f"Current file context after failed execution:\n{_repair_file_context(project_root, execution)}",
+            f"Repair replay plan:\n{_repair_replay_plan(execution)}",
+            f"Execution evidence:\n{_execution_repair_report(execution)}",
+        ]
+        if str(part or "").strip()
     ])
     repair_req = AgentReq(
         input=repair_prompt,
@@ -5021,6 +6158,7 @@ def _run_backend_repair_pass(req: AgentReq, execution: dict[str, object], emit, 
         preview_url=req.preview_url,
         editor_status="Backend repair after validation failure",
         asset_paths=req.asset_paths,
+        asset_aliases=req.asset_aliases,
         stream=False,
         background=False,
         auto_execute=False,
@@ -5138,6 +6276,8 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
         "ok": True,
     }
 
+    shell_actions = _agent_shell_actions(actions)
+
     if out_changes:
         apply_paths = [
             str(change.get("path") or "")
@@ -5199,7 +6339,6 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
             warnings=apply_result.get("warnings") or [],
         ))
 
-    shell_actions = _agent_shell_actions(actions)
     if shell_actions:
         shell_commands = [action.command for action in shell_actions]
         emit("status", {"phase": "executing_shell", "message": "Backend harness running agent shell actions..."})
@@ -5250,7 +6389,7 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
             results=_shell_event_results(shell_result.get("results")),
         ))
 
-    if out_changes:
+    if out_changes or shell_actions:
         try:
             project_dir = safe_join(_ws(), project_root)
             validation_commands = _infer_validation_commands(project_dir)[:4]
@@ -5318,7 +6457,7 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
         preview_project_dir = safe_join(_ws(), project_root)
     except Exception:
         preview_project_dir = _ws()
-    if out_changes and (str(getattr(req, "preview_url", None) or "").strip() or _project_has_preview_surface(preview_project_dir, out_changes)):
+    if (out_changes or shell_actions) and (str(getattr(req, "preview_url", None) or "").strip() or _project_has_preview_surface(preview_project_dir, out_changes)):
         emit("status", {"phase": "executing_preview_audit", "message": "Backend harness auditing live preview..."})
         preview_result = _auto_execute_preview_audit(req, project_root)
         if isinstance(preview_result, dict):
@@ -5340,6 +6479,7 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
                     blocking=blocking,
                     warnings=warnings,
                     visual_summary=preview_result.get("visual_summary") or {},
+                    evidence_pack=preview_result.get("evidence_pack") or {},
                     repair_brief=preview_result.get("repair_brief"),
                 ))
             emit(
@@ -5369,7 +6509,10 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
 
     execution["failure_analysis"] = _execution_failure_analysis(execution)
     for quick_repair_fn in (
+        _try_quick_vite_entrypoint_repair,
+        _try_quick_missing_h1_repair,
         _try_quick_missing_package_repair,
+        _try_quick_ts2304_react_hook_repair,
         _try_quick_ts2741_missing_required_prop_repair,
         _try_quick_ts6133_repair,
         _try_quick_ts2322_unsupported_prop_repair,
@@ -5422,9 +6565,9 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
                     paths=quick_repair.get("changed_paths") or [],
                     commands=commands,
                 ))
-    if allow_repair:
+    if allow_repair and (_execution_has_primary_failure(execution) or _preview_polish_debt_requires_llm_repair(execution)):
         for repair_index in range(1, max_repair_passes + 1):
-            if not _execution_needs_repair(execution):
+            if not _execution_needs_repair(execution) and not _preview_polish_debt_requires_llm_repair(execution):
                 break
             repair = _run_backend_repair_pass(req, execution, emit, repair_index=repair_index)
             repairs = execution.setdefault("repairs", [])
@@ -5447,6 +6590,39 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
                     repeated_failure=bool(pre_repair_failure_analysis.get("repeated_failure")) if isinstance(pre_repair_failure_analysis, dict) else False,
                 ))
             parent_before_repair = execution
+            if isinstance(repair_execution, dict) and repair_execution.get("ok") and _preview_polish_debt(repair_execution):
+                quick_repair = _try_quick_preview_polish_repair(req, repair_execution, emit)
+                if isinstance(quick_repair, dict):
+                    repair["quick_repair"] = quick_repair
+                    repair_execution["quick_repair"] = quick_repair
+                    if quick_repair.get("ok"):
+                        quick_shell = quick_repair.get("shell") if isinstance(quick_repair.get("shell"), dict) else {}
+                        quick_preview = quick_repair.get("preview_audit") if isinstance(quick_repair.get("preview_audit"), dict) else None
+                        if quick_preview is not None:
+                            repair_execution["preview_audit"] = quick_preview
+                        commands = list(quick_repair.get("commands") or [])
+                        validation = {
+                            "ok": True,
+                            "project_root": project_root,
+                            "commands": commands,
+                            "results": list(quick_shell.get("results") or []),
+                            "ran": len(list(quick_shell.get("results") or [])),
+                            "passed": sum(1 for item in list(quick_shell.get("results") or []) if isinstance(item, dict) and item.get("ok")),
+                            "failed": sum(1 for item in list(quick_shell.get("results") or []) if isinstance(item, dict) and not item.get("ok")),
+                            "quick_repair": str(quick_repair.get("kind") or "preview-polish"),
+                        }
+                        repair_execution["validation"] = validation
+                        preview_ok = True
+                        preview_audit = repair_execution.get("preview_audit")
+                        if isinstance(preview_audit, dict) and not preview_audit.get("skipped"):
+                            preview_ok = bool(preview_audit.get("ok"))
+                        repair_execution["ok"] = (
+                            bool((repair_execution.get("apply") or {}).get("ok", True))
+                            and bool((repair_execution.get("shell") or {}).get("ok", True))
+                            and bool(validation.get("ok"))
+                            and preview_ok
+                        )
+                        repair_execution["failure_analysis"] = _execution_failure_analysis(repair_execution)
             repair_ok = _repair_resolves_parent_execution(execution, repair_execution if isinstance(repair_execution, dict) else None)
             repair_failure_analysis = repair_execution.get("failure_analysis") if isinstance(repair_execution, dict) else None
             rollback_result = None
@@ -5486,10 +6662,25 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
                 failure_analysis=repair_failure_analysis if isinstance(repair_failure_analysis, dict) else {},
                 rollback=rollback_result or None,
             ))
-            if isinstance(repair_execution, dict):
-                execution["ok"] = repair_ok
+            repair_rolled_back = bool(isinstance(rollback_result, dict) and rollback_result.get("ok"))
+            if isinstance(repair_execution, dict) and not repair_rolled_back:
+                polish_only_parent = bool(parent_before_repair.get("ok")) and not _execution_has_primary_failure(parent_before_repair) and bool(_preview_polish_debt(parent_before_repair))
+                if isinstance(repair_execution.get("preview_audit"), dict):
+                    execution["preview_audit"] = repair_execution["preview_audit"]
+                for key in ("apply", "shell", "validation", "replay"):
+                    candidate = repair_execution.get(key)
+                    if isinstance(candidate, dict) and candidate.get("ok") is True:
+                        execution[key] = candidate
+                if repair_ok:
+                    execution["ok"] = True
+                elif polish_only_parent:
+                    execution["ok"] = True
+                else:
+                    execution["ok"] = not _execution_has_primary_failure(execution)
                 execution["failure_analysis"] = _execution_failure_analysis(execution)
-            if bool(execution.get("ok")):
+            elif repair_rolled_back:
+                execution["failure_analysis"] = _execution_failure_analysis(execution)
+            if repair_ok or (bool(execution.get("ok")) and not _execution_needs_repair(execution)):
                 break
         if _execution_needs_repair(execution) and not bool(execution.get("ok")):
             execution["failure_analysis"] = _execution_failure_analysis(execution)
@@ -5560,7 +6751,13 @@ _HARD_VERIFIER_CHECKS = {
     "unique-change-paths",
     "non-empty-file-content",
     "valid-shell-actions",
+    "relative-imports-resolve",
     "root-route-entrypoint",
+    "frontend-style-runtime",
+    "frontend-asset-quality",
+    "referenced-asset-usage",
+    "frontend-business-data-honesty",
+    "frontend-interaction-integrity",
 }
 
 
@@ -5599,13 +6796,18 @@ def _trace_verifier_failure_summary(trace: dict) -> str:
     return "\n".join(failures[:8]) or "Verifier reported blocking failures before backend execution."
 
 
-def _build_backend_verifier_repair_prompt(req: AgentReq, trace: dict) -> str:
+def _build_backend_verifier_repair_prompt(
+    req: AgentReq,
+    trace: dict,
+    *,
+    base_changes: list[dict[str, object]] | None = None,
+    base_actions: list[dict] | None = None,
+) -> str:
     build_mode = str(req.build_mode or "hybrid")
-    persona = "Clara" if build_mode == "full-agent" else "Raka"
     mode_directive = (
-        f"{persona}, stay in full ownership mode and produce a complete, valid implementation."
+        "Appora Agent, stay in full ownership mode and produce a complete, valid implementation."
         if build_mode == "full-agent"
-        else f"{persona}, stay scoped, but return a valid actionable fix."
+        else "Appora Agent, stay scoped to the current workspace context, but return a valid actionable fix."
     )
     failure_summary = _trace_verifier_failure_summary(trace)
     intent_repair_directive = (
@@ -5614,48 +6816,239 @@ def _build_backend_verifier_repair_prompt(req: AgentReq, trace: dict) -> str:
         if "read-only-boundary" in failure_summary
         else ""
     )
+    asset_repair_directive = (
+        "The user explicitly referenced an uploaded @asset alias. Use the exact uploaded asset path/public URL from the attached asset context in the corrected implementation; do not replace it with placeholder media or an invented asset."
+        if "referenced-asset-usage" in failure_summary
+        else ""
+    )
+    business_data_repair_directive = (
+        "Repair objective: remove fake business contact/data completely. Do not mention WhatsApp, WA, phone, email, street address, map details, opening hours, founding year, ratings, customer/order counts, delivery area, or operational claims unless the user provided real values. If contact/order flow is needed, render a disabled/configuration-gated control with neutral copy such as 'Kontak belum dikonfigurasi' and no href."
+        if "frontend-business-data-honesty" in failure_summary
+        else ""
+    )
+    interaction_repair_directive = (
+        "Repair objective: remove fake/dead interactions. Buttons and links must navigate to an existing route/section, submit a real form, run a real local UI handler, or be visibly disabled/configuration-gated. Do not leave active-looking inert buttons."
+        if "frontend-interaction-integrity" in failure_summary
+        else ""
+    )
+    style_runtime_repair_directive = (
+        "Repair objective: this project has no Tailwind setup. Remove Tailwind utility classes or add a real Tailwind setup; prefer existing CSS files/classes for a small Vite/React app."
+        if "frontend-style-runtime" in failure_summary
+        else ""
+    )
+    previous_changes = []
+    for change in list(base_changes or [])[:8]:
+        if not isinstance(change, dict):
+            continue
+        path = str(change.get("path") or "").strip()
+        content = str(change.get("new_content") or "")
+        if path:
+            previous_changes.append(f"- {path} ({len(content)} chars)")
+    previous_actions = []
+    for action in list(base_actions or [])[:6]:
+        if not isinstance(action, dict):
+            continue
+        action_type = str(action.get("type") or "").strip()
+        command = str(action.get("command") or "").strip()
+        previous_actions.append(f"- {action_type}: {command}" if command else f"- {action_type}")
+
+    previous_output_context = "\n".join(
+        [
+            "Previous proposed output summary:",
+            *(previous_changes or ["- no file changes"]),
+            *(previous_actions or []),
+        ]
+    )
+
     return "\n\n".join([
         str(req.input or "").strip(),
         mode_directive,
         "Your previous output failed the backend verifier before it could be safely applied.",
         f"Verifier failures:\n{failure_summary}",
+        previous_output_context,
         intent_repair_directive,
-        "Return corrected JSON for the same user task. If this is a build/edit request, include valid file changes or valid shell actions. Do not return raw tool/MCP actions as the final output.",
+        asset_repair_directive,
+        business_data_repair_directive,
+        interaction_repair_directive,
+        style_runtime_repair_directive,
+        "Return corrected JSON for the same user task. This is a targeted verifier repair, not a new planning pass. Include only valid corrected file changes or valid shell actions. Do not return raw tool/MCP actions as the final output.",
     ]).strip()
 
 
-def _run_backend_verifier_repair_pass(req: AgentReq, ws_root: Path, trace: dict, emit) -> dict:
-    emit("status", {"phase": "verifier_repair", "message": "Verifier gagal, agent memperbaiki output sebelum backend apply..."})
-    repair_req = req.model_copy(update={
-        "input": _build_backend_verifier_repair_prompt(req, trace),
-        "stream": False,
-        "background": False,
-        "auto_execute": False,
-        "editor_status": "Backend verifier repair before apply",
-    })
-    with _agent_lock_for_current_provider():
-        repair_pipeline = run_agent_pipeline(repair_req, ws_root=ws_root, emit=emit)
-    repair_changes = _prepare_agent_out_changes(ws_root, list(repair_pipeline.get("changes") or []))
-    repair_actions = list(repair_pipeline.get("actions") or [])
-    repair_trace = dict(repair_pipeline.get("trace") or {})
+def _first_verifier_failure_path(trace: dict, project_root: str) -> str:
+    from . import agent_runtime as runtime
+
+    checks = trace.get("verification") if isinstance(trace, dict) else None
+    if not isinstance(checks, list):
+        return ""
+    for check in checks:
+        detail = str((check or {}).get("detail") or "") if isinstance(check, dict) else ""
+        match = re.search(r"(?P<path>[A-Za-z0-9_./-]+\.(?:tsx|ts|jsx|js|css|html|json|md))", detail)
+        if not match:
+            continue
+        rel = runtime._localize_project_rel(match.group("path"), project_root)
+        if rel:
+            return rel
+    return ""
+
+
+def _scope_project_change_path(path: str, project_root: str) -> str:
+    clean = str(path or "").strip().lstrip("/")
+    root = str(project_root or ".").strip().strip("/") or "."
+    if not clean or root == "." or clean == root or clean.startswith(root + "/"):
+        return clean
+    return f"{root}/{clean}"
+
+
+def _backend_verifier_repair_context(
+    req: AgentReq,
+    ws_root: Path,
+    trace: dict,
+    base_changes: list[dict[str, object]],
+) -> tuple[str, str, list[str], dict[str, str], str]:
+    from . import agent_runtime as runtime
+
+    project_root = str(req.project_root or ".").strip().strip("/") or "."
+    project_dir = safe_join(ws_root, project_root)
+    all_files: list[str] = []
+    if project_dir.exists():
+        try:
+            all_files = [str(PurePosixPath(path.relative_to(project_dir))) for path in _iter_project_export_files(project_dir)]
+        except Exception:
+            all_files = []
+
+    relevant_files: dict[str, str] = {}
+
+    def add_disk_file(rel: str) -> None:
+        local = runtime._localize_project_rel(rel, project_root)
+        if not local or local in relevant_files:
+            return
+        try:
+            path = safe_join(project_dir, local)
+            if path.exists() and path.is_file():
+                relevant_files[local] = path.read_text(encoding="utf-8")[:30_000]
+        except Exception:
+            return
+
+    for change in list(base_changes or []):
+        if not isinstance(change, dict):
+            continue
+        path = str(change.get("path") or "").strip()
+        content = change.get("new_content")
+        local = runtime._localize_project_rel(path, project_root)
+        if local and isinstance(content, str):
+            relevant_files[local] = content[:50_000]
+            if local not in all_files:
+                all_files.append(local)
+
+    for rel in [
+        _first_verifier_failure_path(trace, project_root),
+        str(req.active_file or ""),
+        *(list(req.open_files or [])[:6] if isinstance(req.open_files, list) else []),
+        "package.json",
+        "src/App.tsx",
+        "src/App.jsx",
+        "src/main.tsx",
+        "src/app.css",
+    ]:
+        add_disk_file(rel)
+
+    active_rel = (
+        _first_verifier_failure_path(trace, project_root)
+        or runtime._localize_project_rel(str(req.active_file or ""), project_root)
+        or next(iter(relevant_files.keys()), "")
+        or "(no-active-file)"
+    )
+    active_content = relevant_files.get(active_rel, "")
+    extra_context = "\n\n".join(
+        [
+            "BACKEND VERIFIER TARGETED REPAIR CONTEXT:",
+            "The previous output already ran through the agent graph. Do not restart planning; repair only the verifier failures.",
+            f"Project root: {project_root}",
+            f"Changed paths: {', '.join(sorted(relevant_files.keys())[:12]) or '(none)'}",
+        ]
+    )
+    return active_rel, active_content, all_files, relevant_files, extra_context
+
+
+def _run_backend_verifier_repair_pass(
+    req: AgentReq,
+    ws_root: Path,
+    trace: dict,
+    emit,
+    *,
+    base_changes: list[dict[str, object]] | None = None,
+    base_actions: list[dict] | None = None,
+) -> dict:
+    emit("status", {"phase": "verifier_repair", "message": "Verifier gagal, agent memperbaiki output sebelum backend apply...", "targeted": True})
+    from api.agent import suggest
+    from api.agent_runtime import get_agent_mode_profile
+
+    base_changes = list(base_changes or [])
+    base_actions = list(base_actions or [])
+    project_root = str(req.project_root or ".").strip().strip("/") or "."
+    prompt = _build_backend_verifier_repair_prompt(req, trace, base_changes=base_changes, base_actions=base_actions)
+    active_rel, active_content, all_files, relevant_files, extra_context = _backend_verifier_repair_context(req, ws_root, trace, base_changes)
+    mode_profile = get_agent_mode_profile(str(req.build_mode or settings_mod.settings.build_mode or "hybrid"))
+    json_recovery = False
+    try:
+        with _agent_lock_for_current_provider():
+            repair_suggestion = suggest(
+                instruction=prompt,
+                path=active_rel,
+                content=active_content,
+                file_tree=all_files,
+                relevant_files=relevant_files,
+                extra_context=extra_context,
+                workspace_root=safe_join(ws_root, project_root),
+                system=mode_profile.system_prompt,
+            )
+        raw_repair_changes = [
+            {**change, "path": _scope_project_change_path(str(change.get("path") or ""), project_root)}
+            for change in list(repair_suggestion.changes or [])
+            if isinstance(change, dict)
+        ]
+        repair_changes = _prepare_agent_out_changes(ws_root, raw_repair_changes)
+        repair_actions = list(repair_suggestion.actions or [])
+        repair_spoken = str(repair_suggestion.spoken or "")
+        repair_log = str(repair_suggestion.log or "")
+    except RuntimeError as exc:
+        if "valid JSON" not in str(exc):
+            raise
+        from api import agent_runtime as runtime
+
+        ctx = runtime.prepare_agent_context(req, ws_root)
+        fallback_changes, fallback_actions = runtime._emergency_full_agent_changes(ctx, str(req.input or ""))
+        if not (fallback_changes or fallback_actions):
+            raise
+        json_recovery = True
+        repair_changes = _prepare_agent_out_changes(ws_root, list(fallback_changes))
+        repair_actions = list(fallback_actions)
+        repair_spoken = "Verifier repair model returned invalid JSON; backend used executable recovery changes instead."
+        repair_log = f"targeted_verifier_repair=1 json_recovery=1 error={str(exc)[:120]}"
+    repair_trace = _reverify_merged_verifier_output(req, ws_root, repair_changes, repair_actions)
     return {
-        "spoken": str(repair_pipeline.get("spoken") or ""),
-        "log": str(repair_pipeline.get("log") or ""),
+        "spoken": repair_spoken,
+        "log": f"targeted_verifier_repair=1 {repair_log}".strip(),
         "changes": repair_changes,
         "actions": repair_actions,
-        "intent": dict(repair_pipeline.get("intent") or {}),
+        "intent": {"kind": "command", "should_write_files": True, "should_run_tools": False},
         "trace": repair_trace,
+        "targeted": True,
+        "json_recovery": json_recovery,
         "ok": not _trace_has_blocking_verifier_failures(repair_trace),
         "failure_summary": _trace_verifier_failure_summary(repair_trace) if _trace_has_blocking_verifier_failures(repair_trace) else "",
     }
 
 
 _TS6133_RE = re.compile(r"(?P<path>[^\s:(]+\.tsx?)\((?P<line>\d+),(?P<col>\d+)\):\s+error TS6133:\s+'(?P<name>[A-Za-z_$][\w$]*)'\s+is declared but its value is never read\.")
+_TS2304_CANNOT_FIND_NAME_RE = re.compile(r"(?P<path>[^\s:(]+\.tsx?)\((?P<line>\d+),(?P<col>\d+)\):\s+error TS2304:\s+Cannot find name ['\"](?P<name>[A-Za-z_$][\w$]*)['\"]\.")
 _TS2322_LOCATION_RE = re.compile(r"(?P<path>[^\s:(]+\.tsx?)\((?P<line>\d+),(?P<col>\d+)\):\s+error TS2322:")
 _TS_PROP_NOT_EXIST_RE = re.compile(r"Property ['\"](?P<prop>[A-Za-z_$][\w$]*)['\"] does not exist on type")
 _TS2741_MISSING_REQUIRED_PROP_RE = re.compile(r"(?P<path>[^\s:(]+\.tsx?)\((?P<line>\d+),(?P<col>\d+)\):\s+error TS2741:\s+Property ['\"](?P<prop>[A-Za-z_$][\w$]*)['\"] is missing in type")
 _TS2307_MODULE_RE = re.compile(r"error TS2307:\s+Cannot find module ['\"](?P<module>[^'\"]+)['\"]")
 _VITE_IMPORT_RESOLVE_RE = re.compile(r"Failed to resolve import ['\"](?P<module>[^'\"]+)['\"]")
+_VITE_HTML_ENTRY_RESOLVE_RE = re.compile(r"Failed to resolve\s+(?P<entry>/src/[\w./-]+\.(?:tsx|jsx|ts|js))\s+from\s+.*index\.html")
 _QUICK_INSTALL_PACKAGE_ALLOWLIST = {
     "@supabase/supabase-js",
     "axios",
@@ -5684,6 +7077,63 @@ _QUICK_INSTALL_PACKAGE_PREFIXES = (
 )
 
 
+def _execution_output_text(execution: dict[str, object]) -> str:
+    chunks: list[str] = []
+    for container_name in ("shell", "validation", "replay"):
+        container = execution.get(container_name)
+        if not isinstance(container, dict):
+            continue
+        for result in list(container.get("results") or []):
+            if not isinstance(result, dict):
+                continue
+            chunks.append(str(result.get("stdout") or ""))
+            chunks.append(str(result.get("stderr") or ""))
+    return "\n".join(chunks)
+
+
+def _vite_html_entrypoint_issue_from_execution(execution: dict[str, object]) -> str | None:
+    text = _execution_output_text(execution)
+    for match in _VITE_HTML_ENTRY_RESOLVE_RE.finditer(text):
+        entry = str(match.group("entry") or "").strip()
+        if entry:
+            return entry.lstrip("/")
+    return None
+
+
+def _preview_missing_h1_issue(execution: dict[str, object]) -> bool:
+    preview = execution.get("preview_audit")
+    if not isinstance(preview, dict) or preview.get("skipped") or preview.get("ok") is not False:
+        return False
+    for issue in list(preview.get("issue_details") or []):
+        if not isinstance(issue, dict) or issue.get("severity") != "blocking":
+            continue
+        text = f"{issue.get('category') or ''} {issue.get('detail') or ''}".lower()
+        if "h1" in text or "heading" in text:
+            return True
+    return False
+
+
+def _existing_vite_entrypoint(project_dir: Path, missing_entry: str) -> str | None:
+    missing_path = PurePosixPath(missing_entry)
+    stem = missing_path.stem or "main"
+    candidates = [
+        f"src/{stem}.jsx",
+        f"src/{stem}.tsx",
+        f"src/{stem}.js",
+        f"src/{stem}.ts",
+        "src/main.jsx",
+        "src/main.tsx",
+        "src/main.js",
+        "src/main.ts",
+    ]
+    for rel in candidates:
+        if rel == missing_entry:
+            continue
+        if (project_dir / rel).exists():
+            return rel
+    return None
+
+
 def _ts6133_issues_from_execution(execution: dict[str, object]) -> list[dict[str, object]]:
     issues: list[dict[str, object]] = []
     seen: set[tuple[str, int, str]] = set()
@@ -5704,6 +7154,29 @@ def _ts6133_issues_from_execution(execution: dict[str, object]) -> list[dict[str
                     continue
                 seen.add(key)
                 issues.append({"path": path, "line": line, "name": name})
+    return issues[:16]
+
+
+def _ts2304_react_hook_issues_from_execution(execution: dict[str, object]) -> list[dict[str, object]]:
+    issues: list[dict[str, object]] = []
+    seen: set[tuple[str, str]] = set()
+    allowed = {"useCallback", "useEffect", "useMemo", "useRef", "useState"}
+    for container_name in ("shell", "validation", "replay"):
+        container = execution.get(container_name)
+        if not isinstance(container, dict):
+            continue
+        for result in list(container.get("results") or []):
+            if not isinstance(result, dict):
+                continue
+            text = f"{result.get('stdout') or ''}\n{result.get('stderr') or ''}"
+            for match in _TS2304_CANNOT_FIND_NAME_RE.finditer(text):
+                path = str(match.group("path") or "").strip()
+                name = str(match.group("name") or "").strip()
+                key = (path, name)
+                if not path or name not in allowed or key in seen:
+                    continue
+                seen.add(key)
+                issues.append({"path": path, "name": name})
     return issues[:16]
 
 
@@ -5963,6 +7436,53 @@ def _unused_declaration_reference(lines: list[str], line_index: int, name: str) 
     return end_index + 1, f"{match.group('indent')}void {name};"
 
 
+def _repair_unused_usestate_destructures(lines: list[str], issues: list[dict[str, object]]) -> set[tuple[int, str]]:
+    issues_by_line: dict[int, set[str]] = {}
+    for issue in issues:
+        name = str(issue.get("name") or "").strip()
+        line_no = int(issue.get("line") or 0)
+        if line_no > 0 and re.match(r"^[A-Za-z_$][\w$]*$", name):
+            issues_by_line.setdefault(line_no - 1, set()).add(name)
+
+    handled: set[tuple[int, str]] = set()
+    for idx in sorted(issues_by_line.keys(), reverse=True):
+        if idx < 0 or idx >= len(lines):
+            continue
+        line = lines[idx]
+        if "useState" not in line:
+            continue
+        match = re.search(
+            r"(?P<prefix>\[\s*)(?P<value>[A-Za-z_$][\w$]*)(?P<middle>\s*,\s*(?P<setter>[A-Za-z_$][\w$]*)\s*)?(?P<suffix>\])",
+            line,
+        )
+        if not match:
+            continue
+        value = str(match.group("value") or "")
+        setter = str(match.group("setter") or "")
+        names = issues_by_line[idx]
+        value_unused = value in names
+        setter_unused = bool(setter and setter in names)
+
+        if value_unused and (not setter or setter_unused):
+            del lines[idx]
+            handled.add((idx, value))
+            if setter:
+                handled.add((idx, setter))
+            continue
+        if setter_unused:
+            next_line = line[:match.start()] + f"[{value}]" + line[match.end():]
+            if next_line != line:
+                lines[idx] = next_line
+                handled.add((idx, setter))
+            continue
+        if value_unused and setter:
+            next_line = line[:match.start()] + f"[, {setter}]" + line[match.end():]
+            if next_line != line:
+                lines[idx] = next_line
+                handled.add((idx, value))
+    return handled
+
+
 def _insert_void_usage_for_unused_symbols(project_dir: Path, issues: list[dict[str, object]]) -> list[str]:
     grouped: dict[str, list[dict[str, object]]] = {}
     for issue in issues:
@@ -5981,16 +7501,20 @@ def _insert_void_usage_for_unused_symbols(project_dir: Path, issues: list[dict[s
         except Exception:
             continue
         lines = text.splitlines()
+        usestate_handled = _repair_unused_usestate_destructures(lines, file_issues)
         insertions: dict[int, list[str]] = {}
         touched = False
         for issue in sorted(file_issues, key=lambda item: int(item.get("line") or 0), reverse=True):
             name = str(issue.get("name") or "").strip()
             if not re.match(r"^[A-Za-z_$][\w$]*$", name):
                 continue
-            if re.search(rf"\bvoid\s+{re.escape(name)}\s*;", text):
-                continue
             line_no = max(1, int(issue.get("line") or 1))
             idx = min(max(line_no - 1, 0), max(len(lines) - 1, 0))
+            if (line_no - 1, name) in usestate_handled:
+                touched = True
+                continue
+            if re.search(rf"\bvoid\s+{re.escape(name)}\s*;", text):
+                continue
             if _remove_unused_import_symbol(lines, idx, name):
                 touched = True
                 continue
@@ -6020,6 +7544,60 @@ def _insert_void_usage_for_unused_symbols(project_dir: Path, issues: list[dict[s
         for insertion in insertions.get(len(lines), []):
             next_lines.append(insertion)
         path.write_text("\n".join(next_lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
+        changed.append(rel)
+    return changed
+
+
+def _merge_react_named_import(text: str, names: set[str]) -> tuple[str, bool]:
+    missing = {name for name in names if re.match(r"^use[A-Z][A-Za-z0-9_]*$", name)}
+    if not missing:
+        return text, False
+    named_import = re.search(r"import\s+\{(?P<body>[^}]*)\}\s+from\s+['\"]react['\"]\s*;?", text)
+    if named_import:
+        existing = {
+            item.strip().split(" as ", 1)[0].strip()
+            for item in named_import.group("body").split(",")
+            if item.strip()
+        }
+        to_add = sorted(missing - existing)
+        if not to_add:
+            return text, False
+        merged = ", ".join(sorted(existing | missing))
+        next_text = text[:named_import.start("body")] + f" {merged} " + text[named_import.end("body"):]
+        return next_text, True
+
+    default_import = re.search(r"import\s+(?P<default>[A-Za-z_$][\w$]*)\s+from\s+['\"]react['\"]\s*;?", text)
+    import_line = f"import {{ {', '.join(sorted(missing))} }} from 'react';\n"
+    if default_import:
+        insert_at = default_import.end()
+        if insert_at < len(text) and text[insert_at:insert_at + 1] == "\n":
+            insert_at += 1
+        return text[:insert_at] + import_line + text[insert_at:], True
+    return import_line + text, True
+
+
+def _add_missing_react_hook_imports(project_dir: Path, issues: list[dict[str, object]]) -> list[str]:
+    grouped: dict[str, set[str]] = {}
+    for issue in issues:
+        rel = str(issue.get("path") or "").strip().lstrip("/")
+        name = str(issue.get("name") or "").strip()
+        if not rel or ".." in rel.split("/") or not name:
+            continue
+        grouped.setdefault(rel, set()).add(name)
+
+    changed: list[str] = []
+    for rel, names in grouped.items():
+        path = (project_dir / rel).resolve()
+        try:
+            if project_dir != path and project_dir not in path.parents:
+                continue
+            text = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        next_text, touched = _merge_react_named_import(text, names)
+        if not touched or next_text == text:
+            continue
+        path.write_text(next_text, encoding="utf-8")
         changed.append(rel)
     return changed
 
@@ -6105,6 +7683,78 @@ def _make_prop_optional_in_component(component_path: Path, prop: str) -> bool:
     return True
 
 
+_UI_PRESENTATION_PROPS = {"title", "eyebrow", "label", "description"}
+
+
+def _ensure_optional_prop_declared(text: str, prop: str) -> tuple[str, bool]:
+    if re.search(rf"\b{re.escape(prop)}\??\s*:", text):
+        return text, False
+    prop_line = f"  {prop}?: string;\n"
+    next_text, count = re.subn(r"(interface\s+[A-Za-z_$][\w$]*\s*\{\n)", r"\1" + prop_line, text, count=1)
+    if count:
+        return next_text, True
+    next_text, count = re.subn(r"(type\s+[A-Za-z_$][\w$]*\s*=\s*(?:[^;{}]|\{[^{}]*\})*?&\s*\{\n)", r"\1" + prop_line, text, count=1, flags=re.DOTALL)
+    if count:
+        return next_text, True
+    return text, False
+
+
+def _ensure_destructured_component_prop(text: str, prop: str) -> tuple[str, bool]:
+    if re.search(rf"function\s+[A-Za-z_$][\w$]*\s*\(\s*\{{[^}}]*\b{re.escape(prop)}\b", text):
+        return text, False
+    pattern = re.compile(r"(function\s+[A-Za-z_$][\w$]*\s*\(\s*\{)(?P<body>[^}]*)\}(\s*:\s*[A-Za-z_$][\w$]*\s*\))")
+
+    def repl(match: re.Match[str]) -> str:
+        body = match.group("body").strip()
+        next_body = f"{prop}, {body}" if body else prop
+        return f"{match.group(1)}{next_body}}}{match.group(3)}"
+
+    next_text, count = pattern.subn(repl, text, count=1)
+    return next_text, bool(count)
+
+
+def _ensure_card_like_prop_rendering(text: str, prop: str) -> tuple[str, bool]:
+    if prop not in {"title", "eyebrow", "description"} or re.search(rf"\{{\s*{re.escape(prop)}\s*\?\s*<", text):
+        return text, False
+    render_line = {
+        "eyebrow": '      {eyebrow ? <div className="eyebrow">{eyebrow}</div> : null}\n',
+        "title": '      {title ? <h2 className="cardTitle">{title}</h2> : null}\n',
+        "description": '      {description ? <p className="muted">{description}</p> : null}\n',
+    }[prop]
+    next_text, count = re.subn(r"(\s*<div\s+className=\{`card\s+\$\{className\}`\.trim\(\)\}>\n)", r"\1" + render_line, text, count=1)
+    if count:
+        return next_text, True
+    next_text, count = re.subn(r"(\s*<section[^>]*className=\{classes\}[^>]*>\n)", r"\1" + render_line, text, count=1)
+    if count:
+        return next_text, True
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if "<div" in line and "className=" in line and "card" in line:
+            lines.insert(index + 1, render_line.rstrip("\n"))
+            return "\n".join(lines) + ("\n" if text.endswith("\n") else ""), True
+    return text, False
+
+
+def _add_optional_ui_prop_to_component(component_path: Path, prop: str) -> bool:
+    if prop not in _UI_PRESENTATION_PROPS:
+        return False
+    try:
+        text = component_path.read_text(encoding="utf-8")
+    except Exception:
+        return False
+    next_text, declared = _ensure_optional_prop_declared(text, prop)
+    if not declared:
+        # The prop may already exist as optional/required. In that case the
+        # unsupported-prop error is probably from another component shape.
+        return False
+    if prop in {"title", "eyebrow", "description"}:
+        next_text, destructured = _ensure_destructured_component_prop(next_text, prop)
+        if destructured:
+            next_text, _ = _ensure_card_like_prop_rendering(next_text, prop)
+    component_path.write_text(next_text, encoding="utf-8")
+    return True
+
+
 def _make_missing_required_props_optional(project_dir: Path, issues: list[dict[str, object]]) -> list[str]:
     changed: list[str] = []
     seen_targets: set[tuple[Path, str]] = set()
@@ -6135,6 +7785,36 @@ def _make_missing_required_props_optional(project_dir: Path, issues: list[dict[s
     return changed
 
 
+def _add_unsupported_ui_props_to_components(project_dir: Path, issues: list[dict[str, object]]) -> list[str]:
+    changed: list[str] = []
+    seen_targets: set[tuple[Path, str]] = set()
+    for issue in issues:
+        rel = str(issue.get("path") or "").strip().lstrip("/")
+        prop = str(issue.get("prop") or "").strip()
+        if not rel or ".." in rel.split("/") or prop not in _UI_PRESENTATION_PROPS:
+            continue
+        importer = (project_dir / rel).resolve()
+        try:
+            if project_dir != importer and project_dir not in importer.parents:
+                continue
+            text = importer.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        component = _component_tag_at_line(text.splitlines(), int(issue.get("line") or 1))
+        if not component:
+            continue
+        target = _component_import_target(project_dir, importer, component, text)
+        if target is None:
+            continue
+        key = (target, prop)
+        if key in seen_targets:
+            continue
+        seen_targets.add(key)
+        if _make_prop_optional_in_component(target, prop) or _add_optional_ui_prop_to_component(target, prop):
+            changed.append(target.relative_to(project_dir).as_posix())
+    return list(dict.fromkeys(changed))
+
+
 def _remove_unsupported_jsx_props(project_dir: Path, issues: list[dict[str, object]]) -> list[str]:
     grouped: dict[str, list[dict[str, object]]] = {}
     for issue in issues:
@@ -6161,7 +7841,9 @@ def _remove_unsupported_jsx_props(project_dir: Path, issues: list[dict[str, obje
             line_no = max(1, int(issue.get("line") or 1))
             start = max(0, line_no - 2)
             end = min(len(lines), line_no + 8)
-            prop_pattern = re.compile(rf"\s+{re.escape(prop)}=\{{(?:[^{{}}]|\{{[^{{}}]*\}})*\}}")
+            prop_pattern = re.compile(
+                rf"\s+{re.escape(prop)}=(?:\{{(?:[^{{}}]|\{{[^{{}}]*\}})*\}}|\"[^\"]*\"|'[^']*')"
+            )
             for index in range(start, end):
                 next_line, replacements = prop_pattern.subn("", lines[index])
                 if replacements:
@@ -6229,6 +7911,69 @@ def _try_quick_ts6133_repair(req: AgentReq, execution: dict[str, object], emit) 
         "commands": commands,
         "shell": shell,
         "summary": f"Quick TS6133 repair changed {len(changed_paths)} file(s), validation ok={bool(shell.get('ok'))}, rolled_back={len(rolled_back)}.",
+    }
+    emit("tool_output", _harness_tool_output_payload(
+        "quick-repair",
+        "quick_repair",
+        project_root=project_root,
+        ok=bool(shell.get("ok")),
+        summary=str(result["summary"]),
+        paths=changed_paths,
+        commands=commands,
+        results=_shell_event_results(shell.get("results")),
+    ))
+    return result
+
+
+def _try_quick_ts2304_react_hook_repair(req: AgentReq, execution: dict[str, object], emit) -> dict[str, object] | None:
+    issues = _ts2304_react_hook_issues_from_execution(execution)
+    if not issues:
+        return None
+    project_root = str(req.project_root or ".").strip().strip("/") or "."
+    try:
+        project_dir = safe_join(_ws(), project_root)
+    except Exception:
+        return None
+    snapshots = _snapshot_project_files(project_dir, list(dict.fromkeys(
+        str(issue.get("path") or "").strip().lstrip("/")
+        for issue in issues
+        if str(issue.get("path") or "").strip()
+    )))
+    changed_paths = _add_missing_react_hook_imports(project_dir, issues)
+    if not changed_paths:
+        return None
+
+    commands = list(dict.fromkeys(
+        str(command)
+        for command in list((execution.get("validation") or {}).get("commands") or [])
+        if str(command).strip()
+    ))
+    if not commands:
+        commands = _infer_validation_commands(project_dir)[:4]
+    if not commands:
+        return {"ok": False, "changed_paths": changed_paths, "summary": "Quick TS2304 hook repair edited files but found no validation command."}
+
+    emit("status", {"phase": "quick_repair", "message": "Backend quick repair added missing React hook imports before LLM repair..."})
+    _emit_command_start_events(emit, tool="quick-repair", phase="quick_repair", project_root=project_root, commands=commands, group="quick repair")
+    shell = _run_harness_shell_actions_internal(
+        ws_root_path=_ws(),
+        project_root=project_root,
+        actions=[AgentHarnessShellAction(command=command, cwd=project_root, reason="Quick TS2304 React hook import repair validation") for command in commands],
+        emit=emit,
+        tool="quick-repair",
+        phase="quick_repair",
+        group="quick repair",
+    )
+    rolled_back = _rollback_quick_repair_if_failed(project_dir, shell, snapshots)
+    result = {
+        "ok": bool(shell.get("ok")),
+        "kind": "ts2304-react-hook-import",
+        "changed_paths": changed_paths,
+        "rolled_back_paths": rolled_back,
+        "issues": issues,
+        "commands": commands,
+        "shell": shell,
+        "summary": f"Quick TS2304 hook repair changed {len(changed_paths)} file(s), validation ok={bool(shell.get('ok'))}, rolled_back={len(rolled_back)}.",
     }
     emit("tool_output", _harness_tool_output_payload(
         "quick-repair",
@@ -6315,12 +8060,18 @@ def _try_quick_ts2322_unsupported_prop_repair(req: AgentReq, execution: dict[str
         project_dir = safe_join(_ws(), project_root)
     except Exception:
         return None
-    snapshots = _snapshot_project_files(project_dir, list(dict.fromkeys(
+    src_dir = project_dir / "src"
+    snapshot_candidates = list(dict.fromkeys(
         str(issue.get("path") or "").strip().lstrip("/")
         for issue in issues
         if str(issue.get("path") or "").strip()
-    )))
-    changed_paths = _remove_unsupported_jsx_props(project_dir, issues)
+    ))
+    if src_dir.exists():
+        snapshot_candidates.extend(path.relative_to(project_dir).as_posix() for path in src_dir.glob("**/*.tsx") if path.is_file())
+    snapshots = _snapshot_project_files(project_dir, list(dict.fromkeys(snapshot_candidates))[:160])
+    changed_paths = _add_unsupported_ui_props_to_components(project_dir, issues)
+    if not changed_paths:
+        changed_paths = _remove_unsupported_jsx_props(project_dir, issues)
     if not changed_paths:
         return None
 
@@ -6446,6 +8197,7 @@ def _quick_polish_tap_targets(project_dir: Path) -> tuple[list[str], list[str]]:
             project_dir / "src" / "app.css",
             project_dir / "src" / "App.css",
             project_dir / "src" / "index.css",
+            project_dir / "src" / "styles.css",
             project_dir / "style.css",
         ]
         if path.exists()
@@ -6472,6 +8224,14 @@ textarea {
   min-height: 44px;
 }
 
+input[type="checkbox"],
+input[type="radio"] {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+}
+
 nav a,
 footer a,
 .footer a,
@@ -6484,12 +8244,62 @@ footer a,
     return [css_path.relative_to(project_dir).as_posix()], ["added tap target floor"]
 
 
+def _quick_polish_overflow_prone_css(project_dir: Path) -> tuple[list[str], list[str]]:
+    css_candidates = [
+        path
+        for path in [
+            project_dir / "src" / "app.css",
+            project_dir / "src" / "App.css",
+            project_dir / "src" / "index.css",
+            project_dir / "src" / "styles.css",
+            project_dir / "style.css",
+        ]
+        if path.exists()
+    ]
+    changed: list[str] = []
+    notes: list[str] = []
+    for css_path in css_candidates[:4]:
+        try:
+            css = css_path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        next_css = css
+        next_css = re.sub(r"(?<![-\w])white-space\s*:\s*nowrap\s*;", "white-space: normal;", next_css, flags=re.IGNORECASE)
+        next_css = re.sub(r"(?<![-\w])width\s*:\s*100vw\s*;", "width: 100%; max-width: 100%;", next_css, flags=re.IGNORECASE)
+        next_css = re.sub(r"(?<![-\w])width\s*:\s*(?:max-content|fit-content)\s*;", "width: 100%; max-width: 100%;", next_css, flags=re.IGNORECASE)
+
+        def soften_min_width(match: re.Match[str]) -> str:
+            value = int(match.group("value"))
+            if value < 390:
+                return match.group(0)
+            return "min-width: 0; max-width: 100%;"
+
+        next_css = re.sub(
+            r"(?<![-\w])min-width\s*:\s*(?P<value>\d{3,4})px\s*;",
+            soften_min_width,
+            next_css,
+            flags=re.IGNORECASE,
+        )
+        if next_css == css:
+            continue
+        css_path.write_text(next_css, encoding="utf-8")
+        changed.append(css_path.relative_to(project_dir).as_posix())
+        notes.append(f"softened overflow-prone CSS in {css_path.relative_to(project_dir).as_posix()}")
+    return list(dict.fromkeys(changed)), notes
+
+
 def _try_quick_preview_polish_repair(req: AgentReq, execution: dict[str, object], emit) -> dict[str, object] | None:
     debt = _preview_polish_debt(execution)
     if not debt:
         return None
     categories = {str(item.get("category") or "") for item in debt if isinstance(item, dict)}
-    if not (categories & {"metadata", "mobile-tap-targets"}):
+    overflow_debt = any(
+        str(item.get("category") or "") in {"source-overflow-risk", "responsive"}
+        and "overflow" in str(item.get("detail") or "").lower()
+        for item in debt
+        if isinstance(item, dict)
+    )
+    if not (categories & {"metadata", "mobile-tap-targets"} or overflow_debt):
         return None
     project_root = str(req.project_root or ".").strip().strip("/") or "."
     try:
@@ -6504,6 +8314,10 @@ def _try_quick_preview_polish_repair(req: AgentReq, execution: dict[str, object]
         notes.extend(local_notes)
     if "mobile-tap-targets" in categories:
         changed, local_notes = _quick_polish_tap_targets(project_dir)
+        changed_paths.extend(changed)
+        notes.extend(local_notes)
+    if overflow_debt:
+        changed, local_notes = _quick_polish_overflow_prone_css(project_dir)
         changed_paths.extend(changed)
         notes.extend(local_notes)
     changed_paths = list(dict.fromkeys(changed_paths))
@@ -6551,6 +8365,177 @@ def _try_quick_preview_polish_repair(req: AgentReq, execution: dict[str, object]
         paths=changed_paths,
         commands=commands,
         result={"notes": notes, "preview_ok": preview_result.get("ok") if isinstance(preview_result, dict) else None},
+        results=_shell_event_results(shell.get("results")),
+    ))
+    return result
+
+
+def _try_quick_vite_entrypoint_repair(req: AgentReq, execution: dict[str, object], emit) -> dict[str, object] | None:
+    missing_entry = _vite_html_entrypoint_issue_from_execution(execution)
+    if not missing_entry:
+        return None
+    project_root = str(req.project_root or ".").strip().strip("/") or "."
+    try:
+        project_dir = safe_join(_ws(), project_root)
+    except Exception:
+        return None
+    replacement = _existing_vite_entrypoint(project_dir, missing_entry)
+    if not replacement:
+        return None
+    html_path = project_dir / "index.html"
+    if not html_path.exists():
+        return None
+    try:
+        html = html_path.read_text(encoding="utf-8")
+    except Exception:
+        return None
+    next_html = html.replace(f'/{missing_entry}', f'/{replacement}')
+    next_html = next_html.replace(missing_entry, replacement)
+    if next_html == html:
+        return None
+    html_path.write_text(next_html, encoding="utf-8")
+
+    commands = list(dict.fromkeys(
+        str(command)
+        for command in list((execution.get("validation") or {}).get("commands") or [])
+        if str(command).strip()
+    ))
+    if not commands:
+        commands = _infer_validation_commands(project_dir)[:4]
+
+    emit("status", {"phase": "quick_repair", "message": "Backend quick repair restored the Vite HTML entrypoint before LLM repair..."})
+    shell = {"ok": True, "results": [], "ran": 0}
+    if commands:
+        _emit_command_start_events(emit, tool="quick-repair", phase="quick_repair", project_root=project_root, commands=commands, group="quick repair")
+        shell = _run_harness_shell_actions_internal(
+            ws_root_path=_ws(),
+            project_root=project_root,
+            actions=[AgentHarnessShellAction(command=command, cwd=project_root, reason="Quick Vite entrypoint repair validation") for command in commands],
+            emit=emit,
+            tool="quick-repair",
+            phase="quick_repair",
+            group="quick repair",
+        )
+
+    result = {
+        "ok": bool(shell.get("ok")),
+        "changed_paths": ["index.html"],
+        "missing_entry": missing_entry,
+        "replacement": replacement,
+        "commands": commands,
+        "shell": shell,
+        "summary": f"Quick Vite entrypoint repair changed index.html from {missing_entry} to {replacement}, validation ok={bool(shell.get('ok'))}.",
+        "kind": "vite-entrypoint",
+    }
+    emit("tool_output", _harness_tool_output_payload(
+        "quick-repair",
+        "quick_repair",
+        project_root=project_root,
+        ok=bool(shell.get("ok")),
+        summary=str(result["summary"]),
+        paths=["index.html"],
+        commands=commands,
+        result={"missing_entry": missing_entry, "replacement": replacement},
+        results=_shell_event_results(shell.get("results")),
+    ))
+    return result
+
+
+def _promote_title_element_to_h1(project_dir: Path) -> list[str]:
+    src_dir = project_dir / "src"
+    if not src_dir.exists():
+        return []
+    candidates = [
+        *(src_dir.glob("App.tsx")),
+        *(src_dir.glob("App.jsx")),
+        *(src_dir.glob("**/*.tsx")),
+        *(src_dir.glob("**/*.jsx")),
+    ]
+    seen: set[Path] = set()
+    for path in candidates:
+        if path in seen or not path.is_file():
+            continue
+        seen.add(path)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        if re.search(r"<h1\b", text, flags=re.IGNORECASE):
+            continue
+        next_text = re.sub(
+            r"<div(?P<attrs>[^>]*className=(?:\"[^\"]*(?:header-title|page-title|app-title|dashboard-title|title)[^\"]*\"|'[^']*(?:header-title|page-title|app-title|dashboard-title|title)[^']*')[^>]*)>(?P<body>[^<]{3,120})</div>",
+            r"<h1\g<attrs>>\g<body></h1>",
+            text,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        if next_text == text:
+            next_text = re.sub(
+                r"<p(?P<attrs>[^>]*className=(?:\"[^\"]*(?:page-title|app-title|dashboard-title|title)[^\"]*\"|'[^']*(?:page-title|app-title|dashboard-title|title)[^']*')[^>]*)>(?P<body>[^<]{3,120})</p>",
+                r"<h1\g<attrs>>\g<body></h1>",
+                text,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+        if next_text == text:
+            continue
+        path.write_text(next_text, encoding="utf-8")
+        return [path.relative_to(project_dir).as_posix()]
+    return []
+
+
+def _try_quick_missing_h1_repair(req: AgentReq, execution: dict[str, object], emit) -> dict[str, object] | None:
+    if not _preview_missing_h1_issue(execution):
+        return None
+    project_root = str(req.project_root or ".").strip().strip("/") or "."
+    try:
+        project_dir = safe_join(_ws(), project_root)
+    except Exception:
+        return None
+    changed_paths = _promote_title_element_to_h1(project_dir)
+    if not changed_paths:
+        return None
+
+    commands = list(dict.fromkeys(
+        str(command)
+        for command in list((execution.get("validation") or {}).get("commands") or [])
+        if str(command).strip()
+    ))
+    if not commands:
+        commands = _infer_validation_commands(project_dir)[:4]
+
+    emit("status", {"phase": "quick_repair", "message": "Backend quick repair promoted the visible page title to H1 before LLM repair..."})
+    shell = {"ok": True, "results": [], "ran": 0}
+    if commands:
+        _emit_command_start_events(emit, tool="quick-repair", phase="quick_repair", project_root=project_root, commands=commands, group="quick repair")
+        shell = _run_harness_shell_actions_internal(
+            ws_root_path=_ws(),
+            project_root=project_root,
+            actions=[AgentHarnessShellAction(command=command, cwd=project_root, reason="Quick missing H1 repair validation") for command in commands],
+            emit=emit,
+            tool="quick-repair",
+            phase="quick_repair",
+            group="quick repair",
+        )
+    preview_result = _auto_execute_preview_audit(req, project_root) if bool(shell.get("ok")) else None
+    result = {
+        "ok": bool(shell.get("ok")) and (not isinstance(preview_result, dict) or bool(preview_result.get("ok"))),
+        "changed_paths": changed_paths,
+        "commands": commands,
+        "shell": shell,
+        "preview_audit": preview_result,
+        "summary": f"Quick missing-H1 repair changed {len(changed_paths)} file(s), validation ok={bool(shell.get('ok'))}.",
+        "kind": "missing-h1",
+    }
+    emit("tool_output", _harness_tool_output_payload(
+        "quick-repair",
+        "quick_repair",
+        project_root=project_root,
+        ok=bool(result.get("ok")),
+        summary=str(result["summary"]),
+        paths=changed_paths,
+        commands=commands,
+        result={"preview_ok": preview_result.get("ok") if isinstance(preview_result, dict) else None},
         results=_shell_event_results(shell.get("results")),
     ))
     return result
@@ -6655,12 +8640,17 @@ def agent_worker_run_get(request: Request, job_id: str | None = None, limit: int
 
 def _run_agent_impl(req: AgentReq, event_cb=None, job_id: str | None = None):
     streamed_spoken = False
+    streamed_spoken_text = ""
+    observed_events: list[dict] = []
+    run_started_at = time.time()
 
     def emit(event: str, data: dict):
-        nonlocal streamed_spoken
+        nonlocal streamed_spoken, streamed_spoken_text
         payload = dict(data or {})
         if event == "delta" and payload.get("spoken_chunk"):
             streamed_spoken = True
+            streamed_spoken_text += str(payload.get("spoken_chunk") or "")
+        observed_events.append({"event_type": event, "payload": dict(payload), "created_at": time.time()})
         if job_id:
             payload.setdefault("job_id", job_id)
             _record_agent_job_event(job_id, event, payload)
@@ -6674,6 +8664,19 @@ def _run_agent_impl(req: AgentReq, event_cb=None, job_id: str | None = None):
     emit("status", {"phase": "starting", "message": "Nyusun konteks kerja dulu..."})
     ws_root = _ws()
     _hydrate_hosted_project(ws_root, getattr(req, "project_root", ".") or ".")
+    if req.auto_execute:
+        bootstrap = _bootstrap_missing_agent_project(ws_root, getattr(req, "project_root", ".") or ".")
+        if bootstrap:
+            emit("status", {"phase": "bootstrap", "message": "Project baru belum ada, Appora menyiapkan workspace React/Vite kosong untuk agent..."})
+            emit("tool_output", _harness_tool_output_payload(
+                "bootstrap",
+                "bootstrap",
+                project_root=str(req.project_root or ".").strip().strip("/") or ".",
+                ok=True,
+                summary=f"Bootstrapped missing project with {len(list(bootstrap.get('paths') or []))} file(s).",
+                paths=list(bootstrap.get("paths") or []),
+                result={"dependency_logs": bootstrap.get("dependency_logs") or []},
+            ))
 
     try:
         with _agent_lock_for_current_provider():
@@ -6698,19 +8701,64 @@ def _run_agent_impl(req: AgentReq, event_cb=None, job_id: str | None = None):
             "no_changes": len(out_changes) == 0 and len(normalized_actions) == 0,
         }
         if req.auto_execute and _trace_has_blocking_verifier_failures(result["trace"]):
-            repair = _run_backend_verifier_repair_pass(req, ws_root, result["trace"], emit)
+            repair = _run_backend_verifier_repair_pass(
+                req,
+                ws_root,
+                result["trace"],
+                emit,
+                base_changes=out_changes,
+                base_actions=normalized_actions,
+            )
+            merged_repair_changes = _merge_repair_changes(out_changes, list(repair.get("changes") or []))
+            merged_repair_actions = list(repair.get("actions") or [])
+            merged_repair_trace = _reverify_merged_verifier_output(req, ws_root, merged_repair_changes, merged_repair_actions)
+            repair["merged_trace"] = merged_repair_trace
+            repair["ok"] = not _trace_has_blocking_verifier_failures(merged_repair_trace)
+            repair["failure_summary"] = (
+                _trace_verifier_failure_summary(merged_repair_trace)
+                if _trace_has_blocking_verifier_failures(merged_repair_trace)
+                else ""
+            )
+            if not repair.get("ok") and "frontend-interaction-integrity" in str(repair.get("failure_summary") or ""):
+                gated_changes, gated_paths = _gate_inert_final_buttons_in_changes(merged_repair_changes)
+                if gated_paths:
+                    gated_trace = _reverify_merged_verifier_output(req, ws_root, gated_changes, merged_repair_actions)
+                    if not _trace_has_blocking_verifier_failures(gated_trace):
+                        merged_repair_changes = gated_changes
+                        merged_repair_trace = gated_trace
+                        repair["merged_trace"] = merged_repair_trace
+                        repair["ok"] = True
+                        repair["failure_summary"] = ""
+                        repair["deterministic_interaction_gate"] = {
+                            "paths": gated_paths,
+                            "summary": "Disabled active-looking inert buttons during targeted verifier repair.",
+                        }
+            if not repair.get("ok") and "frontend-business-data-honesty" in str(repair.get("failure_summary") or ""):
+                gated_changes, gated_paths = _gate_fake_business_data_in_changes(merged_repair_changes)
+                if gated_paths:
+                    gated_trace = _reverify_merged_verifier_output(req, ws_root, gated_changes, merged_repair_actions)
+                    if not _trace_has_blocking_verifier_failures(gated_trace):
+                        merged_repair_changes = gated_changes
+                        merged_repair_trace = gated_trace
+                        repair["merged_trace"] = merged_repair_trace
+                        repair["ok"] = True
+                        repair["failure_summary"] = ""
+                        repair["deterministic_business_data_gate"] = {
+                            "paths": gated_paths,
+                            "summary": "Neutralized invented business contact/claim data during targeted verifier repair.",
+                        }
             result["verifier_repair"] = repair
             if repair.get("spoken"):
                 result["spoken"] = str(repair.get("spoken") or "")
             if repair.get("log"):
                 result["log"] = f"{str(result.get('log') or '').strip()} verifier_repair=1 {str(repair.get('log') or '').strip()}".strip()
             if repair.get("ok"):
-                out_changes = list(repair.get("changes") or [])
-                normalized_actions = list(repair.get("actions") or [])
+                out_changes = merged_repair_changes
+                normalized_actions = merged_repair_actions
                 result["changes"] = out_changes
                 result["actions"] = normalized_actions
                 result["intent"] = dict(repair.get("intent") or result.get("intent") or {})
-                result["trace"] = dict(repair.get("trace") or {})
+                result["trace"] = merged_repair_trace
                 result["no_changes"] = len(out_changes) == 0 and len(normalized_actions) == 0
 
         if req.auto_execute and (out_changes or normalized_actions) and not _trace_has_blocking_verifier_failures(result["trace"]):
@@ -6727,16 +8775,28 @@ def _run_agent_impl(req: AgentReq, event_cb=None, job_id: str | None = None):
                 "apply": None,
                 "shell": None,
             }
-        if not streamed_spoken:
-            for chunk in _spoken_stream_chunks(str(result.get("spoken") or "")):
+        result["observability"] = build_agent_observability(observed_events, result=result, started_at=run_started_at, finished_at=time.time())
+        final_spoken = str(result.get("spoken") or "")
+        should_stream_final_spoken = not streamed_spoken
+        execution = result.get("execution") if isinstance(result.get("execution"), dict) else None
+        trace_blocked = _trace_has_blocking_verifier_failures(result["trace"])
+        if streamed_spoken and final_spoken and (
+            trace_blocked
+            or (isinstance(execution, dict) and execution.get("auto_execute") and not execution.get("ok"))
+        ):
+            should_stream_final_spoken = final_spoken.strip() not in streamed_spoken_text.strip()
+        if should_stream_final_spoken:
+            prefix = "\n\n" if streamed_spoken and streamed_spoken_text.strip() else ""
+            for chunk in _spoken_stream_chunks(prefix + final_spoken):
                 emit("delta", {"spoken_chunk": chunk})
+            result["observability"] = build_agent_observability(observed_events, result=result, started_at=run_started_at, finished_at=time.time())
         _update_agent_job_record(job_id, "completed", result=result)
         done_message = "Beres, hasil agent siap dipakai."
-        execution = result.get("execution") if isinstance(result.get("execution"), dict) else None
-        if isinstance(execution, dict) and execution.get("auto_execute") and not execution.get("ok"):
+        if isinstance(execution, dict) and execution.get("auto_execute"):
             completion_report = execution.get("completion_report") if isinstance(execution.get("completion_report"), dict) else {}
-            summary = str(completion_report.get("summary") or execution.get("summary") or "Agent execution masih gagal.").strip()
-            done_message = summary if summary.lower().startswith("blocked") else f"Blocked: {summary}"
+            if not bool(completion_report.get("ok", execution.get("ok"))):
+                summary = str(completion_report.get("summary") or execution.get("summary") or "Agent execution masih gagal.").strip()
+                done_message = summary if summary.lower().startswith("blocked") else f"Blocked: {summary}"
         emit("done", {"message": done_message, "result": result})
         return result
     except RuntimeError as exc:

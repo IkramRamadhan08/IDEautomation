@@ -1,0 +1,1064 @@
+{
+  "ok": true,
+  "mode": "live",
+  "blocked": false,
+  "readiness": {
+    "ok": true,
+    "provider": "nine_router",
+    "connected": true,
+    "model": "kr/qwen3-coder-next",
+    "source": "appora_managed_free",
+    "auth_type": "managed_free",
+    "managed_free": true,
+    "base_url": "http://localhost:20128/v1",
+    "route_test": {
+      "model": "kr/qwen3-coder-next",
+      "status": 200,
+      "response": "OK",
+      "ok": true,
+      "summary": "Connected. Appora Free Router accepted the selected model/combo.",
+      "resolved_model": null
+    },
+    "summary": "Connected. Appora Free Router accepted the selected model/combo."
+  },
+  "scenario_timeout_seconds": 180,
+  "started_at": 1779476088,
+  "completed_at": 1779476152,
+  "scenarios": [
+    {
+      "id": "nontechnical_landing",
+      "ok": true,
+      "status": "passed",
+      "score": 90,
+      "min_score": 75,
+      "duration_ms": 64254,
+      "project_root": "benchmark-nontechnical-landing",
+      "metrics": {
+        "changes": 2,
+        "actions": 0,
+        "execution_ok": true,
+        "event_count": 76,
+        "tool_event_count": 33,
+        "failed_verification": 0,
+        "task_state": {}
+      },
+      "observability": {
+        "ok": true,
+        "summary": {
+          "event_count": 75,
+          "phase_counts": {
+            "starting": 1,
+            "intent": 1,
+            "memory": 1,
+            "skills": 1,
+            "mcp": 1,
+            "planning": 1,
+            "stream": 22,
+            "tooling": 6,
+            "deep_preflight": 12,
+            "context_ready": 2,
+            "drafting": 2,
+            "verifying": 1,
+            "diffing": 1,
+            "verifier_repair": 1,
+            "executing_apply": 3,
+            "executing_validation": 8,
+            "executing_preview_audit": 2,
+            "quick_repair": 7,
+            "completion": 2
+          },
+          "tool_call_count": 12,
+          "tool_output_count": 21,
+          "command_count": 2,
+          "failed_command_count": 0,
+          "changes": 2,
+          "actions": 0,
+          "execution_ok": true,
+          "duration_ms": 64253
+        },
+        "timeline": [
+          {
+            "seq": 1,
+            "event": "status",
+            "phase": "starting",
+            "kind": "status",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Nyusun konteks kerja dulu...",
+            "created_at": 1779476088.1743057
+          },
+          {
+            "seq": 2,
+            "event": "status",
+            "phase": "intent",
+            "kind": "status",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Aku bedain dulu ini perintah build, audit baca-saja, percakapan biasa, atau campuran dua-duanya...",
+            "created_at": 1779476088.1821575
+          },
+          {
+            "seq": 3,
+            "event": "status",
+            "phase": "memory",
+            "kind": "status",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Ngambil short-term sama long-term memory dulu...",
+            "created_at": 1779476088.1821845
+          },
+          {
+            "seq": 4,
+            "event": "status",
+            "phase": "skills",
+            "kind": "status",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Nyocokin skill yang relevan buat task ini...",
+            "created_at": 1779476090.4076502
+          },
+          {
+            "seq": 5,
+            "event": "status",
+            "phase": "mcp",
+            "kind": "status",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Cek capability boundary dari MCP registry...",
+            "created_at": 1779476090.4847617
+          },
+          {
+            "seq": 6,
+            "event": "status",
+            "phase": "planning",
+            "kind": "status",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Nyusun rencana kerja biar agent nggak asal nembak...",
+            "created_at": 1779476090.48509
+          },
+          {
+            "seq": 7,
+            "event": "delta",
+            "phase": "stream",
+            "kind": "delta",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Plan siap: 7 tahap.",
+            "created_at": 1779476090.4853082
+          },
+          {
+            "seq": 8,
+            "event": "status",
+            "phase": "tooling",
+            "kind": "status",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Bootstrap tools: cek stack, validasi, skill, dan MCP dulu...",
+            "created_at": 1779476090.4853601
+          },
+          {
+            "seq": 9,
+            "event": "tool_call",
+            "phase": "deep_preflight",
+            "kind": "local_tool",
+            "tool": "repo_overview",
+            "command": null,
+            "ok": null,
+            "message": "",
+            "created_at": 1779476090.4853878
+          },
+          {
+            "seq": 10,
+            "event": "delta",
+            "phase": "stream",
+            "kind": "delta",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Function call: repo_overview...",
+            "created_at": 1779476090.4853926
+          },
+          {
+            "seq": 11,
+            "event": "tool_output",
+            "phase": "deep_preflight",
+            "kind": "local_tool",
+            "tool": "repo_overview",
+            "command": null,
+            "ok": true,
+            "message": "{\n  \"project_root\": \"benchmark-nontechnical-landing\",\n  \"file_count_sample\": 21,\n  \"top_extensions\": [\n    [\n      \".tsx\",\n      11\n    ],\n    [\n      \".json\",\n      4\n    ],\n    [\n      \".css\",\n      2\n    ],\n    [\n      \".md\",\n      1\n    ],\n    [\n      \".html\",\n      1\n    ],\n    [\n      \".jsx\",\n      1\n    ],\n    [\n      \".ts\",\n      1\n    ]\n  ],\n  \"key_files\": [\n    \"README.md\",\n    \"package.json\",\n    \"src/App.tsx\",\n    \"src/app.css\",\n    \"src/main.tsx\",\n    \"tsconfig.json\",\n    \"vite.conf...[truncated]",
+            "created_at": 1779476090.4913406
+          },
+          {
+            "seq": 12,
+            "event": "delta",
+            "phase": "stream",
+            "kind": "delta",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Function repo_overview selesai.",
+            "created_at": 1779476090.4913542
+          },
+          {
+            "seq": 13,
+            "event": "tool_call",
+            "phase": "deep_preflight",
+            "kind": "local_tool",
+            "tool": "stack_profile",
+            "command": null,
+            "ok": null,
+            "message": "",
+            "created_at": 1779476090.4913592
+          },
+          {
+            "seq": 14,
+            "event": "delta",
+            "phase": "stream",
+            "kind": "delta",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Function call: stack_profile...",
+            "created_at": 1779476090.4913633
+          },
+          {
+            "seq": 15,
+            "event": "tool_output",
+            "phase": "deep_preflight",
+            "kind": "local_tool",
+            "tool": "stack_profile",
+            "command": null,
+            "ok": true,
+            "message": "{\n  \"project_root\": \"benchmark-nontechnical-landing\",\n  \"languages\": [\n    \"javascript\",\n    \"typescript\"\n  ],\n  \"frameworks\": [\n    \"react\",\n    \"vite\"\n  ],\n  \"runtimes\": [\n    \"node\"\n  ],\n  \"package_managers\": [\n    \"npm\"\n  ],\n  \"validation_files\": [\n    \"package.json\",\n    \"tsconfig.json\"\n  ],\n  \"component_libraries\": [],\n  \"has_playwright\": false,\n  \"has_headless_browser\": false,\n  \"has_webcontainer\": false,\n  \"has_database_schema\": false,\n  \"has_infra\": false,\n  \"has_preview_surface\": true\n...[truncated]",
+            "created_at": 1779476090.4939632
+          },
+          {
+            "seq": 16,
+            "event": "delta",
+            "phase": "stream",
+            "kind": "delta",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Function stack_profile selesai.",
+            "created_at": 1779476090.4939713
+          },
+          {
+            "seq": 17,
+            "event": "tool_call",
+            "phase": "deep_preflight",
+            "kind": "local_tool",
+            "tool": "validation_plan",
+            "command": null,
+            "ok": null,
+            "message": "",
+            "created_at": 1779476090.4939759
+          },
+          {
+            "seq": 18,
+            "event": "delta",
+            "phase": "stream",
+            "kind": "delta",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Function call: validation_plan...",
+            "created_at": 1779476090.4939795
+          },
+          {
+            "seq": 19,
+            "event": "tool_output",
+            "phase": "deep_preflight",
+            "kind": "local_tool",
+            "tool": "validation_plan",
+            "command": null,
+            "ok": true,
+            "message": "{\n  \"project_root\": \"benchmark-nontechnical-landing\",\n  \"detected_stack\": {\n    \"languages\": [\n      \"javascript\",\n      \"typescript\"\n    ],\n    \"frameworks\": [\n      \"react\",\n      \"vite\"\n    ],\n    \"runtimes\": [\n      \"node\"\n    ],\n    \"package_managers\": [\n      \"npm\"\n    ],\n    \"validation_files\": [\n      \"package.json\",\n      \"tsconfig.json\"\n    ],\n    \"has_database_schema\": false,\n    \"has_infra\": false,\n    \"has_preview_surface\": true\n  },\n  \"commands\": [\n    {\n      \"command\": \"cd benchm...[truncated]",
+            "created_at": 1779476090.4996116
+          },
+          {
+            "seq": 20,
+            "event": "delta",
+            "phase": "stream",
+            "kind": "delta",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Function validation_plan selesai.",
+            "created_at": 1779476090.4996254
+          },
+          {
+            "seq": 21,
+            "event": "tool_call",
+            "phase": "deep_preflight",
+            "kind": "local_tool",
+            "tool": "skill_catalog",
+            "command": null,
+            "ok": null,
+            "message": "",
+            "created_at": 1779476090.4996305
+          },
+          {
+            "seq": 22,
+            "event": "delta",
+            "phase": "stream",
+            "kind": "delta",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Function call: skill_catalog...",
+            "created_at": 1779476090.4996343
+          },
+          {
+            "seq": 23,
+            "event": "tool_output",
+            "phase": "deep_preflight",
+            "kind": "local_tool",
+            "tool": "skill_catalog",
+            "command": null,
+            "ok": true,
+            "message": "{\n  \"project_root\": \"benchmark-nontechnical-landing\",\n  \"count\": 97,\n  \"matched_count\": 92,\n  \"skills\": [\n    {\n      \"skill_id\": \"frontend-app-builder\",\n      \"title\": \"frontend-app-builder\",\n      \"description\": \"Use for new frontend applications, dashboards, games, creative websites, hero sections, and visually driven UI from scratch, or when the user explicitly asks for a redesign/restyle/modernization. Builds from clean, airy, high-taste, readable image-generated concept design with section...[truncated]",
+            "created_at": 1779476090.6506345
+          },
+          {
+            "seq": 24,
+            "event": "delta",
+            "phase": "stream",
+            "kind": "delta",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Function skill_catalog selesai.",
+            "created_at": 1779476090.6506586
+          },
+          {
+            "seq": 25,
+            "event": "tool_call",
+            "phase": "deep_preflight",
+            "kind": "local_tool",
+            "tool": "mcp_status",
+            "command": null,
+            "ok": null,
+            "message": "",
+            "created_at": 1779476090.6506693
+          },
+          {
+            "seq": 26,
+            "event": "delta",
+            "phase": "stream",
+            "kind": "delta",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Function call: mcp_status...",
+            "created_at": 1779476090.6506782
+          },
+          {
+            "seq": 27,
+            "event": "tool_output",
+            "phase": "deep_preflight",
+            "kind": "local_tool",
+            "tool": "mcp_status",
+            "command": null,
+            "ok": true,
+            "message": "{\n  \"project_root\": \"benchmark-nontechnical-landing\",\n  \"servers\": [],\n  \"warnings\": []\n}",
+            "created_at": 1779476090.651619
+          },
+          {
+            "seq": 28,
+            "event": "delta",
+            "phase": "stream",
+            "kind": "delta",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Function mcp_status selesai.",
+            "created_at": 1779476090.6516378
+          },
+          {
+            "seq": 29,
+            "event": "tool_call",
+            "phase": "deep_preflight",
+            "kind": "local_tool",
+            "tool": "repo_read_many",
+            "command": null,
+            "ok": null,
+            "message": "",
+            "created_at": 1779476090.6516464
+          },
+          {
+            "seq": 30,
+            "event": "delta",
+            "phase": "stream",
+            "kind": "delta",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Function call: repo_read_many...",
+            "created_at": 1779476090.6516542
+          },
+          {
+            "seq": 31,
+            "event": "tool_output",
+            "phase": "deep_preflight",
+            "kind": "local_tool",
+            "tool": "repo_read_many",
+            "command": null,
+            "ok": true,
+            "message": "FILE: benchmark-nontechnical-landing/src/pages/Home.tsx\nimport Card from \"../components/ui/Card\";\n\nconst features = [\"Launch-ready sections\", \"Pricing and FAQ\", \"Accessible responsive layout\"];\nconst plans = [\"Starter\", \"Team\", \"Scale\"];\n\nexport default function HomePage() {\n  return (\n    <div className=\"stack\">\n      <section className=\"hero\">\n        <div className=\"heroInner\">\n          <div className=\"pill\">Landing + pricing starter</div>\n          <h1 className=\"heroTitle\">Nontechnical Lan...[truncated]",
+            "created_at": 1779476090.6546783
+          },
+          {
+            "seq": 32,
+            "event": "delta",
+            "phase": "stream",
+            "kind": "delta",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Function repo_read_many selesai.",
+            "created_at": 1779476090.6546965
+          },
+          {
+            "seq": 33,
+            "event": "delta",
+            "phase": "stream",
+            "kind": "delta",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Bootstrap selesai: 6 tool context masuk. Tool berikutnya dipilih agent dari evidence gap.",
+            "created_at": 1779476090.6550522
+          },
+          {
+            "seq": 34,
+            "event": "status",
+            "phase": "context_ready",
+            "kind": "status",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Konteks siap, agent mulai mikir...",
+            "created_at": 1779476090.6551306
+          },
+          {
+            "seq": 35,
+            "event": "status",
+            "phase": "drafting",
+            "kind": "status",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Lagi nulis draft perubahan pertama...",
+            "created_at": 1779476090.6551445
+          },
+          {
+            "seq": 36,
+            "event": "delta",
+            "phase": "stream",
+            "kind": "delta",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Saya akan buat landing page laundry premium yang siap produksi. Pertama saya baca file-file yang relevan untuk memahami struktur yang ada, lalu buat implementasi lengkap.",
+            "created_at": 1779476094.866311
+          },
+          {
+            "seq": 37,
+            "event": "delta",
+            "phase": "stream",
+            "kind": "delta",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Draft pertama jadi, lagi rapihin hasilnya...",
+            "created_at": 1779476094.8981118
+          },
+          {
+            "seq": 38,
+            "event": "status",
+            "phase": "tooling",
+            "kind": "status",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Aku jalanin tools dulu biar context-nya makin tajam...",
+            "created_at": 1779476094.8982124
+          },
+          {
+            "seq": 39,
+            "event": "tool_call",
+            "phase": "tooling",
+            "kind": "local_tool",
+            "tool": "repo_read",
+            "command": null,
+            "ok": null,
+            "message": "",
+            "created_at": 1779476094.8982239
+          },
+          {
+            "seq": 40,
+            "event": "delta",
+            "phase": "stream",
+            "kind": "delta",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Tool repo_read lagi dipanggil...",
+            "created_at": 1779476094.8982298
+          },
+          {
+            "seq": 41,
+            "event": "tool_output",
+            "phase": "tooling",
+            "kind": "local_tool",
+            "tool": "repo_read",
+            "command": null,
+            "ok": true,
+            "message": "import type { ComponentPropsWithoutRef, ReactNode } from \"react\";\n\ntype CardProps = ComponentPropsWithoutRef<\"section\"> & {\n  title?: string;\n  eyebrow?: string;\n  children: ReactNode;\n};\n\nexport default function Card(props: CardProps) {\n  const { title, eyebrow, children, className = \"\", ...sectionProps } = props;\n  const classes = [\"card\", className].filter(Boolean).join(\" \");\n  return (\n    <section {...sectionProps} className={classes}>\n      {eyebrow ? <div className=\"eyebrow\">{eyebrow}</di...[truncated]",
+            "created_at": 1779476094.898989
+          },
+          {
+            "seq": 42,
+            "event": "delta",
+            "phase": "stream",
+            "kind": "delta",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Tool repo_read selesai, hasilnya masuk ke context.",
+            "created_at": 1779476094.8990211
+          },
+          {
+            "seq": 43,
+            "event": "tool_call",
+            "phase": "tooling",
+            "kind": "local_tool",
+            "tool": "repo_read",
+            "command": null,
+            "ok": null,
+            "message": "",
+            "created_at": 1779476094.8990335
+          },
+          {
+            "seq": 44,
+            "event": "delta",
+            "phase": "stream",
+            "kind": "delta",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Tool repo_read lagi dipanggil...",
+            "created_at": 1779476094.899041
+          },
+          {
+            "seq": 45,
+            "event": "tool_output",
+            "phase": "tooling",
+            "kind": "local_tool",
+            "tool": "repo_read",
+            "command": null,
+            "ok": true,
+            "message": "import type { ReactNode } from \"react\";\nimport ThemeToggle from \"./ui/ThemeToggle\";\n\ntype NavItem = [string, string] | { path: string; label: string } | { href: string; label: string };\n\nfunction navItemParts(item: NavItem) {\n  if (Array.isArray(item)) {\n    return { href: item[0], label: item[1] };\n  }\n  return { href: \"path\" in item ? item.path : item.href, label: item.label };\n}\n\nexport default function AppShell(props: {\n  title: string;\n  description: string;\n  navItems: NavItem[];\n  current...[truncated]",
+            "created_at": 1779476094.8994043
+          },
+          {
+            "seq": 46,
+            "event": "delta",
+            "phase": "stream",
+            "kind": "delta",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Tool repo_read selesai, hasilnya masuk ke context.",
+            "created_at": 1779476094.8994138
+          },
+          {
+            "seq": 47,
+            "event": "status",
+            "phase": "context_ready",
+            "kind": "status",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Konteks siap, agent mulai mikir...",
+            "created_at": 1779476094.8996203
+          },
+          {
+            "seq": 48,
+            "event": "status",
+            "phase": "drafting",
+            "kind": "status",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Hasil tool udah masuk, sekarang agent nyusun solusi finalnya...",
+            "created_at": 1779476094.8996308
+          },
+          {
+            "seq": 49,
+            "event": "delta",
+            "phase": "stream",
+            "kind": "delta",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Saya sudah baca struktur project dan file-file yang relevan. Ini adalah React + Vite + TypeScript project dengan routing sederhana. Sekarang saya akan buat landing page laundry premium yang lengkap: hero section, layanan, harga, testimoni, dan booking CTA.",
+            "created_at": 1779476098.9627717
+          },
+          {
+            "seq": 50,
+            "event": "delta",
+            "phase": "stream",
+            "kind": "delta",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Draft pertama jadi, lagi rapihin hasilnya...",
+            "created_at": 1779476127.5336568
+          },
+          {
+            "seq": 51,
+            "event": "status",
+            "phase": "verifying",
+            "kind": "status",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Ngecek hasil draft sebelum final...",
+            "created_at": 1779476127.5337346
+          },
+          {
+            "seq": 52,
+            "event": "status",
+            "phase": "diffing",
+            "kind": "status",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Lagi nyusun diff biar siap dipakai UI...",
+            "created_at": 1779476127.5797462
+          },
+          {
+            "seq": 53,
+            "event": "status",
+            "phase": "verifier_repair",
+            "kind": "status",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Verifier gagal, agent memperbaiki output sebelum backend apply...",
+            "created_at": 1779476127.5810997
+          },
+          {
+            "seq": 54,
+            "event": "status",
+            "phase": "executing_apply",
+            "kind": "status",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Backend harness applying agent changes...",
+            "created_at": 1779476131.0981615
+          },
+          {
+            "seq": 55,
+            "event": "tool_call",
+            "phase": "executing_apply",
+            "kind": "agent_harness",
+            "tool": "apply",
+            "command": null,
+            "ok": null,
+            "message": "Applying 2 file change(s).",
+            "created_at": 1779476131.0981805
+          },
+          {
+            "seq": 56,
+            "event": "tool_output",
+            "phase": "executing_apply",
+            "kind": "agent_harness",
+            "tool": "apply",
+            "command": null,
+            "ok": true,
+            "message": "Apply completed: applied=True count=2.",
+            "created_at": 1779476131.1006489
+          },
+          {
+            "seq": 57,
+            "event": "status",
+            "phase": "executing_validation",
+            "kind": "status",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Backend harness validating project output...",
+            "created_at": 1779476131.1058655
+          },
+          {
+            "seq": 58,
+            "event": "tool_call",
+            "phase": "executing_validation",
+            "kind": "agent_harness",
+            "tool": "validate",
+            "command": null,
+            "ok": null,
+            "message": "Running 1 validation command(s).",
+            "created_at": 1779476131.1058843
+          },
+          {
+            "seq": 59,
+            "event": "tool_call",
+            "phase": "executing_validation",
+            "kind": "agent_harness_command",
+            "tool": "validate",
+            "command": "npm run build",
+            "ok": null,
+            "message": "validation: running `npm run build`",
+            "created_at": 1779476131.105903
+          },
+          {
+            "seq": 60,
+            "event": "tool_output",
+            "phase": "executing_validation",
+            "kind": "agent_harness_command_chunk",
+            "tool": "validate",
+            "command": "npm run build",
+            "ok": null,
+            "message": "validation: stdout chunk from `npm run build`",
+            "created_at": 1779476134.0647037
+          },
+          {
+            "seq": 61,
+            "event": "tool_output",
+            "phase": "executing_validation",
+            "kind": "agent_harness_command_chunk",
+            "tool": "validate",
+            "command": "npm run build",
+            "ok": null,
+            "message": "validation: stdout chunk from `npm run build`",
+            "created_at": 1779476135.3704348
+          },
+          {
+            "seq": 62,
+            "event": "tool_output",
+            "phase": "executing_validation",
+            "kind": "agent_harness_command_chunk",
+            "tool": "validate",
+            "command": "npm run build",
+            "ok": null,
+            "message": "validation: stdout chunk from `npm run build`",
+            "created_at": 1779476135.6372724
+          },
+          {
+            "seq": 63,
+            "event": "tool_output",
+            "phase": "executing_validation",
+            "kind": "agent_harness_command",
+            "tool": "validate",
+            "command": "npm run build",
+            "ok": true,
+            "message": "validation: passed `npm run build`",
+            "created_at": 1779476135.6376193
+          },
+          {
+            "seq": 64,
+            "event": "tool_output",
+            "phase": "executing_validation",
+            "kind": "agent_harness",
+            "tool": "validate",
+            "command": null,
+            "ok": true,
+            "message": "Validation ran 1 command(s), failed=0.",
+            "created_at": 1779476135.6377504
+          },
+          {
+            "seq": 65,
+            "event": "status",
+            "phase": "executing_preview_audit",
+            "kind": "status",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Backend harness auditing live preview...",
+            "created_at": 1779476135.6380918
+          },
+          {
+            "seq": 66,
+            "event": "tool_output",
+            "phase": "executing_preview_audit",
+            "kind": "agent_harness",
+            "tool": "preview-audit",
+            "command": null,
+            "ok": true,
+            "message": "mode=agent-browser; title=Nontechnical Landing; h1=Laundry Premium Bersih, Rapi, Tepat Waktu; buttons=2; links=8; forms=0; sections=14; surfaces=6; interactive=13; words=231; blocking=0; warnings=4",
+            "created_at": 1779476142.264437
+          },
+          {
+            "seq": 67,
+            "event": "status",
+            "phase": "quick_repair",
+            "kind": "status",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Backend quick polish fixed metadata/tap-target preview warnings...",
+            "created_at": 1779476142.273948
+          },
+          {
+            "seq": 68,
+            "event": "tool_call",
+            "phase": "quick_repair",
+            "kind": "agent_harness_command",
+            "tool": "quick-repair",
+            "command": "npm run build",
+            "ok": null,
+            "message": "quick polish: running `npm run build`",
+            "created_at": 1779476142.2739751
+          },
+          {
+            "seq": 69,
+            "event": "tool_output",
+            "phase": "quick_repair",
+            "kind": "agent_harness_command_chunk",
+            "tool": "quick-repair",
+            "command": "npm run build",
+            "ok": null,
+            "message": "quick polish: stdout chunk from `npm run build`",
+            "created_at": 1779476145.4793
+          },
+          {
+            "seq": 70,
+            "event": "tool_output",
+            "phase": "quick_repair",
+            "kind": "agent_harness_command_chunk",
+            "tool": "quick-repair",
+            "command": "npm run build",
+            "ok": null,
+            "message": "quick polish: stdout chunk from `npm run build`",
+            "created_at": 1779476146.7578506
+          },
+          {
+            "seq": 71,
+            "event": "tool_output",
+            "phase": "quick_repair",
+            "kind": "agent_harness_command_chunk",
+            "tool": "quick-repair",
+            "command": "npm run build",
+            "ok": null,
+            "message": "quick polish: stdout chunk from `npm run build`",
+            "created_at": 1779476147.0200434
+          },
+          {
+            "seq": 72,
+            "event": "tool_output",
+            "phase": "quick_repair",
+            "kind": "agent_harness_command",
+            "tool": "quick-repair",
+            "command": "npm run build",
+            "ok": true,
+            "message": "quick polish: passed `npm run build`",
+            "created_at": 1779476147.0202239
+          },
+          {
+            "seq": 73,
+            "event": "tool_output",
+            "phase": "quick_repair",
+            "kind": "agent_harness",
+            "tool": "quick-repair",
+            "command": null,
+            "ok": true,
+            "message": "Quick preview polish changed 2 file(s), validation ok=True.",
+            "created_at": 1779476152.427601
+          },
+          {
+            "seq": 74,
+            "event": "status",
+            "phase": "completion",
+            "kind": "status",
+            "tool": null,
+            "command": null,
+            "ok": null,
+            "message": "Complete: backend execution criteria passed or were intentionally skipped.",
+            "created_at": 1779476152.4278014
+          },
+          {
+            "seq": 75,
+            "event": "tool_output",
+            "phase": "completion",
+            "kind": "agent_harness",
+            "tool": "completion",
+            "command": null,
+            "ok": true,
+            "message": "Complete: backend execution criteria passed or were intentionally skipped.",
+            "created_at": 1779476152.427839
+          }
+        ],
+        "commands": [
+          {
+            "seq_first": 59,
+            "seq_last": 63,
+            "phase": "executing_validation",
+            "tool": "validate",
+            "group": "validation",
+            "command": "npm run build",
+            "ok": true,
+            "returncode": 0,
+            "stdout_preview": "> nontechnical-landing@0.1.0 build\n> tsc -b && vite build\n\nvite v7.3.3 building client environment for production...\ntransforming...\n✓ 38 modules transformed.\nrendering chunks...\ncomputing gzip size...\ndist/index.html                   0.46 kB │ gzip:  0.29 kB\ndist/assets/index-LDOaDFUz.css    8.39 kB │ gzip:  2.34 kB\ndist/assets/index-CuWBRuDI.js   202.36 kB │ gzip: 63.64 kB\n✓ built in 1.49s",
+            "stderr_preview": "",
+            "chunk_count": 3,
+            "summary": "validation: passed `npm run build`"
+          },
+          {
+            "seq_first": 68,
+            "seq_last": 72,
+            "phase": "quick_repair",
+            "tool": "quick-repair",
+            "group": "quick polish",
+            "command": "npm run build",
+            "ok": true,
+            "returncode": 0,
+            "stdout_preview": "> nontechnical-landing@0.1.0 build\n> tsc -b && vite build\n\nvite v7.3.3 building client environment for production...\ntransforming...\n✓ 38 modules transformed.\nrendering chunks...\ncomputing gzip size...\ndist/index.html                   0.61 kB │ gzip:  0.38 kB\ndist/assets/index-BfVJm0h2.css    8.54 kB │ gzip:  2.39 kB\ndist/assets/index-CXOqLAKe.js   202.36 kB │ gzip: 63.64 kB\n✓ built in 1.47s",
+            "stderr_preview": "",
+            "chunk_count": 3,
+            "summary": "quick polish: passed `npm run build`"
+          }
+        ],
+        "failure_points": []
+      },
+      "events": [
+        {
+          "t": 42.932,
+          "event": "status",
+          "phase": "executing_validation",
+          "message": "Backend harness validating project output..."
+        },
+        {
+          "t": 42.932,
+          "event": "tool_call",
+          "phase": "executing_validation",
+          "message": "Running 1 validation command(s)."
+        },
+        {
+          "t": 42.932,
+          "event": "tool_call",
+          "phase": "executing_validation",
+          "message": "validation: running `npm run build`"
+        },
+        {
+          "t": 45.891,
+          "event": "tool_output",
+          "phase": "executing_validation",
+          "message": "\n> nontechnical-landing@0.1.0 build\n> tsc -b && vite build\n\nvite v7.3.3 building client environment for production...\n"
+        },
+        {
+          "t": 47.196,
+          "event": "tool_output",
+          "phase": "executing_validation",
+          "message": "transforming...\n✓ 38 modules transformed.\n"
+        },
+        {
+          "t": 47.463,
+          "event": "tool_output",
+          "phase": "executing_validation",
+          "message": "rendering chunks...\ncomputing gzip size...\ndist/index.html                   0.46 kB │ gzip:  0.29 kB\ndist/assets/index-LDOaDFUz.css    8.39 kB │ gzip:  2.34 kB\ndist/assets/index-CuWBRuDI.js   202.36 kB │ gzip: 63.64 kB\n✓ built in 1.49s\n"
+        },
+        {
+          "t": 47.464,
+          "event": "tool_output",
+          "phase": "executing_validation",
+          "message": "validation: passed `npm run build`"
+        },
+        {
+          "t": 47.464,
+          "event": "tool_output",
+          "phase": "executing_validation",
+          "message": "Validation ran 1 command(s), failed=0."
+        },
+        {
+          "t": 47.464,
+          "event": "status",
+          "phase": "executing_preview_audit",
+          "message": "Backend harness auditing live preview..."
+        },
+        {
+          "t": 54.091,
+          "event": "tool_output",
+          "phase": "executing_preview_audit",
+          "message": "{\"ok\": true, \"skipped\": null, \"audit_mode\": \"agent-browser\", \"summary\": \"mode=agent-browser; title=Nontechnical Landing; h1=Laundry Premium Bersih, Rapi, Tepat Waktu; buttons=2; links=8; forms=0; sections=14; surfaces=6; interactive=13; words=231; blocking=0; warnings=4\"}"
+        },
+        {
+          "t": 54.1,
+          "event": "status",
+          "phase": "quick_repair",
+          "message": "Backend quick polish fixed metadata/tap-target preview warnings..."
+        },
+        {
+          "t": 54.1,
+          "event": "tool_call",
+          "phase": "quick_repair",
+          "message": "quick polish: running `npm run build`"
+        },
+        {
+          "t": 57.305,
+          "event": "tool_output",
+          "phase": "quick_repair",
+          "message": "\n> nontechnical-landing@0.1.0 build\n> tsc -b && vite build\n\nvite v7.3.3 building client environment for production...\n"
+        },
+        {
+          "t": 58.584,
+          "event": "tool_output",
+          "phase": "quick_repair",
+          "message": "transforming...\n✓ 38 modules transformed.\n"
+        },
+        {
+          "t": 58.846,
+          "event": "tool_output",
+          "phase": "quick_repair",
+          "message": "rendering chunks...\ncomputing gzip size...\ndist/index.html                   0.61 kB │ gzip:  0.38 kB\ndist/assets/index-BfVJm0h2.css    8.54 kB │ gzip:  2.39 kB\ndist/assets/index-CXOqLAKe.js   202.36 kB │ gzip: 63.64 kB\n✓ built in 1.47s\n"
+        },
+        {
+          "t": 58.846,
+          "event": "tool_output",
+          "phase": "quick_repair",
+          "message": "quick polish: passed `npm run build`"
+        },
+        {
+          "t": 64.254,
+          "event": "tool_output",
+          "phase": "quick_repair",
+          "message": "Quick preview polish changed 2 file(s), validation ok=True."
+        },
+        {
+          "t": 64.254,
+          "event": "status",
+          "phase": "completion",
+          "message": "Complete: backend execution criteria passed or were intentionally skipped."
+        },
+        {
+          "t": 64.254,
+          "event": "tool_output",
+          "phase": "completion",
+          "message": "Complete: backend execution criteria passed or were intentionally skipped."
+        },
+        {
+          "t": 64.255,
+          "event": "done",
+          "phase": null,
+          "message": "Beres, hasil agent siap dipakai."
+        }
+      ],
+      "spoken_excerpt": "Menghapus data kontak palsu (nomor telepon dan email) dari Home.tsx. Mengganti tombol WhatsApp dan email dengan tombol booking yang netral dan tombol kontak yang menampilkan status belum dikonfigurasi."
+    }
+  ],
+  "summary": "Ran 1 live benchmark scenario(s) through 9Router readiness gate."
+}

@@ -1,7 +1,7 @@
 import React from "react";
 import Draggable from "react-draggable";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, Paperclip, SendHorizontal, Play, Sparkles, MessageSquarePlus } from "lucide-react";
+import { X, Paperclip, SendHorizontal, Play, Sparkles, MessageSquarePlus, Image as ImageIcon, AtSign } from "lucide-react";
 import { getBuildModeProfile, getModeQuickPrompts } from "../../agent/runtime";
 import { AgentLiveStage } from "./AgentLiveStage";
 import { type AgentLiveItem, type BuildMode, type UploadedImageAsset } from "../../types";
@@ -91,7 +91,7 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
   const activeFileName = activeFile.split("/").pop() || activeFile;
   const promptHasIntent = agentInput.trim().length > 8;
   const showRunExperience = agentRunViewPinned || agentStatus === "thinking";
-  const personaClass = buildMode === "full-agent" ? "clara" : "raka";
+  const personaClass = "appora";
   const visibleConversationItems = agentLiveItems.filter((item) => item.role === "user" || item.role === "assistant");
   const latestAssistantText = [...agentLiveItems].reverse().find((item) => item.role === "assistant")?.text || agentReply;
   const collapsedBubbleText = agentStatus === "thinking"
@@ -101,8 +101,10 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
     `${modeProfile.personaName} • ${modeProfile.personaRole}`,
     activeFileName ? `File: ${activeFileName}` : null,
     previewUrl ? "Preview live" : "Preview idle",
-    attachedImage ? `Asset: ${attachedImage.name}` : null,
+    attachedImage ? `Asset: @${attachedImage.alias || attachedImage.title || attachedImage.name}` : null,
   ].filter(Boolean) as string[];
+  const attachedImageAlias = attachedImage?.alias || attachedImage?.title || "";
+  const attachedImageToken = attachedImageAlias ? `@${attachedImageAlias}` : "";
 
   const quickPrompts = getModeQuickPrompts(buildMode, { activeFile, previewUrl }).map((item) => ({
     label: item.label,
@@ -146,6 +148,13 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
     setBubbleText("Sip, ini udah lebih spesifik. Aku siap gas.");
     if (!agentWidgetOpen) onToggleOpen();
   }, [agentWidgetOpen, onAgentInputChange, onToggleOpen]);
+
+  const insertAttachedImageToken = React.useCallback(() => {
+    if (!attachedImageToken) return;
+    onAgentInputChange(agentInput.includes(attachedImageToken)
+      ? agentInput
+      : `${agentInput.trim()} ${attachedImageToken} `.trimStart());
+  }, [agentInput, attachedImageToken, onAgentInputChange]);
 
   React.useEffect(() => {
     if (agentStatus === "thinking") {
@@ -394,6 +403,19 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
                           value={agentInput}
                           onChange={(e) => onAgentInputChange(e.target.value)}
                         />
+                        {attachedImage ? (
+                          <div className="attachedImageChip agentOrbAssetChip">
+                            <ImageIcon size={15} />
+                            <button className="attachedImageAlias" type="button" onClick={insertAttachedImageToken}>
+                              <AtSign size={12} />
+                              <span>{attachedImageAlias || "image"}</span>
+                            </button>
+                            <span className="attachedImageName">{attachedImage.name}</span>
+                            <button className="attachedImageRemove" onClick={onClearAttachedImage} aria-label="Remove attached image">
+                              ×
+                            </button>
+                          </div>
+                        ) : null}
 
                         <div className="agentOrbActions">
                           <button className="btn subtleBtn" onClick={onPickAgentImage} disabled={imageUploading}>
@@ -413,11 +435,25 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
                     <textarea
                       className="textarea promptBox agentOrbPrompt"
                       placeholder={buildMode === "full-agent"
-                        ? "Kasih brief, target produk, atau suruh Clara build di Full Preview..."
-                        : "Ceritain blocker, file yang lagi susah, atau minta Raka bantu di titik ini..."}
+                        ? "Kasih brief, target produk, atau suruh Appora Agent build di Full Preview..."
+                        : "Ceritain blocker, file yang lagi susah, atau minta Appora Agent bantu di titik ini..."}
                       value={agentInput}
                       onChange={(e) => onAgentInputChange(e.target.value)}
                     />
+                    {attachedImage ? (
+                      <div className="attachedImageChip agentOrbAssetChip">
+                        <ImageIcon size={15} />
+                        <button className="attachedImageAlias" type="button" onClick={insertAttachedImageToken}>
+                          <AtSign size={12} />
+                          <span>{attachedImageAlias || "image"}</span>
+                        </button>
+                        <span className="attachedImageName">{attachedImage.name}</span>
+                        <span className="attachedImageHint">pakai di prompt, contoh: {attachedImageToken || "@image"} sebagai hero</span>
+                        <button className="attachedImageRemove" onClick={onClearAttachedImage} aria-label="Remove attached image">
+                          ×
+                        </button>
+                      </div>
+                    ) : null}
 
                     <div className="agentOrbQuickGrid">
                       {quickPrompts.slice(0, 4).map((item) => (
@@ -442,16 +478,6 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
                         <span>Run</span>
                       </button>
                     </div>
-
-                    {attachedImage ? (
-                      <div className="attachedImageChip">
-                        <span className="attachedImageName">{attachedImage.name}</span>
-                        <span className="attachedImagePath">{attachedImage.path}</span>
-                        <button className="attachedImageRemove" onClick={onClearAttachedImage} aria-label="Remove attached image">
-                          ×
-                        </button>
-                      </div>
-                    ) : null}
                   </>
                 )}
               </div>
@@ -484,7 +510,7 @@ export const AgentOrb: React.FC<AgentOrbProps> = ({
           transition={isCompactPointer ? { duration: 0.12 } : { duration: orbMode === "playful" ? 0.5 : orbMode === "surprised" ? 0.35 : orbMode === "celebrate" ? 0.7 : orbMode === "working" ? 0.9 : 2.6, repeat: orbMode === "surprised" ? 1 : Infinity, ease: "easeInOut" }}
         >
           <span className={`agentOrbFace ${orbMode}`}>
-            <span className="agentOrbPersonaMark">{buildMode === "full-agent" ? "C" : "R"}</span>
+            <span className="agentOrbPersonaMark">A</span>
             <span className="orbEye left" />
             <span className="orbEye right" />
             <span className="orbMouth" />

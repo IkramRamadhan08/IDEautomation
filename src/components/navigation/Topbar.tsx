@@ -71,13 +71,13 @@ export const Topbar: React.FC<TopbarProps> = ({
           className={`btn modeBtn ${buildMode === "hybrid" ? "primary" : ""}`}
           onClick={() => onQuickSwitchBuildMode("hybrid")}
         >
-          Raka
+          Workspace
         </button>
         <button
           className={`btn modeBtn ${buildMode === "full-agent" ? "primary" : ""}`}
           onClick={() => onQuickSwitchBuildMode("full-agent")}
         >
-          Clara Preview
+          Full Preview
         </button>
       </div>
 

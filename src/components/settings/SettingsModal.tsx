@@ -103,13 +103,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 className={`btn modeBtn ${buildModeDraft === "hybrid" ? "primary" : ""}`}
                 onClick={() => onBuildModeDraftChange("hybrid")}
               >
-                Raka
+                Workspace
               </button>
               <button
                 className={`btn modeBtn ${buildModeDraft === "full-agent" ? "primary" : ""}`}
                 onClick={() => onBuildModeDraftChange("full-agent")}
               >
-                Clara Preview
+                Full Preview
               </button>
             </div>
           </div>

@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
+import subprocess
 import time
 from dataclasses import dataclass
 import difflib
+import html as html_lib
 import os
 from collections import Counter
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
+from urllib.request import Request, urlopen
 
 from api.agent_skills import build_validation_plan, detect_project_stack, list_imported_skills, read_imported_skill
 from api.fs import read_text, safe_join
@@ -30,6 +35,32 @@ class LocalToolCallResult:
     raw: dict[str, Any]
     duration_ms: int
     error: str | None = None
+
+
+def _workspace_or_project_path(ws_root: Path, project_dir: Path, raw_path: str) -> str:
+    """Accept either workspace-relative or current-project-relative file paths."""
+    clean = str(raw_path or "").strip().lstrip("/")
+    if clean.startswith("./"):
+        clean = clean[2:]
+    if not clean:
+        return clean
+    try:
+        if safe_join(ws_root, clean).exists():
+            return clean
+    except Exception:
+        pass
+    try:
+        project_rel = project_dir.resolve().relative_to(ws_root.resolve()).as_posix()
+    except Exception:
+        project_rel = ""
+    if project_rel and not clean.startswith(project_rel + "/"):
+        candidate = f"{project_rel}/{clean}"
+        try:
+            if safe_join(ws_root, candidate).exists():
+                return candidate
+        except Exception:
+            pass
+    return clean
 
 
 _LOCAL_TOOLS: list[LocalToolInfo] = [
@@ -206,6 +237,44 @@ _LOCAL_TOOLS: list[LocalToolInfo] = [
         },
     ),
     LocalToolInfo(
+        name="test_runner",
+        description="Run a bounded project test/build/lint command and capture stdout/stderr for debugging. Use for unit tests and validation loops.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "project_root": {"type": "string", "description": "Project root relative to workspace"},
+                "commands": {"type": "array", "items": {"type": "string"}, "description": "Validation commands to run from project_root"},
+                "timeout_seconds": {"type": "integer", "default": 120},
+                "max_output_chars": {"type": "integer", "default": 12000},
+            },
+        },
+    ),
+    LocalToolInfo(
+        name="git_manager",
+        description="Inspect git status/diff and produce a safe add/commit command plan without mutating the repository.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "project_root": {"type": "string", "description": "Project root relative to workspace"},
+                "mode": {"type": "string", "enum": ["status", "diff", "commit_plan"], "default": "status"},
+                "message": {"type": "string", "description": "Suggested commit message for commit_plan"},
+                "max_diff_chars": {"type": "integer", "default": 12000},
+            },
+        },
+    ),
+    LocalToolInfo(
+        name="docs_browser",
+        description="Fetch a public HTTPS documentation page and return cleaned, bounded text for current API/library research.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "Public HTTPS documentation URL"},
+                "max_chars": {"type": "integer", "default": 12000},
+            },
+            "required": ["url"],
+        },
+    ),
+    LocalToolInfo(
         name="skill_catalog",
         description="Search imported Appora/Codex/Claude/OpenClaw-style SKILL.md metadata without loading full skill bodies (read-only).",
         input_schema={
@@ -346,6 +415,33 @@ _JAVA_SYMBOL_DEFINITION_RE = re.compile(r"^\s*(?:public|private|protected|static
 _UTILITY_CLASS_RE = re.compile(
     r"\b(?:flex|grid|hidden|block|inline-flex|items-[\w-]+|justify-[\w-]+|gap-\d|p[trblxy]?-\d|m[trblxy]?-\d|text-[\w\-/]+|bg-[\w\-/]+|border(?:-[\w\-/]+)?|rounded(?:-[\w]+)?|shadow(?:-[\w]+)?|w-[\w\-/\[\]]+|h-[\w\-/\[\]]+|min-h-[\w\-/\[\]]+|max-w-[\w\-/\[\]]+)\b"
 )
+_SHELL_META_RE = re.compile(r"[;&|`$<>]")
+_SAFE_VALIDATION_EXECUTABLES = {
+    "npm",
+    "pnpm",
+    "yarn",
+    "bun",
+    "python",
+    "python3",
+    "pytest",
+    "go",
+    "cargo",
+    "mvn",
+    "gradle",
+    "gradlew",
+    "dotnet",
+    "deno",
+    "cmake",
+    "make",
+    "swift",
+    "mix",
+    "docker",
+    "docker-compose",
+    "kubectl",
+    "composer",
+    "bundle",
+    "ruby",
+}
 
 
 def _should_ignore_path(rel_posix: str) -> bool:
@@ -360,6 +456,93 @@ def _should_ignore_path(rel_posix: str) -> bool:
     if len(parts) >= 2 and f"{parts[0]}/{parts[1]}" in _IGNORED_DIRS:
         return True
     return False
+
+
+def _run_process(args: list[str], cwd: Path, *, timeout: int = 120) -> dict[str, Any]:
+    try:
+        proc = subprocess.run(
+            args,
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return {
+            "ok": proc.returncode == 0,
+            "returncode": proc.returncode,
+            "stdout": proc.stdout or "",
+            "stderr": proc.stderr or "",
+        }
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "ok": False,
+            "returncode": 124,
+            "stdout": str(exc.stdout or ""),
+            "stderr": str(exc.stderr or "") + f"\nTimed out after {timeout}s",
+        }
+    except FileNotFoundError as exc:
+        return {"ok": False, "returncode": 127, "stdout": "", "stderr": str(exc)}
+
+
+def _normalize_validation_command(command: str, project_root: str) -> str:
+    clean = " ".join(str(command or "").strip().split())
+    prefix = f"cd {project_root} && "
+    if project_root not in {"", "."} and clean.startswith(prefix):
+        clean = clean[len(prefix):].strip()
+    return clean
+
+
+def _safe_validation_command_args(command: str) -> list[str]:
+    clean = str(command or "").strip()
+    if not clean:
+        raise RuntimeError("command is required")
+    if _SHELL_META_RE.search(clean):
+        raise RuntimeError("test_runner only accepts a single validation command without shell operators")
+    parts = shlex.split(clean)
+    if not parts:
+        raise RuntimeError("command is required")
+    exe = Path(parts[0]).name
+    if exe not in _SAFE_VALIDATION_EXECUTABLES:
+        raise RuntimeError(f"unsupported validation executable: {exe}")
+    if exe in {"npm", "pnpm", "yarn", "bun"} and len(parts) >= 2:
+        allowed = {"run", "test", "exec", "x"}
+        if parts[1] not in allowed:
+            raise RuntimeError(f"unsupported package-manager validation subcommand: {parts[1]}")
+    if exe in {"python", "python3"} and "-c" in parts:
+        raise RuntimeError("inline python -c is not allowed in test_runner")
+    return parts
+
+
+def _extract_git_status_paths(status_text: str) -> list[str]:
+    paths: list[str] = []
+    for line in status_text.splitlines():
+        raw = line[3:] if len(line) > 3 else ""
+        if " -> " in raw:
+            raw = raw.split(" -> ", 1)[1]
+        clean = raw.strip()
+        if clean:
+            paths.append(clean)
+    return paths
+
+
+def _clean_docs_html(html: str, max_chars: int) -> tuple[str, str]:
+    title_match = re.search(r"<title[^>]*>(.*?)</title>", html, flags=re.IGNORECASE | re.DOTALL)
+    title = html_lib.unescape(re.sub(r"\s+", " ", title_match.group(1)).strip()) if title_match else ""
+    body = re.sub(r"<script\b[^>]*>.*?</script>", " ", html, flags=re.IGNORECASE | re.DOTALL)
+    body = re.sub(r"<style\b[^>]*>.*?</style>", " ", body, flags=re.IGNORECASE | re.DOTALL)
+    body = re.sub(r"<[^>]+>", " ", body)
+    text = html_lib.unescape(re.sub(r"\s+", " ", body).strip())
+    return title[:240], text[:max_chars]
+
+
+def _validate_public_docs_url(url: str) -> str:
+    parsed = urlsplit(str(url or "").strip())
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise RuntimeError("docs_browser only accepts public https URLs")
+    host = (parsed.hostname or "").lower()
+    if host in {"localhost", "127.0.0.1", "::1"} or host.endswith(".local"):
+        raise RuntimeError("docs_browser refuses local/private URLs")
+    return parsed.geturl()
 
 
 def _walk_candidate_files(project_dir: Path, *, limit_files: int = 1400) -> list[Path]:
@@ -740,7 +923,7 @@ def execute_local_tool(ws_root: Path, project_dir: Path, *, tool_name: str, argu
             return LocalToolCallResult(tool=name, arguments=args, ok=True, text=text[:6000], raw={"files": lines}, duration_ms=duration_ms)
 
         if name == "repo_read":
-            path = str(args.get("path") or "").strip().lstrip("/")
+            path = _workspace_or_project_path(ws_root, project_dir, str(args.get("path") or ""))
             if not path:
                 raise RuntimeError("path is required")
             max_chars = int(args.get("max_chars") or 20000)
@@ -768,7 +951,7 @@ def execute_local_tool(ws_root: Path, project_dir: Path, *, tool_name: str, argu
             chunks: list[str] = []
             used = 0
             for raw_path in raw_paths[:24]:
-                path = str(raw_path or "").strip().lstrip("/")
+                path = _workspace_or_project_path(ws_root, project_dir, str(raw_path or ""))
                 if not path:
                     continue
                 try:
@@ -831,7 +1014,7 @@ def execute_local_tool(ws_root: Path, project_dir: Path, *, tool_name: str, argu
             return LocalToolCallResult(tool=name, arguments=args, ok=True, text=preview[:6000], raw={"matches": matches}, duration_ms=duration_ms)
 
         if name == "file_window":
-            path = str(args.get("path") or "").strip().lstrip("/")
+            path = _workspace_or_project_path(ws_root, project_dir, str(args.get("path") or ""))
             if not path:
                 raise RuntimeError("path is required")
             center = int(args.get("line") or 1)
@@ -867,7 +1050,7 @@ def execute_local_tool(ws_root: Path, project_dir: Path, *, tool_name: str, argu
             )
 
         if name == "line_replace_preview":
-            path = str(args.get("path") or "").strip().lstrip("/")
+            path = _workspace_or_project_path(ws_root, project_dir, str(args.get("path") or ""))
             if not path:
                 raise RuntimeError("path is required")
             start_line = int(args.get("start_line") or 0)
@@ -901,7 +1084,7 @@ def execute_local_tool(ws_root: Path, project_dir: Path, *, tool_name: str, argu
             return LocalToolCallResult(tool=name, arguments=args, ok=True, text=text[:30_000], raw=payload, duration_ms=duration_ms)
 
         if name == "search_replace_preview":
-            path = str(args.get("path") or "").strip().lstrip("/")
+            path = _workspace_or_project_path(ws_root, project_dir, str(args.get("path") or ""))
             search = str(args.get("search") if args.get("search") is not None else "")
             replace = str(args.get("replace") if args.get("replace") is not None else "")
             context = int(args.get("context") or 4)
@@ -1214,6 +1397,120 @@ def execute_local_tool(ws_root: Path, project_dir: Path, *, tool_name: str, argu
             duration_ms = int((time.perf_counter() - started) * 1000)
             return LocalToolCallResult(tool=name, arguments=args, ok=True, text=text[:12000], raw=payload, duration_ms=duration_ms)
 
+        if name == "test_runner":
+            req_root = str(args.get("project_root") or ".").strip() or "."
+            proj = _safe_project_dir(ws_root, req_root)
+            timeout = int(args.get("timeout_seconds") or 120)
+            timeout = max(5, min(timeout, 300))
+            max_output_chars = int(args.get("max_output_chars") or 12000)
+            max_output_chars = max(1000, min(max_output_chars, 50_000))
+            raw_commands = args.get("commands")
+            if isinstance(raw_commands, list) and raw_commands:
+                commands = [str(command or "").strip() for command in raw_commands if str(command or "").strip()]
+            else:
+                plan = build_validation_plan(proj, project_root=req_root)
+                commands = [
+                    str(item.get("command") or "").strip()
+                    for item in list(plan.get("commands") or [])
+                    if isinstance(item, dict) and str(item.get("command") or "").strip()
+                ][:3]
+            if not commands:
+                raise RuntimeError("no validation/test commands were provided or inferred")
+
+            results: list[dict[str, Any]] = []
+            for command in commands[:5]:
+                normalized = _normalize_validation_command(command, req_root)
+                cmd_args = _safe_validation_command_args(normalized)
+                ran = _run_process(cmd_args, proj, timeout=timeout)
+                combined = "\n".join(part for part in [ran.get("stdout", ""), ran.get("stderr", "")] if str(part).strip())
+                results.append({
+                    "command": normalized,
+                    "ok": bool(ran.get("ok")),
+                    "returncode": ran.get("returncode"),
+                    "stdout": str(ran.get("stdout") or "")[:max_output_chars],
+                    "stderr": str(ran.get("stderr") or "")[:max_output_chars],
+                    "output_excerpt": combined[:max_output_chars],
+                })
+            payload = {
+                "project_root": req_root,
+                "ok": all(bool(item.get("ok")) for item in results),
+                "ran": len(results),
+                "failed": sum(1 for item in results if not item.get("ok")),
+                "results": results,
+            }
+            text = json.dumps(payload, ensure_ascii=False, indent=2)
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            return LocalToolCallResult(tool=name, arguments=args, ok=bool(payload["ok"]), text=text[:max_output_chars + 4000], raw=payload, duration_ms=duration_ms)
+
+        if name == "git_manager":
+            req_root = str(args.get("project_root") or ".").strip() or "."
+            mode = str(args.get("mode") or "status").strip() or "status"
+            message = str(args.get("message") or "Update project").strip() or "Update project"
+            max_diff_chars = int(args.get("max_diff_chars") or 12000)
+            max_diff_chars = max(1000, min(max_diff_chars, 80_000))
+            if mode not in {"status", "diff", "commit_plan"}:
+                raise RuntimeError("mode must be one of: status, diff, commit_plan")
+            proj = _safe_project_dir(ws_root, req_root)
+            inside = _run_process(["git", "rev-parse", "--is-inside-work-tree"], proj, timeout=10)
+            if not inside.get("ok") or str(inside.get("stdout") or "").strip() != "true":
+                raise RuntimeError("project_root is not inside a git worktree")
+            status = _run_process(["git", "status", "--short"], proj, timeout=10)
+            diff_stat = _run_process(["git", "diff", "--stat"], proj, timeout=10)
+            diff: dict[str, Any] | None = None
+            if mode in {"diff", "commit_plan"}:
+                diff = _run_process(["git", "diff", "--"], proj, timeout=20)
+            changed_paths = _extract_git_status_paths(str(status.get("stdout") or ""))
+            quoted_paths = " ".join(shlex.quote(path) for path in changed_paths)
+            command_plan = []
+            if mode == "commit_plan":
+                command_plan = [
+                    f"git add {quoted_paths}" if quoted_paths else "git add <paths>",
+                    f"git commit -m {shlex.quote(message)}",
+                ]
+            payload = {
+                "project_root": req_root,
+                "mode": mode,
+                "ok": bool(status.get("ok")),
+                "dirty": bool(changed_paths),
+                "changed_paths": changed_paths,
+                "status": str(status.get("stdout") or ""),
+                "diff_stat": str(diff_stat.get("stdout") or ""),
+                "diff": str((diff or {}).get("stdout") or "")[:max_diff_chars] if diff is not None else "",
+                "command_plan": command_plan,
+                "writes_performed": False,
+            }
+            text = json.dumps(payload, ensure_ascii=False, indent=2)
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            return LocalToolCallResult(tool=name, arguments=args, ok=bool(payload["ok"]), text=text[:max_diff_chars + 5000], raw=payload, duration_ms=duration_ms)
+
+        if name == "docs_browser":
+            url = _validate_public_docs_url(str(args.get("url") or ""))
+            max_chars = int(args.get("max_chars") or 12000)
+            max_chars = max(1000, min(max_chars, 60_000))
+            req = Request(
+                url,
+                headers={
+                    "User-Agent": "ApporaDocsBrowser/0.1",
+                    "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5",
+                },
+                method="GET",
+            )
+            with urlopen(req, timeout=12) as response:  # nosec B310 - docs_browser validates public HTTPS URL shape.
+                raw = response.read(min(max_chars * 4, 500_000))
+                final_url = response.geturl()
+            decoded = raw.decode("utf-8", errors="ignore")
+            title, clean_text = _clean_docs_html(decoded, max_chars=max_chars)
+            payload = {
+                "url": url,
+                "final_url": final_url,
+                "title": title,
+                "text": clean_text,
+                "truncated": len(clean_text) >= max_chars,
+            }
+            text = json.dumps(payload, ensure_ascii=False, indent=2)
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            return LocalToolCallResult(tool=name, arguments=args, ok=True, text=text[:max_chars + 2000], raw=payload, duration_ms=duration_ms)
+
         if name == "skill_catalog":
             req_root = str(args.get("project_root") or ".").strip() or "."
             query = str(args.get("query") or "").strip().lower()
@@ -1222,35 +1519,48 @@ def execute_local_tool(ws_root: Path, project_dir: Path, *, tool_name: str, argu
             proj = _safe_project_dir(ws_root, req_root)
             warnings: list[str] = []
             skills = list_imported_skills(ws_root, proj, warnings=warnings)
+            try:
+                stack = detect_project_stack(proj, warnings=warnings)
+            except Exception:
+                stack = None
             query_tokens = {token for token in re.findall(r"[a-zA-Z0-9_:@./-]{2,}", query)}
+            if stack:
+                query_tokens.update(str(item).lower() for item in [*stack.languages, *stack.frameworks, *stack.runtimes, *stack.component_libraries] if item)
+                if stack.has_preview_surface:
+                    query_tokens.update({"frontend", "ui", "preview", "web", "app"})
+            if any(token in query_tokens for token in {"dashboard", "landing", "ui", "ux", "frontend", "react", "vite", "tsx", "page", "website", "web"}):
+                query_tokens.update({"frontend", "react", "vite", "ui", "component", "layout", "responsive", "app"})
 
             ws_resolved = ws_root.resolve()
             proj_resolved = proj.resolve()
 
-            def score(skill: Any) -> tuple[int, int, str]:
+            def score(skill: Any) -> tuple[int, int, int, str]:
                 hay = f"{skill.skill_id} {skill.title} {skill.description} {skill.body[:800]}".lower()
                 overlap = sum(1 for token in query_tokens if token in hay)
+                title_overlap = sum(1 for token in query_tokens if token in f"{skill.skill_id} {skill.title}".lower())
                 try:
                     source_path = Path(str(skill.source)).resolve()
                     local_boost = 2 if source_path.is_relative_to(proj_resolved) else (1 if source_path.is_relative_to(ws_resolved) else 0)
                 except Exception:
                     local_boost = 0
-                return local_boost, overlap, skill.skill_id
+                return local_boost, title_overlap, overlap, skill.skill_id
 
             ranked = sorted(skills, key=score, reverse=True)
             if query_tokens:
-                matched = [skill for skill in ranked if score(skill)[1] > 0]
-                ranked = matched or ranked
+                matched = [skill for skill in ranked if score(skill)[2] > 0]
+                ranked = matched
             payload = {
                 "project_root": req_root,
                 "count": len(skills),
+                "matched_count": len(ranked),
                 "skills": [
                     {
                         "skill_id": skill.skill_id,
                         "title": skill.title,
-                        "description": skill.description,
+                        "description": str(skill.description or skill.body[:240]).replace("\n", " ")[:360],
                         "provider": skill.provider,
                         "source": skill.source,
+                        "match_score": score(skill)[:3],
                     }
                     for skill in ranked[:limit]
                 ],
@@ -1258,7 +1568,7 @@ def execute_local_tool(ws_root: Path, project_dir: Path, *, tool_name: str, argu
             }
             text = json.dumps(payload, ensure_ascii=False, indent=2)
             duration_ms = int((time.perf_counter() - started) * 1000)
-            return LocalToolCallResult(tool=name, arguments=args, ok=True, text=text[:14000], raw=payload, duration_ms=duration_ms)
+            return LocalToolCallResult(tool=name, arguments=args, ok=True, text=text[:5000], raw=payload, duration_ms=duration_ms)
 
         if name == "skill_read":
             req_root = str(args.get("project_root") or ".").strip() or "."

@@ -201,7 +201,7 @@ def _template_memory(*, template: ProjectTemplate, project_name: str) -> str:
 - Tags: {tags}
 - Product direction: {template.description}
 - Best for: {template.best_for}
-- Build guidance: keep this starter production-ready, responsive, accessible, and easy for a non-coder to iterate through Clara/Raka.
+- Build guidance: keep this starter production-ready, responsive, accessible, and easy for a non-coder to iterate through Appora Agent.
 - UX guidance: preserve loading, empty, error, and success states when adding features.
 - Deployment guidance: keep the project Vercel-friendly and avoid local-only assumptions.
 """
@@ -218,8 +218,8 @@ const metrics = [
 
 const accounts = [
   {{ name: "Northstar Labs", plan: "Scale", status: "Healthy", owner: "Maya", lastSeen: "12m ago" }},
-  {{ name: "Atlas Studio", plan: "Team", status: "Needs onboarding", owner: "Raka", lastSeen: "2h ago" }},
-  {{ name: "Orbit Ops", plan: "Starter", status: "Trial risk", owner: "Clara", lastSeen: "1d ago" }},
+  {{ name: "Atlas Studio", plan: "Team", status: "Needs onboarding", owner: "Nadia", lastSeen: "2h ago" }},
+  {{ name: "Orbit Ops", plan: "Starter", status: "Trial risk", owner: "Dimas", lastSeen: "1d ago" }},
 ];
 
 export default function DashboardPage() {{
@@ -387,7 +387,7 @@ export default function HomePage() {{
         <div className="heroInner">
           <div className="pill">Landing + pricing starter</div>
           <h1 className="heroTitle">{project_name}</h1>
-          <p className="heroLead">A polished marketing surface for explaining the offer, collecting demand, and giving Clara a strong base to iterate from.</p>
+          <p className="heroLead">A polished marketing surface for explaining the offer, collecting demand, and giving Appora Agent a strong base to iterate from.</p>
           <div className="row">
             <button className="btn btnPrimary">Start free</button>
             <button className="btn btnGhost">View pricing</button>

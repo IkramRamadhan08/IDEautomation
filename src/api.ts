@@ -127,6 +127,8 @@ export type UploadedImageAsset = {
   ok: boolean;
   path: string;
   name: string;
+  title?: string | null;
+  alias?: string | null;
   content_type?: string | null;
   size: number;
 };
@@ -670,7 +672,7 @@ export async function runClose(id: string): Promise<{ ok: boolean }> {
 export type PreviewAuditResult = {
   ok: boolean;
   preview_url: string;
-  audit_mode: "browser" | "html";
+  audit_mode: "agent-browser" | "browser" | "html";
   title: string;
   meta_description: string;
   headings: string[];
@@ -709,6 +711,17 @@ export type PreviewAuditResult = {
     ok: boolean;
     detail: string;
   }>;
+  visual_summary?: Record<string, unknown>;
+  evidence_pack?: Record<string, unknown>;
+  repair_targets?: Array<{
+    kind: string;
+    priority: string;
+    selectors?: string[];
+    likely_files?: string[];
+    evidence?: string[];
+    action: string;
+  }>;
+  repair_brief?: string;
   excerpt: string;
   summary: string;
 };
@@ -795,9 +808,10 @@ export async function agentHarnessRunShell(
   return r.json();
 }
 
-export async function uploadImageAsset(project_root: string, file: File): Promise<UploadedImageAsset> {
+export async function uploadImageAsset(project_root: string, file: File, title?: string | null): Promise<UploadedImageAsset> {
   const form = new FormData();
   form.append("project_root", project_root);
+  if (title?.trim()) form.append("title", title.trim());
   form.append("file", file, file.name);
   const r = await apiFetch(`/api/assets/image`, {
     method: "POST",
@@ -876,6 +890,25 @@ export type AgentRunTrace = {
       status: string;
       files?: string[];
     }>;
+    horizon?: {
+      enabled?: boolean;
+      goal?: string;
+      project_root?: string;
+      intent?: string;
+      complexity?: string;
+      status?: string;
+      current_checkpoint?: string;
+      checkpoints?: Array<{
+        id: string;
+        title: string;
+        detail?: string;
+        status: string;
+        files?: string[];
+      }>;
+      completion_criteria?: string[];
+      risk_register?: string[];
+      blocking_checks?: string[];
+    };
   };
   verification?: Array<{
     name: string;
@@ -897,6 +930,7 @@ export type AgentResult = {
   actions: Array<{ type: string; [key: string]: unknown }>;
   intent?: AgentIntent;
   trace?: AgentRunTrace;
+  observability?: AgentObservability;
   execution?: {
     auto_execute: boolean;
     project_root: string;
@@ -921,6 +955,52 @@ export type AgentResult = {
     completion_report?: Record<string, unknown> | null;
     failure_analysis?: Record<string, unknown> | null;
   };
+};
+export type AgentObservability = {
+  ok: boolean;
+  summary: {
+    event_count: number;
+    phase_counts: Record<string, number>;
+    tool_call_count: number;
+    tool_output_count: number;
+    command_count: number;
+    failed_command_count: number;
+    changes: number;
+    actions: number;
+    execution_ok?: boolean | null;
+    duration_ms?: number | null;
+  };
+  timeline: Array<{
+    seq: number;
+    event: string;
+    phase: string;
+    kind: string;
+    tool?: string | null;
+    command?: string | null;
+    ok?: boolean | null;
+    message?: string;
+    created_at?: string | number | null;
+  }>;
+  commands: Array<{
+    seq_first: number;
+    seq_last: number;
+    phase: string;
+    tool: string;
+    group: string;
+    command: string;
+    ok?: boolean | null;
+    returncode?: number | string | null;
+    stdout_preview?: string;
+    stderr_preview?: string;
+    chunk_count: number;
+    summary?: string;
+  }>;
+  failure_points: Array<{
+    kind: string;
+    phase?: string | null;
+    command?: string | null;
+    detail: string;
+  }>;
 };
 export type AgentJob = {
   id: string;
@@ -967,11 +1047,12 @@ export type AgentCapabilities = {
     supabase_rag_ready?: boolean;
     component_library_awareness?: boolean;
     headless_browser_runtime?: boolean;
+    agent_browser_preview_audit?: boolean;
     playwright_preview_audit?: boolean;
     webcontainer_runtime?: boolean;
     browser_dom_audit?: boolean;
     preview_quality_checks?: boolean;
-    preview_audit_mode?: "browser" | "html";
+    preview_audit_mode?: "agent-browser" | "browser" | "html";
     provider_fallback_routing?: boolean;
     tool_actions: string[];
     streaming_transport: boolean;
@@ -1001,9 +1082,10 @@ export type AgentCapabilities = {
     component_libraries: string[];
     headless_browser: boolean;
     playwright: boolean;
+    agent_browser?: boolean;
     webcontainer: boolean;
     node_runtime: boolean;
-    preview_audit_mode: "browser" | "html";
+    preview_audit_mode: "agent-browser" | "browser" | "html";
   };
   discovered_mcp_servers: Array<{
     name: string;
@@ -1049,6 +1131,12 @@ export async function getAgentJobEvents(jobId: string, afterId = 0): Promise<{ o
   return r.json();
 }
 
+export async function getAgentJobObservability(jobId: string): Promise<{ ok: boolean; observability: AgentObservability; source: "supabase" | "session" }> {
+  const r = await apiFetch(`/api/agent/jobs/${encodeURIComponent(jobId)}/observability`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
 function parseSseChunk(chunk: string): AgentStreamEvent[] {
   const out: AgentStreamEvent[] = [];
   const messages = chunk.split("\n\n");
@@ -1082,6 +1170,7 @@ export async function streamAgent(
   project_root?: string | null,
   build_mode?: BuildMode,
   asset_paths?: string[],
+  asset_aliases?: Record<string, string>,
   current_content?: string | null,
   open_files?: string[],
   preview_url?: string | null,
@@ -1103,6 +1192,7 @@ export async function streamAgent(
       preview_url,
       editor_status,
       asset_paths,
+      asset_aliases,
       stream: true,
       auto_execute,
     }),
@@ -1155,6 +1245,7 @@ export async function agent(
   project_root?: string | null,
   build_mode?: BuildMode,
   asset_paths?: string[],
+  asset_aliases?: Record<string, string>,
   current_content?: string | null,
   open_files?: string[],
   preview_url?: string | null,
@@ -1175,6 +1266,7 @@ export async function agent(
       preview_url,
       editor_status,
       asset_paths,
+      asset_aliases,
     }),
   });
   if (!r.ok) throw new Error(await r.text());

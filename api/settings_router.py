@@ -200,7 +200,9 @@ def build_settings_router(*, session_state, env_set, env_unset, reload_settings)
     def list_models(provider: str = Query("", description="llm provider, e.g. openai|anthropic|openrouter")):
         from .oauth_runtime import list_models as oauth_list_models
 
-        prov = provider.lower().strip()
+        prov = provider.lower().strip() or str(getattr(settings_mod.settings, "llm_provider", "") or "").lower().strip()
+        if not prov:
+            prov = "nine_router"
         try:
             return {"provider": prov, "models": oauth_list_models(prov)}
         except RuntimeError as exc:

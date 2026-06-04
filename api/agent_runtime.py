@@ -7,14 +7,14 @@ from pathlib import Path, PurePosixPath
 import re
 from typing import Any, Callable, Literal, TypedDict
 
-from langgraph.graph import END, StateGraph
-
 from . import settings as settings_mod
 from .agent import suggest
+from .agent_editing import assess_edit_strategy, summarize_edit_strategy
 from .agent_intent import AgentIntent, classify_agent_intent
 from .agent_mcp import discover_mcp_servers, execute_mcp_tool, format_mcp_prompt, format_mcp_results_prompt, list_mcp_tools, suggest_mcp_actions
 from .agent_tools import execute_local_tool, format_local_tool_results_prompt, format_local_tools_prompt
 from .agent_memory import remember_agent_run, retrieve_agent_memory
+from .agent_planner import build_long_horizon_plan, update_long_horizon_progress
 from .agent_skills import detect_project_stack, format_skill_prompt, resolve_agent_skills
 from .app_state import CURRENT_SESSION_ID, CURRENT_USER_ID, STATE
 from .fs import read_text, safe_join
@@ -44,6 +44,7 @@ Shared rules:
 - The app is hosted on Vercel serverless with Supabase as durable storage. Assume the end user is non-technical and wants a working web/app result, not coding instructions.
 - Shell actions are available for user-approved project work, including hosted/serverless flows. Use them when they are the cleanest way to install, inspect, validate, build, or run project tooling.
 - The user accepts terminal risk. Still prefer project-scoped commands and explain failures clearly through `spoken`.
+- Appora shell runs on Linux/POSIX inside the project cwd. Never emit Windows shell syntax such as `cd /d`, drive letters, PowerShell commands, or backslash paths; use commands like `npm run build`, `python3 -m pytest`, or `cd relative-folder && npm run build`.
 - Do not skip build/test/validation just because a command might need guarded-autonomy review. Return the best project-scoped shell action or a safer equivalent; the backend harness will allow, block, or report the policy result.
 - If the user is mainly chatting, asking for explanation, or checking status, keep `changes` and `actions` empty unless they explicitly ask to modify the project.
 - If the user mixed conversation with a concrete build request, put the conversation in `spoken` and keep edits scoped to the explicit implementation ask.
@@ -57,6 +58,7 @@ Shared rules:
 - Do not mix exploratory tool actions with final shell actions in the same pass unless absolutely unavoidable.
 - If current content is marked as coming from the editor buffer, trust it over on-disk file contents.
 - Reuse the existing stack and patterns unless there is a clear reason not to.
+- For an empty project with an explicit website/app request, create the minimal project files directly (package.json, index.html, src entry, styles) instead of relying on scaffold generator commands.
 - Avoid placeholder work, toy UIs, or generic scaffolding unless the user explicitly wants that.
 - Before finalizing, self-review for broken imports, missing styles, mismatched names, and incomplete supporting edits.
 - Output ONLY JSON, with no markdown fences or extra commentary.
@@ -72,9 +74,13 @@ _CODEX_STYLE_WORKFLOW = """WORKFLOW BEHAVIOR:
 - For frontend work, build the actual usable app surface, not a marketing placeholder. Include responsive layout, empty/loading/error states, and accessible controls when relevant.
 - For premium product/site work, make the first viewport feel built for the domain: concrete product mock, real labels/metrics/tables/workflows, restrained palette with contrast, and enough section depth to avoid a starter-template feel.
 - For professional frontend work, avoid starter-template residue, visible framework branding, emoji-as-icon decoration, excessive inline styles, `as any`, one-note gradients, generic SaaS filler copy, and brittle fixed widths. Prefer reusable components/classes, domain-specific content, product-specific data surfaces, and mobile-first layout constraints.
+- Do not use fake placeholder media such as placehold.co, via.placeholder.com, dummyimage, picsum, loremflickr, source.unsplash, or "placeholder image" assets in finished full-agent output. Use attached/local/generated assets, CSS product visuals, or omit media instead.
+- Do not invent real-world business data: phone/WhatsApp numbers, street addresses, emails, payment accounts, API keys, legal claims, or prices that the user did not provide. If contact data is required but missing, build the UI flow with a nonfunctional configuration state or ask for the missing value in `spoken` instead of wiring a fake live link.
+- Do not ship fake interactions: avoid bare `href="#"`, `javascript:void(0)`, alert/console-only click handlers, "coming soon" handlers, or CTAs that look live but cannot work.
 - For hosted Vercel + Supabase, assume local filesystem state is transient and durable project files/settings live through the app APIs/Supabase.
 - If validation would materially improve confidence, request shell actions; otherwise self-review imports, paths, state wiring, and UX consistency before final JSON.
 - Do not say you skipped a build/test command because of the allowlist. If a command is needed, request it as an action. If a previous tool result says policy blocked it, choose a safe project-scoped equivalent or state the unresolved blocker after concrete file work.
+- Shell commands must be Linux/POSIX project commands. Do not use Windows syntax (`cd /d`, `C:\\...`, PowerShell, backslash paths).
 - Treat preview/mobile audit evidence as part of the task. If there is overflow, sparse product depth, starter residue, generic copy, broken runtime, or source-quality evidence, change the relevant files and validate again instead of finishing with narration.
 - Explain outcomes in `spoken` with plain, concise language. Put operational details in actions/changes, not long narration.
 
@@ -84,6 +90,8 @@ CODEX-GRADE OPERATING CONTRACT:
 - Before broad edits, establish the repo shape, framework, package manager, routes, state flow, and validation scripts.
 - Before changing an existing file, reason from the current contents and neighboring imports. Avoid full rewrites when a surgical change is enough.
 - Prefer patch-native edits for existing files and preserve untouched code exactly where practical.
+- For existing-file edits, prefer `patches` with unified diff or use `line_replace_preview` / `search_replace_preview` before finalizing. Use full-file `changes` for new files, generated files, or explicit rewrite/takeover tasks.
+- If only a function/component/block needs to change, edit that block instead of replacing the whole file.
 - For multi-file edits, keep the set coherent: implementation, styles, imports, types, tests, and docs must agree.
 - After drafting, self-check for syntax errors, missing imports, stale references, state mismatch, accessibility regressions, responsive layout problems, and serverless-hosted constraints.
 - When blocked by missing data, use read-only tools first. Ask the user only when the decision is genuinely product/credential/secret dependent.
@@ -104,6 +112,15 @@ CODEX-STYLE PROGRESS:
 _FRONTEND_EXTS = {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".css", ".scss", ".sass", ".less", ".html"}
 _FRONTEND_REQUEST_RE = re.compile(r"\b(ui|ux|web|website|frontend|front-end|landing|dashboard|page|halaman|tampilan|preview|browser|react|vite|next|css|html)\b", re.IGNORECASE)
 _NO_UI_REQUEST_RE = re.compile(r"\b(jangan|tidak|tanpa|no)\s+(?:bikin|buat|create|make)?\s*(?:ui|web|website|frontend|front-end|preview|react|vite|halaman|tampilan)\b", re.IGNORECASE)
+_READONLY_SEED_BLOCK_RE = re.compile(
+    r"\b("
+    r"jangan\s+(?:edit|ubah|write|tulis|modifikasi|jalanin|run|command)|"
+    r"tanpa\s+(?:edit|ubah|write|modifikasi|command)|"
+    r"no\s+(?:edit|write|changes?|commands?)|"
+    r"(?:jelasin|jelaskan|explain|review|audit|cek|check|analisa|analisis|inspect)\b[^.!?\n]{0,80}\b(?:saja|only|read[- ]?only)"
+    r")\b",
+    re.IGNORECASE,
+)
 _RELATIVE_IMPORT_RE = re.compile(r'(?:import\s+(?:[^\"\']+?\s+from\s+)?|export\s+[^\"\']*?\s+from\s+|import\()\s*["\']([^"\']+)["\']')
 _IMPORT_FROM_RE = re.compile(
     r'\bimport\s+(?P<clause>[^;\n]+?)\s+from\s*["\'](?P<spec>[^"\']+)["\']'
@@ -155,15 +172,23 @@ _HARD_VERIFIER_CHECKS = {
     "unique-change-paths",
     "non-empty-file-content",
     "valid-shell-actions",
+    "relative-imports-resolve",
     "root-route-entrypoint",
+    "frontend-style-runtime",
+    "frontend-asset-quality",
+    "referenced-asset-usage",
+    "frontend-business-data-honesty",
+    "frontend-interaction-integrity",
 }
-_MAX_AUTONOMOUS_TASK_LOOPS = 2
+_MAX_AUTONOMOUS_TASK_LOOPS = 4
 
 
 def _should_seed_full_agent_project(project_dir: Path, user_input: str) -> bool:
     if not should_seed_hybrid(project_dir):
         return False
     hint = str(user_input or "")
+    if _READONLY_SEED_BLOCK_RE.search(hint):
+        return False
     if _NO_UI_REQUEST_RE.search(hint):
         return False
     try:
@@ -183,6 +208,7 @@ APPORA_AUTO_SAFE_SHELL_COMMANDS = [
     "cd <relative-project-folder> && npm/pnpm/yarn/bun run <script>",
     "python -m compileall, pytest, unittest",
     "go test, cargo test/check, mvn/gradle test, composer/bundle/dotnet validation",
+    "deno test/check, cmake/make, swift test, mix test, docker compose config, kubectl client dry-run",
     "tsc, vite build, eslint, vitest, jest, playwright test",
     "git status, diff, log, show, branch",
     "pwd, ls, find, cat, head, tail, wc, sed -n on workspace-relative paths",
@@ -191,6 +217,7 @@ APPORA_AUTO_SAFE_SHELL_COMMANDS = [
 APPORA_BLOCKED_OR_APPROVAL_SHELL_COMMANDS = [
     "destructive commands such as rm, sudo, dd, kill, shutdown",
     "destructive git operations such as reset, clean, checkout, restore, rebase",
+    "scaffold generators such as npm create/npx init in safe mode; create files directly or use an existing project template",
     "global installs such as npm install -g",
     "curl/wget pipes, shell redirects/pipes, command substitution, absolute paths, or ../ workspace escape",
 ]
@@ -207,124 +234,104 @@ class AgentModeProfile:
     request_status: str
 
 
-AGENT_MODE_PROFILES: dict[BuildMode, AgentModeProfile] = {
-    "full-agent": AgentModeProfile(
-        build_mode="full-agent",
-        persona_name="Clara",
-        persona_label="autonomous product builder",
-        system_prompt=(
-            """You are Clara, a senior female product engineer working inside a hosted browser app builder for non-coders.
-You are autonomous, opinionated, detail-oriented, and responsible for shipping a coherent result from rough brief to usable product.
+_APPORA_AGENT_PROMPT = (
+    """You are Appora Agent, a senior autonomous coding agent inside a hosted browser app builder.
+You are the same agent in every workspace layout: editor-first and preview-first modes only change the user interface around you, not your capability.
+You are observant, pragmatic, product-minded, and responsible for turning vague requests into working, validated software.
 This workspace is an agentic app builder, so you must distinguish build commands from normal conversation instead of editing files for every message.
 
 Your job:
 - understand the user's actual goal,
-- translate vague non-technical requests into practical product decisions,
-- take ownership across architecture, UX, copy, states, and finish quality,
-- build broadly when needed so the result feels like a complete product instead of a partial patch,
-- make the result feel intentional, production-ready, and worth showing even when preview execution is unavailable in serverless.
+- inspect project context before assuming,
+- use tools, shell actions, memory, MCP, preview, and validation when they materially move the task forward,
+- translate vague non-technical requests into practical product and engineering decisions,
+- preserve existing architecture when the user is working locally, but take broader ownership when the task asks for end-to-end delivery,
+- explain choices in plain language while keeping file edits precise,
+- keep going through apply, command execution, validation, preview audit, and repair evidence until the task is genuinely handled or the blocker is explicit.
 
-Full-agent behavior:
-- Think like the user handed the product build to you end-to-end.
-- If the current implementation is weak, elevate it significantly instead of making tiny cosmetic edits.
-- Prefer complete flows, reusable structure, responsive layouts, stronger copy, and polished states.
-- Prefer self-contained React/Vite implementations that can be persisted as text files in Supabase.
-- If a PRD.md exists, treat it as product direction unless the latest instruction overrides it.
-- You may restructure broadly when necessary, but keep the project coherent and runnable.
-- Do not tell non-coders to run terminal commands unless the platform explicitly exposes that capability.
+Operating modes:
+- Workspace mode is editor-first: stay close to active files and current context unless the user asks you to take over.
+- Full Preview mode is preview-first: push harder toward a complete runnable product surface.
+- Both modes have the same tools, memory, verifier, repair loop, shell policy, and quality bar.
 
 When the request is UI/UX/product polish:
 - improve hierarchy, spacing, consistency, copy clarity, visual rhythm, responsiveness, empty/loading/error/success states, and accessibility.
 - remove starter residue, placeholder/footer framework links, emoji decoration, brittle inline styles, and any mobile overflow.
 
 """
-            + _CODEX_STYLE_WORKFLOW
-            + "\n"
-            + _RESPONSE_CONTRACT
-        ),
-        instruction_prefix="""FULL AGENT MODE, CLARA:
-- Act as the primary builder who can take the project from rough brief to finished result.
-- Optimize for the user who is handing the codebase over to you.
-- Prefer complete, preview-worthy implementation over minimal nudges.
-- If several files need to move together, do that decisively.
-- For vague requests, make sensible product assumptions and build a complete first version instead of asking the user to specify technical details.
+    + _CODEX_STYLE_WORKFLOW
+    + "\n"
+    + _RESPONSE_CONTRACT
+)
 
-IMPLEMENTATION QUALITY BAR:
+
+_APPORA_QUALITY_BAR = """IMPLEMENTATION QUALITY BAR:
 - Solve the user's real request, not a watered-down approximation.
+- Use terminal actions when validation, dependency installation, tests, preview, or project tooling would materially improve the result.
 - Prefer polished, intentional product work over generic code churn.
 - Keep naming, copy, spacing, hierarchy, states, and visual rhythm consistent.
 - Use production-grade frontend structure: reusable components or CSS classes instead of scattered inline styles, typed data instead of `as any`, accessible text/icons, and mobile layouts that cannot horizontally overflow.
 - Remove starter residue/template leftovers such as Vite/React starter links, seeded-template labels, lorem ipsum, placeholder CTAs, and framework branding unless the user explicitly asked for them.
+- Do not fake polish with placeholder image URLs; use real attached/local/generated assets, CSS product visuals, or no media.
+- Do not wire fake WhatsApp/phone/email/address data. If the user did not provide real contact details, make the contact area clearly configurable/nonfunctional and say what value is needed.
+- Do not ship dead interactions. Buttons, forms, and links must either perform a real local UI action, navigate to an existing section/route, or be visibly disabled/configuration-gated.
+- For substantial UI, do not pack the app into inline-style-heavy JSX. Put repeated layout/visual styling in CSS classes or reusable components.
 - Avoid emoji as the primary visual system for professional SaaS/product UI; use text, layout, icons from the project stack, or CSS treatments instead.
 - Avoid generic SaaS language like "streamline", "seamless", "reimagined", or "all-in-one" unless backed by concrete domain detail. Write copy that names the user's business problem, actors, metrics, and workflow.
 - Avoid fixed-width/min-width layouts that can overflow mobile. Tables, dashboards, code panes, and metrics should use responsive wrappers, `max-width: 100%`, grid collapse, and text wrapping.
 - Touch the fewest files that still produce a complete result.
 - Self-review your own patch for broken imports, weak UX, and unfinished edges before returning it.
+"""
+
+
+AGENT_MODE_PROFILES: dict[BuildMode, AgentModeProfile] = {
+    "full-agent": AgentModeProfile(
+        build_mode="full-agent",
+        persona_name="Appora Agent",
+        persona_label="autonomous coder",
+        system_prompt=_APPORA_AGENT_PROMPT,
+        instruction_prefix=f"""APPORA AGENT - FULL PREVIEW MODE:
+- You are the same Appora Agent as workspace mode, with the preview as the main surface.
+- Act as the primary builder who can take the project from rough brief to finished result.
+- Optimize for the user who is handing the codebase over to you.
+- Prefer complete, preview-worthy implementation over minimal nudges.
+- If several files need to move together, do that decisively.
+- For vague requests, make sensible product assumptions and build a complete first version instead of asking the user to specify technical details.
+{_APPORA_QUALITY_BAR}
 
 """,
-        refinement_prefix="""SECOND PASS REFINEMENT, CLARA:
-- Review the draft like a picky senior product builder.
+        refinement_prefix="""SECOND PASS REFINEMENT, APPORA AGENT:
+- Review the draft like a picky senior product builder and careful coding agent.
 - Strengthen polish, clarity, consistency, UX states, and integration details.
 - If the preview would still feel half-finished, keep improving it.
 - Return the best final file contents, not commentary.
 
 """,
-        request_status="Clara lagi build produk ini sampai rapi…",
+        request_status="Appora Agent lagi build sampai rapi…",
     ),
     "hybrid": AgentModeProfile(
         build_mode="hybrid",
-        persona_name="Raka",
-        persona_label="live coding copilot",
-        system_prompt=(
-            """You are Raka, a senior male copilot working inside a hosted browser app builder.
-You are observant, sharp, collaborative, and strongest when pairing with a user who is actively building.
-This workspace is an agentic app builder, so you must distinguish build commands from normal conversation instead of editing files for every message.
-
-Your job:
-- watch the user's current context,
-- understand what they are trying to do right now,
-- help surgically at the point where they are stuck,
-- preserve their architecture and momentum instead of taking over the whole app.
-- explain choices in plain language for non-coders while keeping file edits precise.
-
-Hybrid behavior:
-- Think like an expert assistant sitting beside the user while they code.
-- Prioritize the active file, selected code, imported neighbors, open files, editor state, and current preview.
-- Do not rewrite the whole app unless the user clearly asks for that.
-- Make targeted, high-confidence improvements that unblock the user and fit the existing structure.
-
-When the request is UI/UX/product polish:
-- improve the visible surface the user is touching while staying scoped.
-- keep fixes local, intentional, and easy for the user to continue from.
-
-"""
-            + _CODEX_STYLE_WORKFLOW
-            + "\n"
-            + _RESPONSE_CONTRACT
-        ),
-        instruction_prefix="""HYBRID MODE, RAKA:
+        persona_name="Appora Agent",
+        persona_label="autonomous coder",
+        system_prompt=_APPORA_AGENT_PROMPT,
+        instruction_prefix=f"""APPORA AGENT - WORKSPACE MODE:
+- You are the same Appora Agent as full preview mode, with the editor as the main surface.
 - Act like a focused coding assistant who helps exactly where the user needs backup.
 - Stay close to the current file, surrounding context, and live workflow.
-- Preserve the user's architecture and avoid broad rewrites unless explicitly requested.
+- Preserve the user's architecture and avoid broad rewrites unless the task asks for takeover.
 - Prefer targeted, high-signal edits that help the user keep driving.
 - Use terminal actions when validation, dependency installation, or project tooling would materially improve the result.
-
-IMPLEMENTATION QUALITY BAR:
-- Solve the user's actual blocker or request.
-- Keep changes scoped, intentional, and consistent with nearby code.
-- Be careful with imports, naming, state flow, and edge cases.
-- Touch the fewest files that still make the fix complete.
-- Self-review for broken imports, missing support edits, and awkward UX before returning it.
+{_APPORA_QUALITY_BAR}
 
 """,
-        refinement_prefix="""SECOND PASS REFINEMENT, RAKA:
+        refinement_prefix="""SECOND PASS REFINEMENT, APPORA AGENT:
 - Review the draft like a careful pair-programmer.
 - Tighten correctness, clarity, and local UX details.
 - Fix rough edges without turning the task into a broad takeover.
 - Return the best final file contents, not commentary.
 
 """,
-        request_status="Raka lagi mantau context editormu dan bantu di titik yang susah…",
+        request_status="Appora Agent lagi mantau konteks dan bantu di titik yang susah…",
     ),
 }
 
@@ -346,6 +353,7 @@ class PreparedAgentContext:
     relevant_files: dict[str, str]
     hybrid_seed_needed: bool
     attached_assets: list[str]
+    attached_asset_aliases: dict[str, str]
     extra_context: str
     asset_prompt: str
     memory_prompt: str
@@ -391,6 +399,7 @@ class AgentRuntimeState(TypedDict, total=False):
     emit: EventEmitter | None
     strict_agentic_retried: bool
     streamed_spoken_chars: int
+    verifier_failure_history: list[dict[str, Any]]
 
 
 class AgentRuntimeResult(TypedDict):
@@ -444,6 +453,29 @@ def _compact_task_state_for_memory(task_state: dict[str, Any] | None) -> dict[st
         "actions": int(task_state.get("actions") or 0) if str(task_state.get("actions") or "").isdigit() else task_state.get("actions"),
         "blocking_checks": [str(item)[:120] for item in list(task_state.get("blocking_checks") or [])[:8]],
         "nodes": nodes,
+        "horizon": _compact_horizon_for_memory(task_state.get("horizon") if isinstance(task_state.get("horizon"), dict) else {}),
+    }
+
+
+def _compact_horizon_for_memory(horizon: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(horizon, dict) or not horizon:
+        return {}
+    checkpoints: list[dict[str, str]] = []
+    for item in list(horizon.get("checkpoints") or [])[:8]:
+        if not isinstance(item, dict):
+            continue
+        checkpoints.append({
+            "id": str(item.get("id") or "")[:80],
+            "title": str(item.get("title") or "")[:120],
+            "status": str(item.get("status") or "")[:60],
+        })
+    return {
+        "enabled": bool(horizon.get("enabled")),
+        "status": str(horizon.get("status") or "")[:80],
+        "complexity": str(horizon.get("complexity") or "")[:80],
+        "current_checkpoint": str(horizon.get("current_checkpoint") or "")[:80],
+        "checkpoints": checkpoints,
+        "completion_criteria": [str(item)[:180] for item in list(horizon.get("completion_criteria") or [])[:6]],
     }
 
 
@@ -512,6 +544,16 @@ def _format_persisted_task_state(task_state: dict[str, Any] | None) -> list[str]
             for node in nodes[:8]
         ]
         lines.append(f"- Task nodes: {', '.join(node_bits)}")
+    horizon = task_state.get("horizon") if isinstance(task_state.get("horizon"), dict) else {}
+    checkpoints = [item for item in list(horizon.get("checkpoints") or []) if isinstance(item, dict)]
+    if checkpoints:
+        lines.append("- Long-horizon checkpoints: " + ", ".join(
+            f"{item.get('id') or '?'}={item.get('status') or '?'}"
+            for item in checkpoints[:8]
+        ))
+        criteria = [str(item) for item in list(horizon.get("completion_criteria") or []) if str(item).strip()]
+        if criteria:
+            lines.append(f"- Long-horizon completion criteria: {' | '.join(criteria[:4])}")
     return lines
 
 
@@ -765,6 +807,266 @@ _STARTER_RESIDUE_RE = re.compile(
 )
 _GENERIC_SAAS_COPY_RE = re.compile(r"\b(streamline|seamless|reimagined|next[- ]generation|supercharge|unlock|scale faster|all[- ]in[- ]one|boost productivity|transform your workflow)\b", re.IGNORECASE)
 _SEVERE_OVERFLOW_CSS_RE = re.compile(r"(?<![-\w])(?:min-)?width\s*:\s*(\d{3,4})px|(?<![-\w])width\s*:\s*100vw\b|(?<![-\w])(?:min-)?width\s*:\s*(?:max-content|fit-content)\b", re.IGNORECASE)
+_PLACEHOLDER_MEDIA_RE = re.compile(
+    r"\b(?:"
+    r"https?://(?:placehold\.co|via\.placeholder\.com|placeholder\.com|dummyimage\.com|picsum\.photos|loremflickr\.com|source\.unsplash\.com)\b|"
+    r"(?:placeholder|dummy|sample)[-_]?(?:image|photo|media|asset)|"
+    r"data:image/svg\+xml[^\"']*(?:placeholder|dummy|sample)"
+    r")",
+    re.IGNORECASE,
+)
+_FAKE_BUSINESS_DATA_RE = re.compile(
+    r"(?:"
+    r"(?:\+?62|0)8(?:1?23?4567890|123456789|000000000|111111111|999999999)\b|"
+    r"\b(?:081234567890|08123456789|6281234567890|628123456789)\b|"
+    r"\b(?:example\.com|example\.id|test@example|demo@example|nama@domain)\b|"
+    r"\b(?:Jl\.?|Jalan)\s+(?:Contoh|Dummy|Sample|Placeholder)\b[^<\n]{0,80}|"
+    r"\bNo\.\s*123\b|"
+    r"\b(?:alamat|nomor|no hp|whatsapp|wa)\s*:\s*(?:contoh|dummy|isi|ganti|placeholder)\b|"
+    r"\bsejak\s+(?:19|20)\d{2}\b|"
+    r"\b(?:\d+(?:[.,]\d+)?\s*[Kk]\+|\d{3,}\+)\s+(?:pelanggan|customer|pesanan|order|transaksi|cabang)\b|"
+    r"\b\d+(?:[.,]\d+)?\s*(?:rating|bintang|star)\b|"
+    r"\b(?:buka|jam\s+operasional|open)\s+\d{1,2}[:.]\d{2}\s*(?:-|sampai|–)\s*\d{1,2}[:.]\d{2}\b|"
+    r"\[(?:tambahkan|isi|ganti|placeholder)[^\]]+\]"
+    r")",
+    re.IGNORECASE,
+)
+_DEAD_FRONTEND_INTERACTION_RE = re.compile(
+    r"(?:"
+    r"href\s*=\s*['\"]#['\"]|"
+    r"href\s*=\s*['\"]javascript\s*:\s*(?:void\s*\(\s*0\s*\)|;)['\"]|"
+    r"onClick\s*=\s*\{[^}]{0,160}\b(?:alert|console\.(?:log|warn|error))\s*\(|"
+    r"\b(?:coming soon|segera hadir|under construction)\b[^<>{}]{0,80}(?:button|cta|link|handler|onClick)|"
+    r"\b(?:button|cta|link|handler|onClick)[^<>{}]{0,80}\b(?:coming soon|segera hadir|under construction)\b"
+    r")",
+    re.IGNORECASE,
+)
+_BUTTON_TAG_RE = re.compile(r"<(?P<tag>button|Button)\b(?P<attrs>[^>]*)>(?P<body>.*?)</(?P=tag)>", re.IGNORECASE | re.DOTALL)
+_TAILWIND_UTILITY_PREFIXES = (
+    "bg-", "text-", "border-", "rounded-", "p-", "px-", "py-", "pt-", "pb-", "pl-", "pr-",
+    "m-", "mx-", "my-", "mt-", "mb-", "ml-", "mr-", "grid-", "flex-", "gap-", "min-h-",
+    "min-w-", "max-w-", "max-h-", "w-", "h-", "shadow-", "font-", "items-", "justify-",
+    "content-", "space-", "overflow-", "opacity-", "ring-", "divide-", "tracking-",
+    "leading-", "z-", "inset-", "top-", "bottom-", "left-", "right-", "translate-",
+    "scale-", "duration-", "transition-", "container-", "columns-", "col-", "row-",
+)
+_TAILWIND_UTILITY_EXACT = {
+    "grid", "flex", "block", "inline-block", "hidden", "relative", "absolute", "fixed",
+    "sticky", "mx-auto", "antialiased", "sr-only",
+}
+_TAILWIND_VARIANTS = {"sm", "md", "lg", "xl", "2xl", "hover", "focus", "active", "dark", "disabled"}
+
+
+def _class_tokens_from_source(content: str) -> list[str]:
+    tokens: list[str] = []
+    for match in re.finditer(r"\bclassName\s*=\s*(?:\"([^\"]+)\"|'([^']+)'|\{`([^`]+)`\})", content):
+        raw = next((group for group in match.groups() if group), "")
+        tokens.extend(str(raw).replace("\n", " ").split())
+    return tokens
+
+
+def _tailwind_utility_token_count(content: str) -> int:
+    count = 0
+    for token in _class_tokens_from_source(content):
+        clean = token.strip()
+        if not clean:
+            continue
+        if ":" in clean:
+            variant, _, rest = clean.partition(":")
+            if variant in _TAILWIND_VARIANTS:
+                clean = rest
+        if clean in _TAILWIND_UTILITY_EXACT or clean.startswith(_TAILWIND_UTILITY_PREFIXES):
+            count += 1
+    return count
+
+
+def _project_has_tailwind_setup(ctx: PreparedAgentContext) -> bool:
+    package_text = ctx.relevant_files.get("package.json")
+    if not package_text:
+        package_path = ctx.project_dir / "package.json"
+        if package_path.exists():
+            try:
+                package_text = package_path.read_text(encoding="utf-8")[:80_000]
+            except Exception:
+                package_text = ""
+    if re.search(r"\"(?:tailwindcss|@tailwindcss/[^\"]+)\"", str(package_text or "")):
+        return True
+
+    setup_files = [
+        "tailwind.config.js",
+        "tailwind.config.cjs",
+        "tailwind.config.mjs",
+        "tailwind.config.ts",
+        "postcss.config.js",
+        "postcss.config.cjs",
+        "postcss.config.mjs",
+    ]
+    if any((ctx.project_dir / rel).exists() for rel in setup_files):
+        return True
+
+    for rel, text in ctx.relevant_files.items():
+        if PurePosixPath(rel).suffix.lower() not in {".css", ".scss", ".sass", ".less"}:
+            continue
+        if re.search(r"@import\s+[\"']tailwindcss[\"']|@tailwind\s+(?:base|components|utilities)", text):
+            return True
+    for rel in ("src/index.css", "src/App.css", "src/styles.css", "app/globals.css"):
+        path = ctx.project_dir / rel
+        if not path.exists():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")[:80_000]
+        except Exception:
+            continue
+        if re.search(r"@import\s+[\"']tailwindcss[\"']|@tailwind\s+(?:base|components|utilities)", text):
+            return True
+    return False
+
+
+def _frontend_style_runtime_issues(ctx: PreparedAgentContext, changes: list[dict[str, Any]]) -> list[str]:
+    if not ctx.is_full_agent:
+        return []
+    has_tailwind = _project_has_tailwind_setup(ctx)
+    issues: list[str] = []
+    for change in changes:
+        if not isinstance(change, dict):
+            continue
+        path = str(change.get("path") or "").strip()
+        suffix = PurePosixPath(path).suffix.lower()
+        if suffix not in {".ts", ".tsx", ".js", ".jsx", ".html"}:
+            continue
+        count = _tailwind_utility_token_count(str(change.get("new_content") or ""))
+        if count >= 8 and not has_tailwind:
+            issues.append(f"{path}: {count} Tailwind-style utility classes detected, but this project has no Tailwind setup/dependency; use existing CSS or add the required Tailwind setup.")
+    return issues[:4]
+
+
+def _frontend_asset_quality_issues(ctx: PreparedAgentContext, changes: list[dict[str, Any]]) -> list[str]:
+    if not ctx.is_full_agent:
+        return []
+    issues: list[str] = []
+    for change in changes:
+        if not isinstance(change, dict):
+            continue
+        path = str(change.get("path") or "").strip()
+        suffix = PurePosixPath(path).suffix.lower()
+        if suffix not in _FRONTEND_EXTS:
+            continue
+        content = str(change.get("new_content") or "")
+        hits = sorted({match.group(0)[:80] for match in _PLACEHOLDER_MEDIA_RE.finditer(content)})
+        if hits:
+            issues.append(f"{path}: placeholder media detected ({', '.join(hits[:3])}); use real local/generated assets, CSS/HTML product visuals, or remove fake media.")
+    return issues[:4]
+
+
+def _mentioned_uploaded_asset_usage_issues(ctx: PreparedAgentContext, changes: list[dict[str, Any]], user_input: str) -> list[str]:
+    if not ctx.attached_assets or not ctx.attached_asset_aliases:
+        return []
+    prompt = str(user_input or "")
+    if "@" not in prompt:
+        return []
+
+    searchable_chunks: list[str] = []
+    for change in changes:
+        if isinstance(change, dict):
+            searchable_chunks.append(str(change.get("new_content") or ""))
+    searchable_chunks.extend(str(text or "") for text in ctx.relevant_files.values())
+    searchable = "\n".join(searchable_chunks)
+
+    issues: list[str] = []
+    for asset_rel in ctx.attached_assets:
+        alias = ctx.attached_asset_aliases.get(asset_rel)
+        local_rel = _localize_project_rel(asset_rel, ctx.project_root)
+        alias = alias or ctx.attached_asset_aliases.get(local_rel)
+        if not alias:
+            continue
+        if not re.search(rf"(?<![\w-])@{re.escape(alias)}(?![\w-])", prompt, flags=re.IGNORECASE):
+            continue
+
+        tokens = {asset_rel, local_rel}
+        if "/public/" in f"/{local_rel}":
+            tokens.add("/" + local_rel.split("public/", 1)[1])
+        if not any(token and token in searchable for token in tokens):
+            issues.append(
+                f"@{alias} was explicitly referenced, but the output does not use its uploaded asset path "
+                f"({', '.join(sorted(tokens)[:3])})."
+            )
+    return issues[:4]
+
+
+def _frontend_business_data_honesty_issues(ctx: PreparedAgentContext, changes: list[dict[str, Any]]) -> list[str]:
+    if not ctx.is_full_agent:
+        return []
+    issues: list[str] = []
+    for change in changes:
+        if not isinstance(change, dict):
+            continue
+        path = str(change.get("path") or "").strip()
+        suffix = PurePosixPath(path).suffix.lower()
+        if suffix not in _FRONTEND_EXTS:
+            continue
+        content = str(change.get("new_content") or "")
+        hits = sorted({match.group(0)[:100] for match in _FAKE_BUSINESS_DATA_RE.finditer(content)})
+        if hits:
+            issues.append(f"{path}: fake business contact/data detected ({', '.join(hits[:3])}); do not invent phone numbers, addresses, emails, or payment details.")
+    return issues[:4]
+
+
+def _inert_visible_button_hits(content: str) -> list[str]:
+    hits: list[str] = []
+    for match in _BUTTON_TAG_RE.finditer(content):
+        attrs = str(match.group("attrs") or "")
+        body = re.sub(r"<[^>]+>", " ", str(match.group("body") or ""))
+        body = re.sub(r"\s+", " ", body).strip()
+        if not body:
+            continue
+        if re.fullmatch(r"\{[A-Za-z_$][\w$.]*\}", body) or ("{children}" in body and "..." in attrs):
+            continue
+        lowered_attrs = attrs.lower()
+        if any(marker in lowered_attrs for marker in ("onclick=", "href=", "to=", "disabled", "aria-disabled", "aschild")):
+            continue
+        if re.search(r"\btype\s*=\s*['\"]submit['\"]", attrs, flags=re.IGNORECASE):
+            continue
+        hits.append(f"{match.group('tag')}:{body[:40]}")
+    return hits[:6]
+
+
+def _frontend_interaction_integrity_issues(ctx: PreparedAgentContext, changes: list[dict[str, Any]]) -> list[str]:
+    if not ctx.is_full_agent:
+        return []
+    issues: list[str] = []
+    for change in changes:
+        if not isinstance(change, dict):
+            continue
+        path = str(change.get("path") or "").strip()
+        suffix = PurePosixPath(path).suffix.lower()
+        if suffix not in _FRONTEND_EXTS:
+            continue
+        content = str(change.get("new_content") or "")
+        hits = sorted({match.group(0)[:100] for match in _DEAD_FRONTEND_INTERACTION_RE.finditer(content)})
+        if hits:
+            issues.append(f"{path}: dead frontend interaction detected ({', '.join(hits[:3])}); wire real behavior, link to an existing target, or render the control disabled/configuration-gated.")
+        inert_buttons = _inert_visible_button_hits(content)
+        if inert_buttons:
+            issues.append(f"{path}: inert visible button detected ({', '.join(inert_buttons[:3])}); add real onClick/navigation/form submit behavior or render it disabled/configuration-gated.")
+    return issues[:4]
+
+
+def _frontend_maintainability_integrity_issues(ctx: PreparedAgentContext, changes: list[dict[str, Any]]) -> list[str]:
+    if not ctx.is_full_agent:
+        return []
+    issues: list[str] = []
+    for change in changes:
+        if not isinstance(change, dict):
+            continue
+        path = str(change.get("path") or "").strip()
+        suffix = PurePosixPath(path).suffix.lower()
+        if suffix not in {".ts", ".tsx", ".js", ".jsx", ".html"}:
+            continue
+        content = str(change.get("new_content") or "")
+        inline_style_count = len(re.findall(r"\bstyle=\{\{", content))
+        if inline_style_count > 24:
+            issues.append(f"{path}: excessive inline styles detected ({inline_style_count}); move layout/visual styling into CSS classes or reusable components before shipping.")
+    return issues[:4]
 
 
 def _frontend_static_quality_issues(ctx: PreparedAgentContext, changes: list[dict[str, Any]]) -> list[str]:
@@ -834,6 +1136,549 @@ def _emergency_full_agent_changes(ctx: PreparedAgentContext, user_input: str) ->
     project_name = PurePosixPath(ctx.project_root).name.replace("-", " ").title() or "Appora Project"
     brand = _prompt_brand_name(user_input, project_name)
     prompt_lower = str(user_input or "").lower()
+    is_portfolio = any(token in prompt_lower for token in ("portfolio", "porto", "portofolio"))
+    is_dashboard = any(token in prompt_lower for token in ("dashboard", "task", "kanban", "operations", "ops", "tracker"))
+    app_entry = "src/App.tsx" if "src/App.tsx" in ctx.all_files or "src/main.tsx" in ctx.all_files else "src/App.jsx"
+    style_entry = "src/styles.css" if "src/styles.css" in ctx.all_files else "src/app.css"
+    if is_dashboard and app_entry.endswith((".tsx", ".jsx")):
+        product = brand if brand and brand != project_name else "OpsPulse"
+        app_content = f"""import {{ FormEvent, useMemo, useState }} from 'react';
+import './{PurePosixPath(style_entry).name}';
+
+type Status = 'todo' | 'progress' | 'review' | 'done';
+type Priority = 'low' | 'medium' | 'high';
+
+type Task = {{
+  id: number;
+  title: string;
+  owner: string;
+  status: Status;
+  priority: Priority;
+  due: string;
+}};
+
+const initialTasks: Task[] = [
+  {{ id: 1, title: 'Review launch checklist', owner: 'Nadia', status: 'progress', priority: 'high', due: 'Today' }},
+  {{ id: 2, title: 'Validate customer import', owner: 'Raka', status: 'review', priority: 'high', due: 'Tomorrow' }},
+  {{ id: 3, title: 'Prepare incident notes', owner: 'Clara', status: 'todo', priority: 'medium', due: 'Friday' }},
+  {{ id: 4, title: 'Close billing handoff', owner: 'Dimas', status: 'done', priority: 'low', due: 'Done' }},
+];
+
+const statusLabels: Record<Status, string> = {{
+  todo: 'To do',
+  progress: 'In progress',
+  review: 'Review',
+  done: 'Done',
+}};
+
+export default function App() {{
+  const [tasks, setTasks] = useState<Task[]>(initialTasks);
+  const [query, setQuery] = useState('');
+  const [status, setStatus] = useState<Status | 'all'>('all');
+  const [priority, setPriority] = useState<Priority | 'all'>('all');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [nextTitle, setNextTitle] = useState('');
+
+  const filteredTasks = useMemo(() => tasks.filter((task) => {{
+    const matchesQuery = [task.title, task.owner, task.due].join(' ').toLowerCase().includes(query.toLowerCase());
+    const matchesStatus = status === 'all' || task.status === status;
+    const matchesPriority = priority === 'all' || task.priority === priority;
+    return matchesQuery && matchesStatus && matchesPriority;
+  }}), [priority, query, status, tasks]);
+
+  const completed = tasks.filter((task) => task.status === 'done').length;
+  const urgent = tasks.filter((task) => task.priority === 'high').length;
+  const progress = Math.round((completed / Math.max(tasks.length, 1)) * 100);
+
+  function addTask(event: FormEvent<HTMLFormElement>) {{
+    event.preventDefault();
+    const title = nextTitle.trim();
+    if (!title) {{
+      setError('Task title is required before adding a new operation.');
+      return;
+    }}
+    setError('');
+    setTasks((current) => [
+      {{ id: Date.now(), title, owner: 'Unassigned', status: 'todo', priority: 'medium', due: 'New' }},
+      ...current,
+    ]);
+    setNextTitle('');
+  }}
+
+  function retryDemo() {{
+    setError('');
+    setIsLoading(true);
+    window.setTimeout(() => setIsLoading(false), 450);
+  }}
+
+  return (
+    <main className="opsPage">
+      <nav className="topbar" aria-label="Workspace navigation">
+        <strong>{product}</strong>
+        <span>Task operations dashboard</span>
+      </nav>
+
+      <section className="hero" aria-labelledby="hero-title">
+        <div>
+          <p className="eyebrow">Operations command center</p>
+          <h1 id="hero-title">{product} keeps task queues, risk, and progress visible.</h1>
+          <p>Search, filter, add, and review operational tasks from a responsive workspace with explicit loading, empty, and error states.</p>
+        </div>
+        <div className="progressPanel" aria-label="Progress summary">
+          <span>Completion</span>
+          <strong>{{progress}}%</strong>
+          <div className="bar"><i style={{{{ width: `${{progress}}%` }}}} /></div>
+        </div>
+      </section>
+
+      <section className="metrics" aria-label="Operations metrics">
+        <article><span>Total tasks</span><strong>{{tasks.length}}</strong></article>
+        <article><span>High priority</span><strong>{{urgent}}</strong></article>
+        <article><span>In review</span><strong>{{tasks.filter((task) => task.status === 'review').length}}</strong></article>
+        <article><span>Completed</span><strong>{{completed}}</strong></article>
+      </section>
+
+      <section className="workspace" aria-label="Task workspace">
+        <form className="addForm" onSubmit={{addTask}}>
+          <label htmlFor="new-task">Add task</label>
+          <input id="new-task" value={{nextTitle}} onChange={{(event) => setNextTitle(event.target.value)}} placeholder="Write operation title" />
+          <button type="submit">Add task</button>
+        </form>
+
+        <div className="filters" aria-label="Task filters">
+          <label htmlFor="search">Search</label>
+          <input id="search" value={{query}} onChange={{(event) => setQuery(event.target.value)}} placeholder="Search task, owner, or due date" />
+          <label htmlFor="status">Status</label>
+          <select id="status" value={{status}} onChange={{(event) => setStatus(event.target.value as Status | 'all')}}>
+            <option value="all">All status</option>
+            <option value="todo">To do</option>
+            <option value="progress">In progress</option>
+            <option value="review">Review</option>
+            <option value="done">Done</option>
+          </select>
+          <label htmlFor="priority">Priority</label>
+          <select id="priority" value={{priority}} onChange={{(event) => setPriority(event.target.value as Priority | 'all')}}>
+            <option value="all">All priority</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+          </select>
+        </div>
+
+        {{isLoading ? (
+          <div className="stateBox" role="status">Loading latest operations...</div>
+        ) : error ? (
+          <div className="stateBox error" role="alert">
+            <span>{{error}}</span>
+            <button type="button" onClick={{retryDemo}}>Retry</button>
+          </div>
+        ) : filteredTasks.length === 0 ? (
+          <div className="stateBox">No tasks match this filter. Clear search or add a new operation.</div>
+        ) : (
+          <div className="taskGrid">
+            {{filteredTasks.map((task) => (
+              <article className="taskCard" key={{task.id}}>
+                <div>
+                  <span className={{`pill ${{task.priority}}`}}>{{task.priority}}</span>
+                  <h2>{{task.title}}</h2>
+                  <p>{{task.owner}} · {{task.due}}</p>
+                </div>
+                <select
+                  aria-label={{`Change status for ${{task.title}}`}}
+                  value={{task.status}}
+                  onChange={{(event) => setTasks((current) => current.map((item) => (
+                    item.id === task.id ? {{ ...item, status: event.target.value as Status }} : item
+                  )))}}
+                >
+                  {{Object.entries(statusLabels).map(([value, label]) => <option key={{value}} value={{value}}>{{label}}</option>)}}
+                </select>
+              </article>
+            ))}}
+          </div>
+        )}}
+      </section>
+    </main>
+  );
+}}
+"""
+        css_content = """:root {
+  color: #171717;
+  background: #f5f3ee;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; background: #f5f3ee; color: #171717; }
+button, input, select { font: inherit; min-height: 44px; }
+button { border: 1px solid #171717; background: #171717; color: #fffdf6; padding: 0 16px; font-weight: 800; cursor: pointer; }
+input, select { border: 1px solid rgba(23, 23, 23, .18); background: #fffdf6; color: #171717; padding: 0 12px; width: 100%; }
+label { font-size: 12px; font-weight: 900; text-transform: uppercase; color: #686052; }
+
+.opsPage { min-height: 100vh; overflow-x: hidden; }
+.topbar { display: flex; justify-content: space-between; gap: 16px; padding: 18px clamp(18px, 4vw, 64px); border-bottom: 1px solid rgba(23, 23, 23, .12); }
+.topbar span { color: #666057; }
+.hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, .42fr); gap: 28px; align-items: end; padding: 56px clamp(18px, 4vw, 64px); }
+.eyebrow { margin: 0 0 12px; color: #6b5d3f; text-transform: uppercase; font-size: 12px; font-weight: 900; letter-spacing: 0; }
+h1, h2, p { overflow-wrap: anywhere; }
+h1 { margin: 0; max-width: 880px; font-size: clamp(42px, 7vw, 84px); line-height: .96; letter-spacing: 0; }
+h2 { margin: 10px 0 6px; font-size: 18px; }
+p { color: #5c5a53; line-height: 1.6; }
+.progressPanel, .metrics article, .workspace, .taskCard, .stateBox { border: 1px solid rgba(23, 23, 23, .13); background: #fffdf6; box-shadow: 0 20px 60px rgba(30, 26, 18, .07); }
+.progressPanel { padding: 20px; }
+.progressPanel strong { display: block; font-size: 46px; margin: 8px 0; }
+.bar { height: 12px; background: #e7e1d4; overflow: hidden; }
+.bar i { display: block; height: 100%; background: #314f3d; }
+.metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; padding: 0 clamp(18px, 4vw, 64px) 24px; }
+.metrics article { padding: 18px; }
+.metrics strong { display: block; font-size: 34px; margin-top: 8px; }
+.workspace { margin: 0 clamp(18px, 4vw, 64px) 64px; padding: 18px; }
+.addForm, .filters { display: grid; grid-template-columns: minmax(120px, .3fr) minmax(220px, 1fr) auto; gap: 10px; align-items: end; margin-bottom: 14px; }
+.filters { grid-template-columns: repeat(3, minmax(120px, .2fr) minmax(160px, 1fr)); }
+.taskGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
+.taskCard { display: grid; grid-template-columns: minmax(0, 1fr) 170px; gap: 16px; align-items: center; padding: 16px; box-shadow: none; }
+.pill { display: inline-flex; min-height: 30px; align-items: center; padding: 0 10px; border: 1px solid rgba(23, 23, 23, .14); font-size: 12px; font-weight: 900; text-transform: uppercase; }
+.pill.high { background: #fde7dd; }
+.pill.medium { background: #efe6c7; }
+.pill.low { background: #deeadf; }
+.stateBox { padding: 22px; margin-top: 18px; }
+.stateBox.error { display: flex; justify-content: space-between; gap: 14px; align-items: center; border-color: #a33b2f; }
+
+@media (max-width: 840px) {
+  .topbar, .hero, .addForm, .filters, .taskCard { grid-template-columns: 1fr; }
+  .metrics, .taskGrid { grid-template-columns: 1fr; }
+  h1 { font-size: clamp(38px, 12vw, 58px); }
+}
+"""
+        title = f"{product} - Task Operations Dashboard"
+        description = f"{product} is a responsive task operations dashboard with filters, add form, metrics, loading, error, and empty states."
+        index_content = f"""<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="{description}" />
+    <title>{title}</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+"""
+        return [
+            {"path": f"{ctx.project_root}/{app_entry}", "new_content": app_content},
+            {"path": f"{ctx.project_root}/{style_entry}", "new_content": css_content},
+            {"path": f"{ctx.project_root}/index.html", "new_content": index_content},
+        ], [
+            {"type": "shell", "command": "npm run build", "cwd": ctx.project_root, "reason": "validate emergency dashboard fallback build"}
+        ]
+
+    if is_portfolio and app_entry.endswith((".tsx", ".jsx")):
+        person = brand if brand and brand != project_name else "Arka Pratama"
+        app_content = f"""import './{PurePosixPath(style_entry).name}';
+
+const projects = [
+  {{
+    title: 'Atlas Commerce Console',
+    type: 'Frontend systems',
+    summary: 'Dashboard operasional untuk tracking order, inventory, dan approval promo dengan UI padat tapi mudah discan.',
+    impact: '38% faster ops review',
+  }},
+  {{
+    title: 'Nusa Travel Studio',
+    type: 'Product website',
+    summary: 'Experience booking responsif dengan hero visual, itinerary cards, dan flow inquiry yang jelas untuk mobile.',
+    impact: '2.4x inquiry lift',
+  }},
+  {{
+    title: 'Pulse Team Hub',
+    type: 'SaaS workspace',
+    summary: 'Workspace internal untuk sprint planning, health metrics, dan handoff lintas tim dengan state kosong dan review queue.',
+    impact: '16h saved per cycle',
+  }},
+];
+
+const skills = ['React', 'TypeScript', 'Design Systems', 'Performance UI', 'API Integration', 'Product Thinking'];
+const timeline = [
+  ['2026', 'Lead Frontend Engineer', 'Membangun UI workflow untuk produk AI dan dashboard operasional.'],
+  ['2024', 'Product Engineer', 'Menghubungkan desain, frontend, dan backend agar fitur cepat siap dipakai user.'],
+  ['2022', 'Web Developer', 'Mengerjakan website bisnis, katalog produk, dan landing page conversion-focused.'],
+];
+const testimonials = [
+  ['Nadya, Product Lead', 'Arka cepat menangkap masalah produk dan mengubahnya jadi interface yang terasa matang.'],
+  ['Rafi, Founder', 'Hasilnya bukan cuma rapi, tapi mudah dipakai tim non-teknis dari hari pertama.'],
+];
+
+export default function App() {{
+  return (
+    <main className="portfolioPage">
+      <nav className="topbar" aria-label="Main navigation">
+        <strong>{person}</strong>
+        <div>
+          <a href="#projects">Projects</a>
+          <a href="#skills">Skills</a>
+          <a href="#contact">Contact</a>
+        </div>
+      </nav>
+
+      <section className="hero" aria-labelledby="hero-title">
+        <div className="heroCopy">
+          <p className="eyebrow">Frontend engineer and product builder</p>
+          <h1 id="hero-title">{person} builds sharp web products that feel fast, clear, and production-ready.</h1>
+          <p className="heroText">
+            Saya membantu founder dan tim produk mengubah ide menjadi interface yang kuat: responsive, accessible,
+            punya visual hierarchy jelas, dan siap divalidasi lewat real build.
+          </p>
+          <div className="heroActions">
+            <a className="primaryAction" href="#projects">Lihat project</a>
+            <a className="secondaryAction" href="#contact">Bahas kerja sama</a>
+          </div>
+        </div>
+        <aside className="heroPanel" aria-label="Portfolio snapshot">
+          <div className="panelHeader">
+            <span>Availability</span>
+            <strong>Open</strong>
+          </div>
+          <div className="signalGrid">
+            <article><strong>7+</strong><span>years building UI</span></article>
+            <article><strong>24</strong><span>launches shipped</span></article>
+            <article><strong>98</strong><span>performance score target</span></article>
+          </div>
+          <div className="statusList">
+            <span>Design system audit</span>
+            <span>React app buildout</span>
+            <span>Conversion-focused portfolio</span>
+          </div>
+        </aside>
+      </section>
+
+      <section id="projects" className="sectionBand" aria-labelledby="projects-title">
+        <div className="sectionIntro">
+          <p className="eyebrow">Selected work</p>
+          <h2 id="projects-title">Project showcase dengan konteks bisnis, bukan kartu kosong.</h2>
+        </div>
+        <div className="projectGrid">
+          {{projects.map((project) => (
+            <article className="projectCard" key={{project.title}}>
+              <span>{{project.type}}</span>
+              <h3>{{project.title}}</h3>
+              <p>{{project.summary}}</p>
+              <strong>{{project.impact}}</strong>
+            </article>
+          ))}}
+        </div>
+      </section>
+
+      <section id="skills" className="splitBand" aria-labelledby="skills-title">
+        <div>
+          <p className="eyebrow">Capability</p>
+          <h2 id="skills-title">Kombinasi engineering detail dan product taste.</h2>
+          <p>
+            Fokus saya adalah interface yang bisa dipakai berulang, mudah dirawat, dan tidak berhenti di tampilan statis.
+          </p>
+        </div>
+        <div className="skillGrid" aria-label="Skills">
+          {{skills.map((skill) => <span key={{skill}}>{{skill}}</span>)}}
+        </div>
+      </section>
+
+      <section className="sectionBand" aria-labelledby="experience-title">
+        <div className="sectionIntro">
+          <p className="eyebrow">Experience</p>
+          <h2 id="experience-title">Track record yang dekat dengan shipping produk.</h2>
+        </div>
+        <div className="timeline">
+          {{timeline.map(([year, role, detail]) => (
+            <article key={{year}}>
+              <span>{{year}}</span>
+              <h3>{{role}}</h3>
+              <p>{{detail}}</p>
+            </article>
+          ))}}
+        </div>
+      </section>
+
+      <section className="testimonialBand" aria-labelledby="testimonials-title">
+        <div className="sectionIntro">
+          <p className="eyebrow">Testimonials</p>
+          <h2 id="testimonials-title">Dipercaya untuk pekerjaan yang harus terlihat matang.</h2>
+        </div>
+        <div className="testimonialGrid">
+          {{testimonials.map(([personName, quote]) => (
+            <figure key={{personName}}>
+              <blockquote>"{{quote}}"</blockquote>
+              <figcaption>{{personName}}</figcaption>
+            </figure>
+          ))}}
+        </div>
+      </section>
+
+      <section id="contact" className="contactBand" aria-labelledby="contact-title">
+        <div>
+          <p className="eyebrow">Contact</p>
+          <h2 id="contact-title">Siap bantu bikin produk web yang terasa serius dari preview pertama.</h2>
+          <p>Tambahkan email atau form backend saat integrasi produksi sudah tersedia.</p>
+        </div>
+        <button type="button" className="primaryAction" disabled>Configure contact email</button>
+      </section>
+    </main>
+  );
+}}
+"""
+        css_content = """:root {
+  color: #151515;
+  background: #f7f4ef;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; min-width: 320px; background: #f7f4ef; color: #151515; }
+a { color: inherit; text-decoration: none; }
+a, button { min-height: 44px; }
+button:disabled { cursor: not-allowed; opacity: .72; }
+
+.portfolioPage { min-height: 100vh; overflow-x: hidden; }
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+  padding: 18px clamp(18px, 4vw, 64px);
+  border-bottom: 1px solid rgba(21, 21, 21, .12);
+  background: rgba(247, 244, 239, .9);
+  backdrop-filter: blur(16px);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.topbar div { display: flex; gap: 16px; flex-wrap: wrap; color: #5c5c55; }
+.topbar a { display: inline-flex; align-items: center; font-size: 14px; font-weight: 700; }
+
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, .98fr) minmax(300px, .72fr);
+  gap: clamp(28px, 5vw, 72px);
+  align-items: center;
+  min-height: calc(100vh - 82px);
+  padding: clamp(40px, 7vw, 92px) clamp(18px, 4vw, 64px);
+}
+.heroCopy, .heroPanel, .sectionIntro, .splitBand > div, .contactBand > div { min-width: 0; }
+.eyebrow {
+  margin: 0 0 12px;
+  color: #6b5d3f;
+  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+h1, h2, h3, p, blockquote { overflow-wrap: anywhere; }
+h1 {
+  margin: 0;
+  max-width: 940px;
+  font-size: clamp(44px, 7vw, 92px);
+  line-height: .95;
+  letter-spacing: 0;
+}
+h2 { margin: 0; font-size: clamp(30px, 4vw, 56px); line-height: 1; letter-spacing: 0; }
+h3 { margin: 10px 0 8px; font-size: 20px; }
+p { color: #5b5a53; line-height: 1.7; }
+.heroText { max-width: 700px; font-size: 18px; }
+.heroActions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 28px; }
+.primaryAction, .secondaryAction {
+  border: 1px solid #151515;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 18px;
+  font-weight: 900;
+}
+.primaryAction { background: #151515; color: #fffaf0; }
+.secondaryAction { background: transparent; color: #151515; }
+
+.heroPanel, .projectCard, .timeline article, figure {
+  border: 1px solid rgba(21, 21, 21, .13);
+  background: #fffdf7;
+  box-shadow: 0 22px 70px rgba(37, 31, 20, .08);
+}
+.heroPanel { padding: clamp(18px, 3vw, 28px); }
+.panelHeader { display: flex; justify-content: space-between; gap: 16px; align-items: center; }
+.panelHeader strong { font-size: 34px; }
+.signalGrid, .projectGrid, .testimonialGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 24px;
+}
+.signalGrid article, .skillGrid span, .statusList span {
+  border: 1px solid rgba(21, 21, 21, .1);
+  background: #f2eee4;
+  padding: 14px;
+}
+.signalGrid strong { display: block; font-size: 28px; }
+.signalGrid span, .projectCard span, .projectCard p, .timeline p, figcaption { color: #646158; }
+.statusList { display: grid; gap: 10px; margin-top: 18px; }
+
+.sectionBand, .splitBand, .testimonialBand, .contactBand {
+  padding: 64px clamp(18px, 4vw, 64px);
+  border-top: 1px solid rgba(21, 21, 21, .12);
+}
+.sectionIntro { max-width: 860px; margin-bottom: 28px; }
+.projectCard, .timeline article, figure { padding: 18px; min-width: 0; }
+.projectCard strong { display: inline-flex; margin-top: 16px; color: #2f4f3f; }
+.splitBand, .contactBand {
+  display: grid;
+  grid-template-columns: minmax(0, .85fr) minmax(280px, 1fr);
+  gap: 32px;
+  align-items: center;
+}
+.skillGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.timeline { display: grid; gap: 12px; }
+.timeline article { display: grid; grid-template-columns: 80px minmax(0, .8fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+blockquote { margin: 0 0 16px; font-size: 18px; line-height: 1.55; }
+.testimonialBand { background: #ece9de; }
+.contactBand { background: #151515; color: #fffaf0; }
+.contactBand p { color: #d7d0c0; }
+.contactBand .primaryAction { background: #fffaf0; color: #151515; border-color: #fffaf0; justify-self: start; }
+
+@media (max-width: 860px) {
+  .topbar, .hero, .splitBand, .contactBand { grid-template-columns: 1fr; }
+  .topbar { align-items: flex-start; }
+  .hero { min-height: auto; padding-top: 40px; }
+  .signalGrid, .projectGrid, .testimonialGrid, .skillGrid { grid-template-columns: 1fr; }
+  .timeline article { grid-template-columns: 1fr; }
+  h1 { font-size: clamp(40px, 13vw, 62px); }
+}
+"""
+        title = f"{person} - Frontend Portfolio"
+        description = f"Portfolio profesional {person} untuk frontend engineering, product UI, dan website production-ready."
+        index_content = f"""<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="{description}" />
+    <title>{title}</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+"""
+        return [
+            {"path": f"{ctx.project_root}/{app_entry}", "new_content": app_content},
+            {"path": f"{ctx.project_root}/{style_entry}", "new_content": css_content},
+            {"path": f"{ctx.project_root}/index.html", "new_content": index_content},
+        ], [
+            {"type": "shell", "command": "npm run build", "cwd": ctx.project_root, "reason": "validate emergency portfolio fallback build"}
+        ]
+
     finance = any(token in prompt_lower for token in ["finance", "cfo", "ledger", "ops", "invoice", "reconciliation"])
     audience = "CFO and finance operations teams" if finance else "operators and product teams"
     outcome = "close books faster with AI-reviewed exceptions" if finance else "ship the workflow with clear operating context"
@@ -951,7 +1796,7 @@ export default function Home() {{
           <h2 id="pricing-title">Pilot with one close cycle.</h2>
           <p>Enterprise pilot includes integration mapping, exception rules, and finance workflow onboarding.</p>
         </div>
-        <a className="primaryAction" href="mailto:sales@example.com">Start pilot</a>
+        <button className="primaryAction" type="button" disabled>Configure contact email</button>
       </section>
 
       <section className="contentBand" aria-labelledby="faq-title">
@@ -1167,13 +2012,13 @@ def _resolve_import_candidate(source_rel: str, specifier: str, candidates: set[s
 
 
 def _missing_relative_imports(ctx: PreparedAgentContext, changes: list[dict[str, Any]]) -> list[str]:
-    change_map = _change_map_by_local_path(changes)
-    if not change_map:
+    raw_change_map = _change_map_by_local_path(changes)
+    if not raw_change_map:
         return []
-    for rel, content in list(change_map.items()):
+    change_map: dict[str, str] = {}
+    for rel, content in raw_change_map.items():
         local_rel = _localize_project_rel(rel, ctx.project_root)
-        if local_rel and local_rel not in change_map:
-            change_map[local_rel] = content
+        change_map[local_rel or rel] = content
     candidate_files = set(ctx.all_files) | set(change_map.keys())
     missing: list[str] = []
     for rel, content in change_map.items():
@@ -1465,6 +2310,37 @@ def _large_rewrite_warnings(ctx: PreparedAgentContext, changes: list[dict[str, A
     return warnings
 
 
+def _existing_file_content_for_change(ctx: PreparedAgentContext, rel: str) -> str | None:
+    local_rel = _localize_project_rel(rel, ctx.project_root)
+    candidates = [rel, local_rel]
+    for candidate in candidates:
+        if candidate and candidate in ctx.relevant_files:
+            return ctx.relevant_files[candidate]
+    if local_rel and local_rel == ctx.active_rel:
+        return ctx.current
+    try:
+        old_path = ctx.project_dir / local_rel
+        if old_path.exists() and old_path.is_file():
+            return old_path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return None
+    return None
+
+
+def _edit_strategy_summary(ctx: PreparedAgentContext, changes: list[dict[str, Any]], user_input: str) -> dict[str, Any]:
+    assessments: list[dict[str, Any]] = []
+    for item in changes:
+        rel = str(item.get("path") or "").strip().lstrip("/")
+        new_content = item.get("new_content")
+        if not rel or not isinstance(new_content, str):
+            continue
+        old_content = _existing_file_content_for_change(ctx, rel)
+        if old_content is None:
+            continue
+        assessments.append(assess_edit_strategy(_localize_project_rel(rel, ctx.project_root), old_content, new_content, user_input=user_input))
+    return summarize_edit_strategy(assessments)
+
+
 _MAX_MCP_TOOL_LOOPS = 2
 _MAX_MCP_ACTIONS_PER_LOOP = 2
 
@@ -1634,7 +2510,7 @@ def _build_context_parts(ctx: PreparedAgentContext, req: Any) -> list[str]:
         "- You are working inside the user's selected Appora project workspace, not an abstract code snippet.",
         "- You can return file changes/patches; Appora applies them to the project and syncs durable hosted files.",
         "- You can request shell actions for project-scoped install/build/test/lint/inspect work; Appora runs them through guarded autonomy and streams stdout/stderr.",
-        "- You can request local tools with actions like {type:'tool', tool:'repo_map'|'file_window'|'line_replace_preview'|'search_replace_preview'|'symbol_search'|'style_stack'|'repo_search'|'repo_read'|'repo_overview'|'stack_profile'|'validation_plan'|'skill_catalog'|'skill_read'|'package_scripts'|'dependency_graph'|'component_index'|'route_map'|'quality_scan', arguments:{...}}.",
+        "- You can request local tools with actions like {type:'tool', tool:'repo_map'|'file_window'|'line_replace_preview'|'search_replace_preview'|'symbol_search'|'style_stack'|'repo_search'|'repo_read'|'repo_overview'|'stack_profile'|'validation_plan'|'test_runner'|'git_manager'|'docs_browser'|'skill_catalog'|'skill_read'|'package_scripts'|'dependency_graph'|'component_index'|'route_map'|'quality_scan', arguments:{...}}.",
         "- Local edit preflight tools do not write files directly; use their suggested_change as evidence for the final changes/patches you return.",
         "- Detect the repository stack first. Appora is a general coder agent for frontend, backend, CLI, API, DB, infra, and polyglot repos; do not assume React/Vite unless the files prove it.",
         "- Appora can start/refresh a live preview and run preview audit when the project has a preview surface; optimize visible UI accordingly only for UI/web tasks.",
@@ -1670,11 +2546,19 @@ def _build_asset_prompt(ctx: PreparedAgentContext) -> str:
         public_hint = None
         if "/public/" in f"/{local_rel}":
             public_hint = "/" + local_rel.split("public/", 1)[1]
-        asset_lines.append(f"- {local_rel}" + (f" (public URL hint: {public_hint})" if public_hint else ""))
+        alias = ctx.attached_asset_aliases.get(asset_rel) or ctx.attached_asset_aliases.get(local_rel)
+        hints = []
+        if alias:
+            hints.append(f"alias: @{alias}")
+        if public_hint:
+            hints.append(f"public URL hint: {public_hint}")
+        asset_lines.append(f"- {local_rel}" + (f" ({', '.join(hints)})" if hints else ""))
 
     return (
         "ATTACHED IMAGE ASSETS:\n"
         "The user uploaded these image assets into the project. Use them directly in the implementation when relevant instead of placeholder images.\n"
+        "When the prompt mentions an @alias, map it to the matching uploaded asset path below.\n"
+        "For assets under public/, reference the public URL hint directly in JSX/CSS; do not import them from a made-up src-relative path.\n"
         + "\n".join(asset_lines)
         + "\n\n"
     )
@@ -1841,6 +2725,9 @@ def prepare_agent_context(req: Any, ws_root: Path) -> PreparedAgentContext:
                     all_file_set.add(rel_local)
 
         attached_assets: list[str] = []
+        attached_asset_aliases: dict[str, str] = {}
+        raw_asset_aliases = getattr(req, "asset_aliases", None)
+        asset_aliases = raw_asset_aliases if isinstance(raw_asset_aliases, dict) else {}
         for asset_path in getattr(req, "asset_paths", None) or []:
             asset_rel = str(asset_path or "").strip().lstrip("/")
             if not asset_rel:
@@ -1850,9 +2737,18 @@ def prepare_agent_context(req: Any, ws_root: Path) -> PreparedAgentContext:
             except Exception as exc:
                 prep_warnings.append({"phase": "context", "message": f"Asset path '{asset_rel}' nggak valid ({exc})."[:240]})
                 continue
-            if not asset_abs.exists() or not asset_abs.is_file():
-                continue
             attached_assets.append(asset_rel)
+            if not asset_abs.exists() or not asset_abs.is_file():
+                prep_warnings.append({
+                    "phase": "context",
+                    "message": (
+                        f"Asset path '{asset_rel}' not found in local workspace yet; keeping it in context so explicit @asset usage is still enforced."
+                    )[:240],
+                })
+            raw_alias = str(asset_aliases.get(asset_path) or asset_aliases.get(asset_rel) or "").strip().lstrip("@")
+            alias = re.sub(r"[^A-Za-z0-9_-]+", "-", raw_alias).strip("-").lower()
+            if alias:
+                attached_asset_aliases[asset_rel] = alias[:40]
     except Exception as exc:
         prep_warnings.append({"phase": "context", "message": f"Project context fallback kepake, jadi context file disederhanain ({exc})."[:240]})
         current = req.current_content if isinstance(getattr(req, "current_content", None), str) else ""
@@ -1860,6 +2756,7 @@ def prepare_agent_context(req: Any, ws_root: Path) -> PreparedAgentContext:
         relevant_files = {}
         hybrid_seed_needed = False
         attached_assets = []
+        attached_asset_aliases = {}
 
     ctx_stub = PreparedAgentContext(
         ws_root=ws_root,
@@ -1877,6 +2774,7 @@ def prepare_agent_context(req: Any, ws_root: Path) -> PreparedAgentContext:
         relevant_files=relevant_files,
         hybrid_seed_needed=hybrid_seed_needed,
         attached_assets=attached_assets,
+        attached_asset_aliases=attached_asset_aliases,
         extra_context="",
         asset_prompt="",
         memory_prompt="",
@@ -2103,6 +3001,28 @@ def _format_plan_prompt(plan: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _format_horizon_prompt(horizon: dict[str, Any]) -> str:
+    if not isinstance(horizon, dict) or not horizon.get("enabled"):
+        return ""
+    lines = [
+        "LONG-HORIZON CHECKPOINTS:",
+        f"- Goal: {str(horizon.get('goal') or '').strip()}",
+        f"- Complexity: {str(horizon.get('complexity') or 'medium').strip()}",
+        f"- Current checkpoint: {str(horizon.get('current_checkpoint') or '').strip()}",
+    ]
+    checkpoints = [item for item in list(horizon.get("checkpoints") or []) if isinstance(item, dict)]
+    for item in checkpoints[:8]:
+        lines.append(
+            f"- [{item.get('status') or 'pending'}] {item.get('id') or '?'}: {item.get('title') or ''} - {item.get('detail') or ''}"
+        )
+    criteria = [str(item).strip() for item in list(horizon.get("completion_criteria") or []) if str(item).strip()]
+    if criteria:
+        lines.append("Completion criteria:")
+        lines.extend(f"- {item}" for item in criteria[:6])
+    lines.append("Use these checkpoints to keep long tasks coherent; update progress through concrete changes, tool output, validation, and repair evidence.")
+    return "\n".join(lines)
+
+
 def _summarize_task_goal(user_input: str) -> str:
     clean = re.sub(r"\s+", " ", str(user_input or "")).strip()
     if not clean:
@@ -2122,12 +3042,22 @@ def _build_task_state(ctx: PreparedAgentContext, plan: list[dict[str, Any]], use
             "status": "current" if index == 1 else "pending",
             "files": list(item.get("files") or [])[:8] if isinstance(item.get("files"), list) else [],
         })
+    horizon = build_long_horizon_plan(
+        goal=_summarize_task_goal(user_input),
+        user_input=user_input,
+        base_plan=plan,
+        intent_kind=ctx.intent.kind,
+        should_write_files=ctx.intent.should_write_files,
+        is_full_agent=ctx.is_full_agent,
+        project_root=ctx.project_root,
+    )
     return {
         "goal": _summarize_task_goal(user_input),
         "intent": ctx.intent.kind,
         "status": "planned",
         "next_action": nodes[0]["title"] if nodes else "Draft response",
         "nodes": nodes,
+        "horizon": horizon,
     }
 
 
@@ -2196,6 +3126,13 @@ def _update_task_state_after_verify(ctx: PreparedAgentContext, state: AgentRunti
                 "files": [],
             })
 
+    horizon = update_long_horizon_progress(
+        task_state.get("horizon") if isinstance(task_state.get("horizon"), dict) else {},
+        changes_count=len(changes),
+        actions_count=len(actions),
+        blocking_checks=[str(item.get("name") or "") for item in blocking[:8]],
+    )
+
     task_state.update({
         "status": status,
         "next_action": next_action,
@@ -2203,6 +3140,7 @@ def _update_task_state_after_verify(ctx: PreparedAgentContext, state: AgentRunti
         "changes": len(changes),
         "actions": len(actions),
         "blocking_checks": [str(item.get("name") or "") for item in blocking[:8]],
+        "horizon": horizon,
     })
     ctx.trace_task_state = task_state
     return task_state
@@ -2216,8 +3154,10 @@ def _plan_node(state: AgentRuntimeState) -> AgentRuntimeState:
     task_state = _build_task_state(ctx, plan, state["input"])
     ctx.trace_task_state = task_state
     plan_prompt = _format_plan_prompt(plan)
-    if plan_prompt:
-        ctx.extra_context = f"{ctx.extra_context}\n\n{plan_prompt}".strip()
+    horizon_prompt = _format_horizon_prompt(task_state.get("horizon") if isinstance(task_state.get("horizon"), dict) else {})
+    context_parts = [part for part in [ctx.extra_context, plan_prompt, horizon_prompt] if str(part or "").strip()]
+    if context_parts:
+        ctx.extra_context = "\n\n".join(context_parts).strip()
     _emit(state, "delta", {"message": f"Plan siap: {len(plan)} tahap.", "plan": plan, "task_state": task_state})
     return {"context": ctx, "plan": plan, "task_state": task_state}
 
@@ -2256,6 +3196,37 @@ def _workspace_path(ctx: PreparedAgentContext, rel: str) -> str:
     return f"{ctx.project_root}/{clean}" if ctx.project_root != "." and not clean.startswith(ctx.project_root + "/") else clean
 
 
+_PROJECT_SCOPED_LOCAL_TOOLS = {
+    "repo_list",
+    "repo_search",
+    "repo_map",
+    "symbol_search",
+    "style_stack",
+    "package_scripts",
+    "repo_overview",
+    "stack_profile",
+    "validation_plan",
+    "test_runner",
+    "git_manager",
+    "skill_catalog",
+    "skill_read",
+    "dependency_graph",
+    "component_index",
+    "route_map",
+    "quality_scan",
+    "memory_overview",
+    "mcp_status",
+    "preview_capabilities",
+}
+
+
+def _scoped_local_tool_arguments(ctx: PreparedAgentContext, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    args = dict(arguments or {})
+    if str(tool_name or "").strip() in _PROJECT_SCOPED_LOCAL_TOOLS and not str(args.get("project_root") or "").strip():
+        args["project_root"] = ctx.project_root or "."
+    return args
+
+
 def _deep_preflight_node(state: AgentRuntimeState) -> AgentRuntimeState:
     ctx = state["context"]
     if not _should_run_deep_preflight(ctx, state["input"]):
@@ -2267,7 +3238,7 @@ def _deep_preflight_node(state: AgentRuntimeState) -> AgentRuntimeState:
         {"tool": "repo_overview", "arguments": {"project_root": root_arg, "max_files": 450}},
         {"tool": "stack_profile", "arguments": {"project_root": root_arg}},
         {"tool": "validation_plan", "arguments": {"project_root": root_arg}},
-        {"tool": "skill_catalog", "arguments": {"project_root": root_arg, "query": state["input"], "limit": 12}},
+        {"tool": "skill_catalog", "arguments": {"project_root": root_arg, "query": state["input"], "limit": 5}},
         {"tool": "mcp_status", "arguments": {"project_root": root_arg, "include_live_tools": False}},
     ]
 
@@ -2291,7 +3262,8 @@ def _deep_preflight_node(state: AgentRuntimeState) -> AgentRuntimeState:
     results = []
     for spec in tool_specs:
         tool_name = str(spec.get("tool") or "")
-        arguments = spec.get("arguments") if isinstance(spec.get("arguments"), dict) else {}
+        raw_arguments = spec.get("arguments") if isinstance(spec.get("arguments"), dict) else {}
+        arguments = _scoped_local_tool_arguments(ctx, tool_name, raw_arguments)
         _emit(state, "tool_call", {"kind": "local_tool", "tool": tool_name, "arguments": arguments, "phase": "deep_preflight"})
         _emit(state, "delta", {"message": f"Function call: {tool_name}..."})
         result = execute_local_tool(ctx.ws_root, ctx.project_dir, tool_name=tool_name, arguments=arguments)
@@ -2385,7 +3357,21 @@ def _compact_no_work_context(ctx: PreparedAgentContext) -> str:
         "The previous pass produced no concrete work for a build request. Use the graph evidence to choose the next action.\n"
         f"{json.dumps(compact, ensure_ascii=False, indent=2)[:5000]}\n"
         "Return either: concrete file changes, project-scoped shell actions, or specific local tool/MCP actions that resolve the current evidence gap. Do not hardcode a React/Vite shape unless the repository stack actually supports it."
+        " If the project is effectively empty and the user explicitly asked for a web/app build, create the minimal app files directly instead of using npm create/npx scaffold generators."
     )
+
+
+_PROVIDER_CONFIGURATION_ERROR_RE = re.compile(
+    r"\b("
+    r"key\s+ditolak|api\s*key|invalid\s+key|unauthorized|forbidden|401|403|"
+    r"no provider selected|provider selected|credentials?|settings|quota|rate\s*limit|429"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _is_provider_configuration_error(exc: BaseException) -> bool:
+    return bool(_PROVIDER_CONFIGURATION_ERROR_RE.search(str(exc or "")))
 
 
 def _draft_node(state: AgentRuntimeState) -> AgentRuntimeState:
@@ -2414,13 +3400,29 @@ def _draft_node(state: AgentRuntimeState) -> AgentRuntimeState:
 
     follow_up_prefix = ""
     no_work_recovery = _is_no_work_recovery(state)
+    if no_work_recovery and int(state.get("autonomous_iterations") or 0) >= 1:
+        changes, actions = _emergency_full_agent_changes(ctx, state["input"])
+        if changes or actions:
+            ctx.trace_warnings.append({
+                "phase": "draft",
+                "message": "No-work recovery hit repeated plan-only output; emitted executable emergency fallback before another LLM pass.",
+            })
+            _emit(state, "delta", {"message": "Agent belum menghasilkan perubahan konkret, Appora pakai fallback executable supaya task tetap bisa divalidasi.", "changes_so_far": len(changes)})
+            return {
+                "spoken": "Agent belum menghasilkan perubahan konkret setelah beberapa putaran, jadi Appora lanjut dengan fallback executable yang bisa dibuild dan diaudit.",
+                "log": f"provider={settings_mod.settings.llm_provider} full-agent-mode=no-work-fallback",
+                "changes": changes,
+                "actions": actions,
+            }
     if is_tool_follow_up:
         follow_up_prefix = (
             "MCP FOLLOW-UP MODE:\n"
             "- Tool results are already included in context.\n"
-            "- Prefer producing the final implementation now.\n"
-            "- Ask for another MCP tool only if the current tool result is still insufficient.\n\n"
-            "Your `spoken` field should briefly state what the tool result revealed and what you are doing next.\n\n"
+            "- For build/fix/edit tasks, do not stop at a summary of what the tool found.\n"
+            "- Produce concrete file changes or project-scoped shell actions now when the evidence is sufficient.\n"
+            "- Ask for another local/MCP tool only if a specific missing fact blocks the next code action.\n"
+            "- If you found a concrete issue, patch it in the same response and include validation/build shell actions when useful.\n\n"
+            "Your `spoken` field should briefly state what the tool result revealed and the concrete action you are taking next.\n\n"
         )
     elif is_autonomous_follow_up:
         follow_up_prefix = (
@@ -2468,13 +3470,36 @@ def _draft_node(state: AgentRuntimeState) -> AgentRuntimeState:
         changes = list(sug.changes or [])
         actions = list(sug.actions or [])
     except RuntimeError as exc:
-        if not (ctx.is_full_agent and ctx.hybrid_seed_needed and ctx.intent.should_write_files):
+        recovered_from_runtime_error = False
+        if _is_provider_configuration_error(exc):
+            ctx.trace_warnings.append({"phase": "draft", "message": f"LLM provider gagal dan tidak bisa fallback seed-only: {exc}"[:240]})
             raise
-        ctx.trace_warnings.append({"phase": "draft", "message": f"LLM draft gagal, jadi fallback ke seed-only baseline ({exc})."[:240]})
-        spoken = ""
-        log = f"provider={settings_mod.settings.llm_provider} full-agent-mode=seed-only"
-        changes = []
-        actions = []
+        if ctx.is_full_agent and ctx.intent.should_write_files and "valid JSON" in str(exc):
+            changes, actions = _emergency_full_agent_changes(ctx, state["input"])
+            if changes or actions:
+                recovered_from_runtime_error = True
+                ctx.trace_warnings.append({"phase": "draft", "message": f"LLM returned invalid JSON; emitted executable emergency fallback instead ({exc})."[:240]})
+                spoken = "Output model rusak format JSON, jadi Appora lanjut dengan fallback executable yang tetap bisa dibuild dan diaudit."
+                log = f"provider={settings_mod.settings.llm_provider} full-agent-mode=json-recovery-fallback"
+            else:
+                raise
+        elif ctx.is_full_agent and ctx.intent.should_write_files and no_work_recovery and int(state.get("autonomous_iterations") or 0) >= 2:
+            changes, actions = _emergency_full_agent_changes(ctx, state["input"])
+            if changes or actions:
+                recovered_from_runtime_error = True
+                ctx.trace_warnings.append({"phase": "draft", "message": f"No-work recovery exhausted; emitted executable emergency fallback ({exc})."[:240]})
+                spoken = "Agent belum menghasilkan perubahan valid setelah beberapa putaran, jadi Appora lanjut dengan fallback executable agar task tetap selesai."
+                log = f"provider={settings_mod.settings.llm_provider} full-agent-mode=no-work-fallback"
+            else:
+                raise
+        if not recovered_from_runtime_error and not (ctx.is_full_agent and ctx.hybrid_seed_needed and ctx.intent.should_write_files):
+            raise
+        if not recovered_from_runtime_error:
+            ctx.trace_warnings.append({"phase": "draft", "message": f"LLM draft gagal, jadi fallback ke seed-only baseline ({exc})."[:240]})
+            spoken = ""
+            log = f"provider={settings_mod.settings.llm_provider} full-agent-mode=seed-only"
+            changes = []
+            actions = []
 
     if ctx.intent.kind == "conversation":
         done_message = "Balasan udah siap, tinggal dirapihin..."
@@ -2543,7 +3568,8 @@ def _execute_tooling_node(state: AgentRuntimeState) -> AgentRuntimeState:
     local_results = []
     for action in tool_actions[:_MAX_MCP_ACTIONS_PER_LOOP]:
         tool = str(action.get("tool") or "").strip()
-        arguments = action.get("arguments") if isinstance(action.get("arguments"), dict) else {}
+        raw_arguments = action.get("arguments") if isinstance(action.get("arguments"), dict) else {}
+        arguments = _scoped_local_tool_arguments(ctx, tool, raw_arguments)
         _emit(state, "tool_call", {"kind": "local_tool", "tool": tool, "arguments": arguments, "phase": "tooling"})
         _emit(state, "delta", {"message": f"Tool {tool} lagi dipanggil..."})
         result = execute_local_tool(
@@ -2736,17 +3762,27 @@ def _verify_node(state: AgentRuntimeState) -> AgentRuntimeState:
             ctx.trace_warnings.append({"phase": "verify", "message": f"{label} {name}: {detail}"[:240]})
 
     if ctx.intent.should_write_files:
+        shell_only_full_agent = bool(ctx.is_full_agent and actions and not changes)
+        has_work_output = bool(changes or actions) and not shell_only_full_agent
         add(
             "has-work-output",
-            bool(changes or actions),
-            "Build request produced file changes or runtime actions." if changes or actions else "Build request produced no file changes/actions.",
+            has_work_output,
+            (
+                "Build request produced file changes or runtime actions."
+                if has_work_output
+                else (
+                    "Shell-only output is not enough for a full-agent build request; produce concrete file changes."
+                    if shell_only_full_agent
+                    else "Build request produced no file changes/actions."
+                )
+            ),
         )
         add(
             "strict-agentic-progress",
-            bool(changes or actions) or not _looks_like_plan_only_reply(spoken),
+            has_work_output or not _looks_like_plan_only_reply(spoken),
             (
                 "Build request either acted or did not stop at a plan-only reply."
-                if (changes or actions) or not _looks_like_plan_only_reply(spoken)
+                if has_work_output or not _looks_like_plan_only_reply(spoken)
                 else "Strict-agentic guard: build request stopped after a plan-only reply without concrete tool/action/file progress."
             ),
         )
@@ -2828,6 +3864,72 @@ def _verify_node(state: AgentRuntimeState) -> AgentRuntimeState:
         ),
     )
 
+    frontend_style_runtime_issues = _frontend_style_runtime_issues(ctx, changes)
+    add(
+        "frontend-style-runtime",
+        not frontend_style_runtime_issues,
+        (
+            "Frontend styling runtime matches the project setup."
+            if not frontend_style_runtime_issues
+            else "; ".join(frontend_style_runtime_issues[:2])
+        ),
+    )
+
+    frontend_asset_quality_issues = _frontend_asset_quality_issues(ctx, changes)
+    add(
+        "frontend-asset-quality",
+        not frontend_asset_quality_issues,
+        (
+            "Frontend media/assets avoid fake placeholder sources."
+            if not frontend_asset_quality_issues
+            else "; ".join(frontend_asset_quality_issues[:2])
+        ),
+    )
+
+    referenced_asset_usage_issues = _mentioned_uploaded_asset_usage_issues(ctx, changes, state["input"])
+    add(
+        "referenced-asset-usage",
+        not referenced_asset_usage_issues,
+        (
+            "Explicit @asset references are used in the implementation."
+            if not referenced_asset_usage_issues
+            else "; ".join(referenced_asset_usage_issues[:2])
+        ),
+    )
+
+    frontend_business_data_honesty_issues = _frontend_business_data_honesty_issues(ctx, changes)
+    add(
+        "frontend-business-data-honesty",
+        not frontend_business_data_honesty_issues,
+        (
+            "Frontend does not invent fake business contact/data."
+            if not frontend_business_data_honesty_issues
+            else "; ".join(frontend_business_data_honesty_issues[:2])
+        ),
+    )
+
+    frontend_interaction_integrity_issues = _frontend_interaction_integrity_issues(ctx, changes)
+    add(
+        "frontend-interaction-integrity",
+        not frontend_interaction_integrity_issues,
+        (
+            "Frontend interactions are wired, valid anchors, or visibly gated."
+            if not frontend_interaction_integrity_issues
+            else "; ".join(frontend_interaction_integrity_issues[:2])
+        ),
+    )
+
+    frontend_maintainability_integrity_issues = _frontend_maintainability_integrity_issues(ctx, changes)
+    add(
+        "frontend-maintainability-integrity",
+        not frontend_maintainability_integrity_issues,
+        (
+            "Frontend implementation stays maintainable for product-scale UI."
+            if not frontend_maintainability_integrity_issues
+            else "; ".join(frontend_maintainability_integrity_issues[:2])
+        ),
+    )
+
     rewrite_warnings = _large_rewrite_warnings(ctx, changes, state["input"])
     add(
         "large-rewrite-review",
@@ -2836,6 +3938,20 @@ def _verify_node(state: AgentRuntimeState) -> AgentRuntimeState:
     )
     for warning in rewrite_warnings:
         ctx.trace_warnings.append({"phase": "rewrite-review", "message": warning[:240]})
+
+    edit_strategy = _edit_strategy_summary(ctx, changes, state["input"])
+    edit_warnings = list(edit_strategy.get("warnings") or [])
+    add(
+        "edit-strategy-quality",
+        not edit_warnings,
+        (
+            f"Existing-file edit strategy: {edit_strategy.get('summary')} (score {edit_strategy.get('score')})."
+            if not edit_warnings
+            else f"Prefer surgical patch/search-replace: {'; '.join(str(item) for item in edit_warnings[:3])}"
+        ),
+    )
+    for warning in edit_warnings:
+        ctx.trace_warnings.append({"phase": "edit-strategy", "message": str(warning)[:240]})
 
     frontend_quality_issues = _frontend_static_quality_issues(ctx, changes)
     add(
@@ -2968,6 +4084,19 @@ def _should_finalize_to_emergency_fallback(state: AgentRuntimeState) -> bool:
     return False
 
 
+_TARGETED_PRE_APPLY_REPAIR_CHECKS = {
+    "relative-imports-resolve",
+    "root-route-entrypoint",
+    "frontend-style-runtime",
+    "frontend-asset-quality",
+    "referenced-asset-usage",
+    "frontend-business-data-honesty",
+    "frontend-interaction-integrity",
+    "frontend-maintainability-integrity",
+    "edit-strategy-quality",
+}
+
+
 def _needs_autonomous_continue(state: AgentRuntimeState) -> bool:
     ctx = state["context"]
     if not ctx.intent.should_write_files:
@@ -2984,7 +4113,103 @@ def _needs_autonomous_continue(state: AgentRuntimeState) -> bool:
     ]
     if not blockers and (state.get("changes") or state.get("actions")):
         return False
+    if blockers and (state.get("changes") or state.get("actions")):
+        blocker_set = {str(item) for item in blockers}
+        if blocker_set.issubset(_TARGETED_PRE_APPLY_REPAIR_CHECKS):
+            ctx.trace_warnings.append({
+                "phase": "driver",
+                "message": (
+                    "Skipping autonomous redraft because existing work only needs targeted pre-apply verifier repair: "
+                    + ", ".join(sorted(blocker_set)[:6])
+                )[:240],
+            })
+            return False
     return True
+
+
+def _verifier_failure_signature(blockers: list[str], checks: list[dict[str, Any]]) -> str:
+    names = sorted({str(item or "").strip() for item in blockers if str(item or "").strip()})
+    if not names:
+        names = sorted({
+            str(item.get("name") or "").strip()
+            for item in checks
+            if isinstance(item, dict) and str(item.get("name") or "").strip()
+        })
+    detail_markers: list[str] = []
+    for item in checks[:4]:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if name not in names:
+            continue
+        detail = re.sub(r"\s+", " ", str(item.get("detail") or "")).strip()
+        detail = re.sub(r"\d{4,}", "<number>", detail)
+        if detail:
+            detail_markers.append(f"{name}:{detail[:120]}")
+    if detail_markers:
+        return " | ".join(detail_markers)[:600]
+    return " | ".join(names)[:600]
+
+
+def _verifier_blocker_signature(blockers: list[str], checks: list[dict[str, Any]]) -> str:
+    names = sorted({str(item or "").strip() for item in blockers if str(item or "").strip()})
+    if not names:
+        names = sorted({
+            str(item.get("name") or "").strip()
+            for item in checks
+            if isinstance(item, dict) and item.get("ok") is False and str(item.get("name") or "").strip()
+        })
+    return "|".join(names)[:300]
+
+
+def _verifier_repair_directives(blockers: list[str], checks: list[dict[str, Any]], *, repeated_failure: bool) -> list[str]:
+    names = {str(item or "").strip() for item in blockers if str(item or "").strip()}
+    names.update(
+        str(item.get("name") or "").strip()
+        for item in checks
+        if isinstance(item, dict) and item.get("ok") is False
+    )
+    directives: list[str] = []
+    if repeated_failure:
+        directives.append("Do not repeat the previous failing strategy. Change the implementation shape, not just the explanation.")
+    if "frontend-business-data-honesty" in names:
+        directives.append(
+            "Remove every invented phone, WhatsApp/WA link, email, street address, map detail, payment account, opening hour, founding year, rating, customer/order count, delivery area, or fake business claim. "
+            "If the UI needs contact/order affordance, render it as disabled/configuration-gated neutral UI with no href and no fake value."
+        )
+    if "referenced-asset-usage" in names:
+        directives.append(
+            "Use the exact uploaded @asset public URL/path shown in asset context. Do not import an invented src-relative copy and do not replace it with placeholder media."
+        )
+    if "relative-imports-resolve" in names:
+        directives.append(
+            "Resolve every changed relative import against real files in the project. Create the missing file, correct the import path, or replace public assets with their /uploads or /public URL."
+        )
+    if "frontend-style-runtime" in names:
+        directives.append(
+            "Match the styling runtime to the project. Remove Tailwind utility classes unless Tailwind is actually configured; prefer CSS classes in existing stylesheet files."
+        )
+    if "frontend-asset-quality" in names:
+        directives.append(
+            "Remove placeholder media sources and use attached/local/generated assets or a CSS/product visual that does not pretend to be real media."
+        )
+    if "frontend-interaction-integrity" in names:
+        directives.append(
+            "Replace dead hrefs, inert active-looking buttons, alert/console-only handlers, and coming-soon CTAs with real in-page behavior, valid anchors, form submission, or visibly disabled/gated controls."
+        )
+    if "frontend-maintainability-integrity" in names:
+        directives.append(
+            "Move repeated inline styles into reusable CSS/classes or components so the UI remains maintainable."
+        )
+    if "has-work-output" in names:
+        directives.append(
+            "Produce concrete file changes or project-scoped shell/tool actions now. A plan-only response is still a failure for this task."
+        )
+    if "no-unexecuted-tool-actions" in names:
+        directives.append(
+            "Do not leave raw tool/MCP actions in the final output. Use tool results in the tooling loop, then return final changes or shell actions."
+        )
+    return directives
 
 
 def _autonomous_continue_node(state: AgentRuntimeState) -> AgentRuntimeState:
@@ -3001,12 +4226,41 @@ def _autonomous_continue_node(state: AgentRuntimeState) -> AgentRuntimeState:
         for item in list(ctx.trace_verification or [])
         if isinstance(item, dict) and item.get("ok") is False
     ]
+    previous_history = [
+        dict(item)
+        for item in list(state.get("verifier_failure_history") or [])
+        if isinstance(item, dict)
+    ]
+    signature = _verifier_failure_signature(blockers, checks)
+    blocker_signature = _verifier_blocker_signature(blockers, checks)
+    previous_same = [
+        item for item in previous_history
+        if str(item.get("signature") or "") == signature
+        or (blocker_signature and str(item.get("blocker_signature") or "") == blocker_signature)
+    ]
+    repeated_failure = bool(previous_same)
+    repeated_count = len(previous_same) + 1
+    directives = _verifier_repair_directives(blockers, checks, repeated_failure=repeated_failure)
+    current_failure = {
+        "iteration": iteration,
+        "signature": signature,
+        "blocker_signature": blocker_signature,
+        "blocking_checks": blockers[:8],
+        "primary_detail": str(checks[0].get("detail") or "")[:240] if checks and isinstance(checks[0], dict) else "",
+    }
+    history = [*previous_history, current_failure][-6:]
     evidence = {
         "iteration": iteration,
         "status": task_state.get("status"),
         "next_action": task_state.get("next_action"),
         "blocking_checks": blockers,
         "failed_verifier_checks": checks[:8],
+        "current_signature": signature,
+        "blocker_signature": blocker_signature,
+        "repeated_failure": repeated_failure,
+        "repeated_count": repeated_count,
+        "verifier_failure_history": history[-4:],
+        "repair_directives": directives,
         "previous_spoken": str(state.get("spoken") or "")[:1200],
         "previous_change_paths": [
             str(item.get("path") or "")
@@ -3014,15 +4268,22 @@ def _autonomous_continue_node(state: AgentRuntimeState) -> AgentRuntimeState:
             if isinstance(item, dict)
         ][:12],
     }
+    directive_block = ""
+    if directives:
+        directive_block = "\nTARGETED REPAIR DIRECTIVES:\n" + "\n".join(f"- {item}" for item in directives)
     ctx.extra_context = (
         f"{ctx.extra_context}\n\n"
         "AUTONOMOUS TASK LOOP EVIDENCE:\n"
         f"{json.dumps(evidence, ensure_ascii=False, indent=2)[:6000]}\n"
         "Continue the same user task. Clear the blocker with concrete changes/actions, or explain the exact blocker if impossible."
+        f"{directive_block}"
     ).strip()
     ctx.trace_warnings.append({
         "phase": "autonomous-loop",
-        "message": f"Autonomous continuation pass {iteration} after blocker: {', '.join(blockers[:4]) or 'no-work-output'}."[:240],
+        "message": (
+            f"Autonomous continuation pass {iteration} after blocker: {', '.join(blockers[:4]) or 'no-work-output'}"
+            f"{' (repeated)' if repeated_failure else ''}."
+        )[:240],
     })
     _emit(
         state,
@@ -3046,7 +4307,51 @@ def _autonomous_continue_node(state: AgentRuntimeState) -> AgentRuntimeState:
         "changes": [],
         "actions": [],
         "passes": max(int(state.get("passes") or 1), iteration + 1),
+        "verifier_failure_history": history,
     }
+
+
+def _unresolved_agent_handoff_summary(ctx: PreparedAgentContext, state: AgentRuntimeState, *, changes: list[Any], actions: list[Any]) -> str:
+    task_state = ctx.trace_task_state if isinstance(ctx.trace_task_state, dict) else {}
+    verification = [item for item in list(ctx.trace_verification or []) if isinstance(item, dict)]
+    blocking = [item for item in verification if _is_blocking_verifier_check(item)]
+    tool_hits = [
+        item for item in [*list(ctx.trace_local_tools_used or []), *list(ctx.trace_mcp_tools_used or [])]
+        if isinstance(item, dict)
+    ]
+    last_tools = []
+    for item in tool_hits[-5:]:
+        name = str(item.get("tool") or item.get("server") or "tool").strip()
+        ok = "ok" if item.get("ok") else "failed"
+        text = re.sub(r"\s+", " ", str(item.get("text") or item.get("error") or "")).strip()
+        last_tools.append(f"{name}={ok}" + (f" ({text[:120]})" if text else ""))
+
+    blockers = []
+    for item in blocking[:5]:
+        name = str(item.get("name") or "verifier").strip()
+        detail = re.sub(r"\s+", " ", str(item.get("detail") or "")).strip()
+        blockers.append(f"{name}: {detail[:180]}" if detail else name)
+    if not blockers:
+        blockers = [str(item) for item in list(task_state.get("blocking_checks") or []) if str(item).strip()][:5]
+
+    next_action = str(task_state.get("next_action") or "").strip()
+    if not next_action and blockers:
+        next_action = f"clear blocker {blockers[0].split(':', 1)[0]}"
+    if not next_action:
+        next_action = "rerun the strongest validation/build command, read the failing output, then patch the smallest affected file set"
+
+    lines = [
+        "Belum selesai sampai lolos.",
+        f"Status terakhir: {str(task_state.get('status') or 'blocked').strip() or 'blocked'}.",
+        f"Progress: {len(changes)} file change(s), {len(actions)} final action(s), autonomous pass {int(state.get('autonomous_iterations') or 0)}/{_MAX_AUTONOMOUS_TASK_LOOPS}.",
+    ]
+    if last_tools:
+        lines.append("Yang sudah dicek: " + " | ".join(last_tools[:5]) + ".")
+    if blockers:
+        lines.append("Blocker terakhir: " + " | ".join(blockers[:5]) + ".")
+    lines.append(f"Langkah lanjut yang harus dilakukan: {next_action}.")
+    lines.append("Aku simpan rangkuman ini supaya command berikutnya seperti 'lanjut' bisa nerusin dari blocker yang sama, bukan mulai dari awal.")
+    return "\n".join(lines)[:1800]
 
 
 def _finalize_node(state: AgentRuntimeState) -> AgentRuntimeState:
@@ -3136,6 +4441,24 @@ def _finalize_node(state: AgentRuntimeState) -> AgentRuntimeState:
         if ctx.hybrid_seed_needed and "full-agent-mode" not in log:
             log = f"{log} full-agent-mode=seeded".strip()
 
+    task_state = ctx.trace_task_state if isinstance(ctx.trace_task_state, dict) else {}
+    unresolved = bool(
+        ctx.intent.should_write_files
+        and (
+            str(task_state.get("status") or "").strip().lower() == "blocked"
+            or (ctx.is_full_agent and not normalized_changes and not normalized_actions)
+            or bool(state.get("driver_stopped"))
+        )
+    )
+    if unresolved:
+        handoff = _unresolved_agent_handoff_summary(ctx, state, changes=normalized_changes, actions=normalized_actions)
+        if handoff and handoff not in spoken:
+            spoken = (f"{spoken.strip()}\n\n{handoff}" if spoken.strip() else handoff).strip()
+        ctx.trace_warnings.append({
+            "phase": "finalize",
+            "message": "Agent finalized unresolved work with a handoff summary for continuation.",
+        })
+
     trace = {
         "passes": passes,
         "context_files": sorted({*ctx.relevant_files.keys(), *ctx.open_files, ctx.active_rel} - {""})[:80],
@@ -3161,50 +4484,116 @@ def _finalize_node(state: AgentRuntimeState) -> AgentRuntimeState:
     }
 
 
-_AGENT_GRAPH_BUILDER = StateGraph(AgentRuntimeState)
-_AGENT_GRAPH_BUILDER.add_node("intent", _classify_intent_node)
-_AGENT_GRAPH_BUILDER.add_node("memory", _hydrate_memory_node)
-_AGENT_GRAPH_BUILDER.add_node("skills", _resolve_skills_node)
-_AGENT_GRAPH_BUILDER.add_node("mcp", _inspect_mcp_node)
-_AGENT_GRAPH_BUILDER.add_node("plan", _plan_node)
-_AGENT_GRAPH_BUILDER.add_node("deep_preflight", _deep_preflight_node)
-_AGENT_GRAPH_BUILDER.add_node("draft", _draft_node)
-_AGENT_GRAPH_BUILDER.add_node("tooling", _execute_tooling_node)
-_AGENT_GRAPH_BUILDER.add_node("refine", _refine_node)
-_AGENT_GRAPH_BUILDER.add_node("verify", _verify_node)
-_AGENT_GRAPH_BUILDER.add_node("strict_retry", _strict_agentic_retry_node)
-_AGENT_GRAPH_BUILDER.add_node("autonomous_continue", _autonomous_continue_node)
-_AGENT_GRAPH_BUILDER.add_node("finalize", _finalize_node)
-_AGENT_GRAPH_BUILDER.set_entry_point("intent")
-_AGENT_GRAPH_BUILDER.add_edge("intent", "memory")
-_AGENT_GRAPH_BUILDER.add_edge("memory", "skills")
-_AGENT_GRAPH_BUILDER.add_edge("skills", "mcp")
-_AGENT_GRAPH_BUILDER.add_edge("mcp", "plan")
-_AGENT_GRAPH_BUILDER.add_edge("plan", "deep_preflight")
-_AGENT_GRAPH_BUILDER.add_edge("deep_preflight", "draft")
-_AGENT_GRAPH_BUILDER.add_conditional_edges("draft", _route_after_draft, {"tooling": "tooling", "refine": "refine", "finalize": "verify"})
-_AGENT_GRAPH_BUILDER.add_edge("tooling", "draft")
-_AGENT_GRAPH_BUILDER.add_edge("refine", "verify")
-_AGENT_GRAPH_BUILDER.add_conditional_edges("verify", _route_after_verify, {"strict_retry": "strict_retry", "autonomous_continue": "autonomous_continue", "finalize": "finalize"})
-_AGENT_GRAPH_BUILDER.add_conditional_edges("strict_retry", _route_after_strict_retry, {"tooling": "tooling", "verify": "verify"})
-_AGENT_GRAPH_BUILDER.add_edge("autonomous_continue", "draft")
-_AGENT_GRAPH_BUILDER.add_edge("finalize", END)
-_AGENT_GRAPH = _AGENT_GRAPH_BUILDER.compile()
+def _merge_agent_state(state: AgentRuntimeState, update: AgentRuntimeState | dict[str, Any] | None) -> AgentRuntimeState:
+    if not update:
+        return state
+    for key, value in dict(update).items():
+        state[key] = value
+    return state
+
+
+class AgentDriver:
+    """Explicit agent loop replacing the previous static LangGraph edge map."""
+
+    def __init__(self, *, max_steps: int = 28) -> None:
+        self.max_steps = max(8, int(max_steps or 28))
+
+    def _run_bootstrap(self, state: AgentRuntimeState) -> AgentRuntimeState:
+        for node in (
+            _classify_intent_node,
+            _hydrate_memory_node,
+            _resolve_skills_node,
+            _inspect_mcp_node,
+            _plan_node,
+            _deep_preflight_node,
+        ):
+            _merge_agent_state(state, node(state))
+        return state
+
+    def run(self, state: AgentRuntimeState) -> AgentRuntimeState:
+        self._run_bootstrap(state)
+        steps = 0
+        phase = "draft"
+        while steps < self.max_steps:
+            steps += 1
+            if phase == "draft":
+                _merge_agent_state(state, _draft_node(state))
+                route = _route_after_draft(state)
+                if route == "tooling":
+                    phase = "tooling"
+                    continue
+                if route == "refine":
+                    phase = "refine"
+                    continue
+                phase = "verify"
+                continue
+
+            if phase == "tooling":
+                _merge_agent_state(state, _execute_tooling_node(state))
+                phase = "draft"
+                continue
+
+            if phase == "refine":
+                _merge_agent_state(state, _refine_node(state))
+                phase = "verify"
+                continue
+
+            if phase == "verify":
+                _merge_agent_state(state, _verify_node(state))
+                route = _route_after_verify(state)
+                if route == "strict_retry":
+                    phase = "strict_retry"
+                    continue
+                if route == "autonomous_continue":
+                    phase = "autonomous_continue"
+                    continue
+                phase = "finalize"
+                continue
+
+            if phase == "strict_retry":
+                _merge_agent_state(state, _strict_agentic_retry_node(state))
+                route = _route_after_strict_retry(state)
+                phase = "tooling" if route == "tooling" else "verify"
+                continue
+
+            if phase == "autonomous_continue":
+                _merge_agent_state(state, _autonomous_continue_node(state))
+                phase = "draft"
+                continue
+
+            if phase == "finalize":
+                _merge_agent_state(state, _finalize_node(state))
+                state["driver_steps"] = steps
+                return state
+
+            ctx = state.get("context")
+            if isinstance(ctx, PreparedAgentContext):
+                ctx.trace_warnings.append({"phase": "driver", "message": f"Unknown agent driver phase: {phase}"[:240]})
+            phase = "finalize"
+
+        ctx = state.get("context")
+        if isinstance(ctx, PreparedAgentContext):
+            ctx.trace_warnings.append({
+                "phase": "driver",
+                "message": f"Agent driver stopped after {self.max_steps} steps to avoid an infinite loop.",
+            })
+        _merge_agent_state(state, _finalize_node(state))
+        state["driver_steps"] = steps
+        state["driver_stopped"] = True
+        return state
 
 
 def run_agent_pipeline(req: Any, *, ws_root: Path, emit: EventEmitter | None = None) -> AgentRuntimeResult:
     ctx = prepare_agent_context(req, ws_root)
-    result = _AGENT_GRAPH.invoke(
-        {
-            "input": str(getattr(req, "input", "") or ""),
-            "context": ctx,
-            "request_preview_url": getattr(req, "preview_url", None),
-            "tool_iterations": 0,
-            "mcp_call_count": 0,
-            "autonomous_iterations": 0,
-            "emit": emit,
-        }
-    )
+    result = AgentDriver().run({
+        "input": str(getattr(req, "input", "") or ""),
+        "context": ctx,
+        "request_preview_url": getattr(req, "preview_url", None),
+        "tool_iterations": 0,
+        "mcp_call_count": 0,
+        "autonomous_iterations": 0,
+        "emit": emit,
+    })
     final_result = {
         "spoken": str(result.get("spoken") or ""),
         "log": str(result.get("log") or ""),

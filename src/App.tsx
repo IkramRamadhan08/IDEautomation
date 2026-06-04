@@ -1087,14 +1087,44 @@ export default function App() {
     imageInputRef.current?.click();
   };
 
+  const normalizeImageAlias = (value: string, fallback: string) => {
+    const clean = value
+      .trim()
+      .replace(/^@+/, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    return clean || fallback;
+  };
+
+  const defaultImageAlias = (file: File) => {
+    const stem = file.name.replace(/\.[^.]+$/, "");
+    if (/hero|banner|cover/i.test(stem)) return "hero";
+    if (/logo|brand/i.test(stem)) return "logo";
+    if (/product|produk/i.test(stem)) return "produk";
+    return normalizeImageAlias(stem, "image");
+  };
+
   const importAgentImage = async (fileList: FileList | null) => {
     const file = fileList?.[0];
     if (!file) return;
+    const suggestedAlias = defaultImageAlias(file);
+    const titleInput = window.prompt(
+      "Kasih title/alias buat gambar ini. Nanti bisa dipanggil di prompt, contoh: @hero",
+      suggestedAlias,
+    );
+    const alias = normalizeImageAlias(titleInput ?? suggestedAlias, suggestedAlias);
+    const title = alias;
     setImageUploading(true);
     try {
-      const uploaded = await uploadImageAsset(selectedProject, file);
-      setAttachedImage(uploaded);
-      toast.success(`Image attached: ${uploaded.name}`);
+      const uploaded = await uploadImageAsset(selectedProject, file, title);
+      setAttachedImage({ ...uploaded, title, alias: uploaded.alias || alias });
+      setAgentInput((current) => {
+        const token = `@${uploaded.alias || alias}`;
+        if (current.includes(token)) return current;
+        return current.trim() ? `${current.trim()} ${token} ` : `${token} `;
+      });
+      toast.success(`Image attached as @${uploaded.alias || alias}`);
     } catch (e) {
       toast.error("Gagal upload image: " + errorMessage(e));
     } finally {
@@ -1240,6 +1270,7 @@ export default function App() {
       previewUrl,
       selectedProject,
       attachedImagePath: attachedImage?.path || null,
+      attachedImageAlias: attachedImage?.alias || attachedImage?.title || null,
       activeFile,
       openFiles,
       buffers,
@@ -1294,8 +1325,8 @@ export default function App() {
   const renderGoogleLoginGate = () => {
     const heroNodes = [
       { label: "Prompt", detail: "Describe the app", icon: Sparkles },
-      { label: "Full Preview", detail: "Clara builds around the browser", icon: Bot },
-      { label: "Copilot", detail: "Raka helps while you code", icon: Code2 },
+      { label: "Agent", detail: "One coder handles build and repair", icon: Bot },
+      { label: "Workspace", detail: "Editor-first or preview-first", icon: Code2 },
       { label: "Preview", detail: "Inspect in browser", icon: Globe2 },
       { label: "Memory", detail: "Project context stays", icon: Layers3 },
       { label: "Deploy", detail: "Vercel-ready output", icon: Rocket },
@@ -1341,8 +1372,8 @@ export default function App() {
           <div className="apporaHeroCopy">
             <h1>THE FUTURE JUST IN YOUR HEAD</h1>
             <p>
-              Appora turns a rough idea into a hosted workspace with Clara Full Preview,
-              Raka coding mode, live preview, project memory, Supabase data, and Vercel-ready output.
+              Appora turns a rough idea into a hosted workspace with one autonomous agent,
+              live preview, project memory, Supabase data, and Vercel-ready output.
             </p>
             <div className="apporaHeroActions">
               <button className="apporaPrimaryButton" onClick={openAppora}>
@@ -1377,8 +1408,8 @@ export default function App() {
               </div>
               <div className="apporaPromptLine">Build a booking app with auth, admin dashboard, and deploy notes.</div>
               <div className="apporaAgentRows">
-                <div><Bot size={17} /><strong>Clara</strong><span>full preview mode for users who want the app built end to end</span></div>
-                <div><Terminal size={17} /><strong>Raka</strong><span>copilot mode for devs who want focused help while staying in control</span></div>
+                <div><Bot size={17} /><strong>Appora Agent</strong><span>one autonomous coder with tools, memory, terminal, preview, and repair loop</span></div>
+                <div><Terminal size={17} /><strong>Two surfaces</strong><span>Workspace for editor-first work, Full Preview for product-first delivery</span></div>
               </div>
             </div>
             <div className="apporaNodeGrid">
@@ -1822,11 +1853,6 @@ export default function App() {
       previewFrameKey={previewFrameKey}
       agentStatus={agentStatus}
       workingMsg={workingMsg}
-      agentLog={agentLog}
-      agentActions={agentActions}
-      agentLiveItems={agentLiveItems}
-      agentAuditTrail={agentAuditTrail}
-      attachedAssetName={attachedImage?.name || null}
       onEnsurePreviewRunning={ensurePreviewRunning}
     />
   );
@@ -1836,7 +1862,16 @@ export default function App() {
       <Toaster position="top-right" richColors />
       {hostedProjects.length > 0 ? null : null}
       <input ref={folderInputRef} type="file" multiple style={{ display: "none" }} onChange={e => importPickedFolder(e.target.files)} />
-      <input ref={imageInputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={e => importAgentImage(e.target.files)} />
+      <input
+        ref={imageInputRef}
+        type="file"
+        accept="image/*"
+        style={{ display: "none" }}
+        onChange={e => {
+          void importAgentImage(e.target.files);
+          e.currentTarget.value = "";
+        }}
+      />
       
       <Suspense fallback={null}>
         <SettingsModal

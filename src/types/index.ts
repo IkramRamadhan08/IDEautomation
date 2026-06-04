@@ -77,6 +77,25 @@ export type AgentAuditSnapshot = {
       status: string;
       files?: string[];
     }>;
+    horizon?: {
+      enabled?: boolean;
+      goal?: string;
+      projectRoot?: string;
+      intent?: string;
+      complexity?: string;
+      status?: string;
+      currentCheckpoint?: string;
+      checkpoints?: Array<{
+        id: string;
+        title: string;
+        detail?: string;
+        status: string;
+        files?: string[];
+      }>;
+      completionCriteria?: string[];
+      riskRegister?: string[];
+      blockingChecks?: string[];
+    };
   };
   verification?: Array<{
     name: string;
@@ -355,6 +374,8 @@ export type UploadedImageAsset = {
   ok: boolean;
   path: string;
   name: string;
+  title?: string | null;
+  alias?: string | null;
   content_type?: string | null;
   size: number;
 };

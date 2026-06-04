@@ -398,6 +398,12 @@ def detect_project_stack(project_dir: Path, *, warnings: list[str] | None = None
         _append_unique(frameworks, "nextjs")
     if pkg or any(rel.endswith((".js", ".mjs", ".cjs", ".ts")) for rel in files):
         _append_unique(runtimes, "node")
+    if "deno.json" in root_files or "deno.jsonc" in root_files:
+        _append_unique(languages, "javascript")
+        _append_unique(languages, "typescript")
+        _append_unique(runtimes, "deno")
+        _append_unique(package_managers, "deno")
+        _append_unique(validation_files, "deno.json" if "deno.json" in root_files else "deno.jsonc")
 
     if {"pyproject.toml", "requirements.txt", "setup.py", "setup.cfg", "Pipfile", "poetry.lock", "pytest.ini"} & root_files or any(rel.endswith(".py") for rel in files):
         _append_unique(languages, "python")
@@ -456,6 +462,29 @@ def detect_project_stack(project_dir: Path, *, warnings: list[str] | None = None
     if any(rel.endswith(".csproj") for rel in files) or any(rel.endswith(".sln") for rel in files):
         _append_unique(languages, "csharp")
         _append_unique(package_managers, "dotnet")
+    if "CMakeLists.txt" in root_files or "Makefile" in root_files or any(rel.endswith((".c", ".h")) for rel in files):
+        _append_unique(languages, "c")
+        if "CMakeLists.txt" in root_files:
+            _append_unique(package_managers, "cmake")
+            _append_unique(validation_files, "CMakeLists.txt")
+        if "Makefile" in root_files:
+            _append_unique(package_managers, "make")
+            _append_unique(validation_files, "Makefile")
+    if "CMakeLists.txt" in root_files or any(rel.endswith((".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx")) for rel in files):
+        _append_unique(languages, "cpp")
+        if "CMakeLists.txt" in root_files:
+            _append_unique(package_managers, "cmake")
+            _append_unique(validation_files, "CMakeLists.txt")
+    if "Package.swift" in root_files or any(rel.endswith(".swift") for rel in files):
+        _append_unique(languages, "swift")
+        _append_unique(package_managers, "swift")
+        if "Package.swift" in root_files:
+            _append_unique(validation_files, "Package.swift")
+    if "mix.exs" in root_files or any(rel.endswith((".ex", ".exs")) for rel in files):
+        _append_unique(languages, "elixir")
+        _append_unique(package_managers, "mix")
+        if "mix.exs" in root_files:
+            _append_unique(validation_files, "mix.exs")
 
     for rel in ["package.json", "tsconfig.json", "pyproject.toml", "requirements.txt", "pytest.ini", "manage.py"]:
         if rel in root_files:
@@ -487,12 +516,23 @@ def detect_project_stack(project_dir: Path, *, warnings: list[str] | None = None
         or rel in {"schema.prisma", "drizzle.config.ts", "drizzle.config.js"}
         for rel in files
     ) or (project_dir / "supabase" / "migrations").is_dir() or (project_dir / "migrations").is_dir() or (project_dir / "prisma").is_dir()
+    compose_file = next((rel for rel in ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"] if rel in root_files), "")
+    has_kubernetes = any(
+        rel.startswith(("k8s/", "kubernetes/", "manifests/"))
+        and rel.endswith((".yaml", ".yml", ".json"))
+        for rel in files
+    )
+    if compose_file:
+        _append_unique(frameworks, "docker-compose")
+        _append_unique(validation_files, compose_file)
+    if has_kubernetes:
+        _append_unique(frameworks, "kubernetes")
     has_infra = any(
         rel in {"Dockerfile", "docker-compose.yml", "compose.yaml", "terraform.tf", "serverless.yml"}
         or rel.endswith(".tf")
-        or rel.startswith((".github/workflows/", "infra/"))
+        or rel.startswith((".github/workflows/", "infra/", "k8s/", "kubernetes/", "manifests/"))
         for rel in files
-    )
+    ) or bool(compose_file) or has_kubernetes
     has_preview_surface = bool(
         pkg
         or "index.html" in root_files
@@ -540,6 +580,12 @@ def build_validation_plan(project_dir: Path, *, project_root: str = ".") -> dict
             add(f"{manager} run {'preview' if 'preview' in scripts else 'dev'}", "Preview smoke command exists; use only when a live preview check is needed.", kind="optional")
 
     root_files = {rel for rel in files if "/" not in rel}
+    if "deno" in stack.runtimes:
+        deno_config = _read_json_file(project_dir / "deno.json")
+        deno_tasks = deno_config.get("tasks") if isinstance(deno_config.get("tasks"), dict) else {}
+        if "test" in deno_tasks or any(rel.endswith(("_test.ts", "_test.tsx", ".test.ts", ".test.tsx")) for rel in files):
+            add("deno test", "Deno project test validation.")
+        add("deno check .", "Deno type/runtime check across project files.")
     if "python" in stack.languages:
         has_tests_dir = any(rel.startswith("tests/") for rel in files)
         if "pytest.ini" in root_files:
@@ -575,8 +621,26 @@ def build_validation_plan(project_dir: Path, *, project_root: str = ".") -> dict
             add("bundle exec rspec", "Ruby project has spec directory.")
     if "csharp" in stack.languages:
         add("dotnet test", ".NET solution/project test validation.")
+    if "c" in stack.languages or "cpp" in stack.languages:
+        if "build" in {rel.split("/", 1)[0] for rel in files} or (project_dir / "build").is_dir():
+            add("cmake --build build", "CMake build directory exists; build native project.")
+        elif "Makefile" in root_files:
+            add("make test", "Makefile-based native project test target.")
+        elif "CMakeLists.txt" in root_files:
+            add("cmake -S . -B build", "Configure CMake project before building.", kind="optional")
+    if "swift" in stack.languages:
+        add("swift test", "Swift package test validation.")
+    if "elixir" in stack.languages:
+        add("mix test", "Elixir Mix test validation.")
     if any(rel.endswith(".tf") for rel in root_files):
         add("terraform validate", "Terraform configuration validation.", kind="optional")
+    if "docker-compose" in stack.frameworks:
+        add("docker compose config", "Docker Compose configuration validation.", kind="optional")
+    if "kubernetes" in stack.frameworks:
+        for candidate in ["k8s", "kubernetes", "manifests"]:
+            if any(rel.startswith(f"{candidate}/") for rel in files):
+                add(f"kubectl apply --dry-run=client -f {candidate}", "Kubernetes manifest client-side validation.", kind="optional")
+                break
 
     return {
         "project_root": root,

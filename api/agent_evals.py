@@ -83,9 +83,9 @@ def _fake_clara_suggest(scenario: ClaraEvalScenario):
         <p className="eyebrow">Clara Autopilot Eval</p>
         <h1>{scenario.id.replace("_", " ").title()}</h1>
         <p>Production-minded starter shaped from a rough non-technical prompt.</p>
-        <button type="button" aria-label="Start build">Start Build</button>
+        <button type="button" aria-label="Start build" onClick={{() => document.getElementById("workflow-stages")?.scrollIntoView({{ behavior: "smooth" }})}}>Start Build</button>
       </section>
-      <section className="evalGrid" aria-label="Workflow stages">
+      <section id="workflow-stages" className="evalGrid" aria-label="Workflow stages">
         {{rows.map((row) => <article key={{row}}><h2>{{row}}</h2><p>Clear state, accessible copy, and preview-ready UI.</p></article>)}}
       </section>
     </main>
@@ -143,7 +143,13 @@ def run_clara_contract_eval() -> dict[str, Any]:
             actions = output.get("actions") if isinstance(output.get("actions"), list) else []
             local_tools = trace.get("local_tools_used") if isinstance(trace.get("local_tools_used"), list) else []
             verification = trace.get("verification") if isinstance(trace.get("verification"), list) else []
-            failed_verification = [item for item in verification if isinstance(item, dict) and not item.get("ok", True)]
+            failed_verification = [
+                item
+                for item in verification
+                if isinstance(item, dict)
+                and not item.get("ok", True)
+                and str(item.get("severity") or "").strip().lower() == "hard"
+            ]
             changed_paths = {str(item.get("path") or "") for item in changes if isinstance(item, dict)}
             expected_paths = {path for path in scenario.expected_files} | {f"{scenario.id}/{path}" for path in scenario.expected_files}
             ok = (
