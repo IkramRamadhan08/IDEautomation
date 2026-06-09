@@ -60,10 +60,10 @@ const PROFILES: Record<BuildMode, BuildModeProfile> = {
     mode: "full-agent",
     label: "Full Preview",
     personaName: "Appora Agent",
-    personaRole: "Autonomous coder",
-    topbarSubtitle: "Preview besar di tengah, agent yang sama tetap handle build sampai runnable",
-    settingsDescription: "Full Preview memberi ruang terbesar ke preview dengan kemampuan agent yang sama.",
-    modeSummary: "Best when you want a preview-first workspace while Appora Agent pushes the product end to end.",
+    personaRole: "Coding agent",
+    topbarSubtitle: "Preview besar untuk agent yang sama, runtime yang sama, dan workflow yang sama",
+    settingsDescription: "Full Preview cuma memperbesar area preview. Agent, tools, memory, terminal, validation, dan repair loop tetap sama.",
+    modeSummary: "Best when you want to review the running app on a larger surface while the same Appora Agent keeps building.",
     requestEditorStatus: "Appora Agent lagi build produk ini sampai preview-nya rapi...",
     idleLines: [
       "Appora Agent standby. Kasih brief, nanti aku jahit sampai jadi produk.",
@@ -106,20 +106,20 @@ const PROFILES: Record<BuildMode, BuildModeProfile> = {
     mode: "hybrid",
     label: "Workspace",
     personaName: "Appora Agent",
-    personaRole: "Autonomous coder",
-    topbarSubtitle: "Agent yang sama mantau editor, file, dan preview saat kamu tetap pegang kontrol",
-    settingsDescription: "Workspace mode tetap memakai kemampuan agent penuh, tapi fokus ke active file dan masalah terdekat.",
-    modeSummary: "Best when you are still driving the code and want sharp help at the hard parts.",
-    requestEditorStatus: "Appora Agent lagi mantau context editormu dan bantu di titik yang susah...",
+    personaRole: "Coding agent",
+    topbarSubtitle: "Workspace editor-first dengan Appora Agent yang tetap full-capability",
+    settingsDescription: "Workspace adalah layout utama: editor, files, terminal evidence, preview, dan Appora Agent yang sama untuk tugas kecil sampai kompleks.",
+    modeSummary: "Best when you want the full coding agent inside the IDE surface while you inspect files and preview together.",
+    requestEditorStatus: "Appora Agent lagi inspect workspace, ngerjain perubahan, dan validasi hasil...",
     idleLines: [
-      "Appora Agent jagain context-mu. Kalau mentok, panggil aja.",
-      "Aku lihat alur coding-mu. Lempar bagian susahnya ke sini.",
-      "Kamu yang nyetir, aku yang bantu pas belokannya tajam.",
+      "Appora Agent siap di Workspace. Kasih task coding kecil atau rumit, aku inspect sampai validasi.",
+      "Aku pegang context file, preview, dan project. Lempar task-nya, aku kerjain end-to-end kalau perlu.",
+      "Workspace aktif. Aku bisa bantu review cepat atau ambil task multi-file sampai beres.",
     ],
     playfulLines: [
-      "Appora Agent standby. Aku nggak takeover kok, kecuali kamu minta.",
-      "Kalau bug-nya licin, aku bantu pegangin.",
-      "Aku diem dulu, tapi kalau kamu mentok aku nyamber.",
+      "Appora Agent standby. Task rumit boleh, task kecil juga boleh.",
+      "Kalau bug-nya nyebar lintas file, aku ikut bongkar dari akar.",
+      "Aku siap inspect, patch, run command, dan repair kalau hasilnya belum bener.",
     ],
     curiousLines: [
       "Oke, aku baca file yang lagi kamu sentuh.",
@@ -127,8 +127,8 @@ const PROFILES: Record<BuildMode, BuildModeProfile> = {
       "Sip, aku lihat dulu kenapa bagian ini terasa seret.",
     ],
     sleepyLines: [
-      "Kalau sudah ada bagian susah, bangunin Appora Agent ya.",
-      "Masih sepi. Aku standby kalau kamu butuh assist.",
+      "Kalau ada task coding, bangunin Appora Agent ya.",
+      "Masih sepi. Aku standby buat inspect, build, debug, atau validate.",
     ],
     sleepingLines: [
       "zZz... Appora Agent tidur tipis sambil jaga repo.",
@@ -172,15 +172,15 @@ export function getModeQuickPrompts(
   const activeFileName = options.activeFile.split("/").pop() || options.activeFile;
   return [
     activeFileName
-      ? { label: "Review file", prompt: `Review ${activeFileName}. Cari bug, state aneh, atau refactor yang paling worth it.` }
-      : { label: "Review context", prompt: "Lihat context editor sekarang dan bantu cari bagian yang paling rawan atau membingungkan." },
+      ? { label: "Review file", prompt: `Review ${activeFileName}. Cari bug, state aneh, arsitektur yang rawan, dan perbaikan paling worth it.` }
+      : { label: "Review workspace", prompt: "Lihat workspace sekarang, inspect struktur project, dan cari blocker atau perbaikan paling penting." },
     activeFileName
-      ? { label: "Polish file", prompt: `Bantu polish ${activeFileName} tanpa takeover project. Fokus ke titik yang lagi aku kerjain.` }
-      : { label: "Polish area", prompt: "Bantu polish area yang lagi aktif tanpa ngerombak app secara luas." },
+      ? { label: "Fix current task", prompt: `Kerjain task di sekitar ${activeFileName}. Kalau perlu lintas file, inspect dulu lalu patch sampai valid.` }
+      : { label: "Build in workspace", prompt: "Ambil task ini dari workspace, inspect repo, patch file yang perlu, dan validasi hasilnya." },
     options.previewUrl
-      ? { label: "Audit current UI", prompt: "Audit UI yang lagi live dan kasih perbaikan scoped yang bisa langsung bantu progresku." }
+      ? { label: "Audit current UI", prompt: "Audit UI yang lagi live dan kasih perbaikan paling tepat untuk task sekarang. Kalau perlu lintas file, kerjain sampai valid." }
       : { label: "Start preview", action: "start-preview" },
-    { label: "Explain blocker", prompt: "Lihat apa yang lagi kubangun dan bantu pecahkan blocker paling mungkin di titik ini." },
+    { label: "Debug blocker", prompt: "Lihat apa yang lagi kubangun, cari akar blocker, patch fix-nya, dan jalankan validasi kalau perlu." },
   ];
 }
 
@@ -325,7 +325,7 @@ export function buildRepairPrompt(
   const profile = getBuildModeProfile(buildMode);
   const modeDirective = buildMode === "full-agent"
     ? `${profile.personaName}, stay in full ownership mode. Tighten the product until it feels coherent, runnable, and ready to show.`
-    : `${profile.personaName}, stay in scoped copilot mode. Fix the blocker cleanly without turning this into a broad rewrite.`;
+    : `${profile.personaName}, stay in Workspace layout but keep full coding-agent ownership. Fix the blocker cleanly, and take multi-file scope when the evidence requires it.`;
 
   const sections = [originalInput.trim(), modeDirective];
 
@@ -372,7 +372,7 @@ export function buildVerifierRepairPrompt(
   const profile = getBuildModeProfile(buildMode);
   const modeDirective = buildMode === "full-agent"
     ? `${profile.personaName}, stay in full ownership mode and produce a complete, valid implementation.`
-    : `${profile.personaName}, stay scoped, but return a valid actionable fix.`;
+    : `${profile.personaName}, use the Workspace context to produce a complete, valid implementation. Keep it scoped only when the task is truly scoped.`;
 
   return [
     originalInput.trim(),
@@ -393,7 +393,7 @@ export function buildApplyConflictRepairPrompt(
   const profile = getBuildModeProfile(buildMode);
   const modeDirective = buildMode === "full-agent"
     ? `${profile.personaName}, keep ownership of the task, but preserve the user's latest file edits.`
-    : `${profile.personaName}, keep the fix scoped and preserve the user's latest file edits.`;
+    : `${profile.personaName}, keep full ownership of the task while preserving the user's latest file edits and current workspace context.`;
 
   return [
     originalInput.trim(),

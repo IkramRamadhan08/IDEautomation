@@ -64,11 +64,12 @@ _BUILTIN_SKILLS: list[SkillDoc] = [
         ),
     ),
     SkillDoc(
-        skill_id="scoped-copilot",
-        title="Scoped copilot discipline",
+        skill_id="workspace-agent-discipline",
+        title="Workspace agent discipline",
         source="builtin",
         body=(
-            "In hybrid mode, stay close to the active file and user momentum. Touch the fewest files that still make the fix complete."
+            "In Workspace layout, keep the active file, project tree, terminal evidence, and preview in view. "
+            "Touch the fewest files that still make the task complete, but take multi-file ownership when the request or evidence requires it."
         ),
     ),
     SkillDoc(
@@ -739,7 +740,7 @@ def resolve_agent_skills(
     scored: list[tuple[float, SkillDoc]] = []
     for skill in pool:
         bonus = 0.0
-        if build_mode == "hybrid" and skill.skill_id == "scoped-copilot":
+        if build_mode == "hybrid" and skill.skill_id == "workspace-agent-discipline":
             bonus += 0.6
         if preview_url and skill.skill_id == "preview-and-validation":
             bonus += 0.4
@@ -763,5 +764,9 @@ def format_skill_prompt(skills: list[SkillDoc]) -> str:
         return ""
     lines = ["APPLICABLE SKILLS:"]
     for skill in skills:
-        lines.append(f"- {skill.title} ({skill.skill_id}) [{skill.source}]\n  {skill.body}")
+        compact_body = re.sub(r"\s+", " ", str(skill.body or "").strip())
+        if len(compact_body) > 1400:
+            compact_body = compact_body[:1400].rstrip() + "..."
+        lines.append(f"- {skill.title} ({skill.skill_id}) [{skill.provider}:{skill.source}]\n  {compact_body}")
+    lines.append("Skill routing rule: use only the selected skills above; do not infer extra plugin behavior unless the task explicitly requires it.")
     return "\n".join(lines)

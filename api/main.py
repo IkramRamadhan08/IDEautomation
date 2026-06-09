@@ -53,7 +53,7 @@ from api.preferences import get_project_preferences
 from api.settings_router import build_settings_router
 from api.fs import list_tree, read_text, write_text, diff_text, safe_join
 from api.agent_mcp import discover_mcp_servers, list_mcp_tools
-from api.agent_memory import get_agent_memory_overview, sync_project_docs_to_supabase
+from api.agent_memory import get_agent_memory_overview, remember_agent_run, sync_project_docs_to_supabase
 from api.agent_observability import build_agent_observability
 from api.agent_runtime import (
     APPORA_AUTO_SAFE_SHELL_COMMANDS,
@@ -1029,7 +1029,14 @@ def _project_uses_playwright(project_dir: Path) -> bool:
 
 
 def _playwright_preview_audit_ready(project_dir: Path) -> bool:
-    return bool(_resolve_node_binary() and _playwright_audit_script().exists())
+    browser_root = ROOT / "node_modules" / "playwright"
+    firefox_binary = Path.home() / ".cache" / "ms-playwright" / "firefox-1511" / "firefox" / "firefox"
+    return bool(
+        _resolve_node_binary()
+        and _playwright_audit_script().exists()
+        and browser_root.exists()
+        and firefox_binary.exists()
+    )
 
 
 def _browser_preview_audit_ready(project_dir: Path) -> bool:
@@ -1117,6 +1124,150 @@ def _extract_text_matches(pattern: str, html: str, limit: int) -> list[str]:
         if len(values) >= limit:
             break
     return values
+
+
+def _clean_jsx_text(fragment: str) -> str:
+    text = re.sub(r"\{[^{}]{0,240}\}", " ", fragment or "")
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"['\"`]\s*[,+]\s*['\"`]", " ", text)
+    return re.sub(r"\s+", " ", unescape(text)).strip()
+
+
+def _extract_jsx_text_matches(pattern: str, source: str, limit: int) -> list[str]:
+    values: list[str] = []
+    seen: set[str] = set()
+    for match in re.findall(pattern, source or "", flags=re.IGNORECASE | re.DOTALL):
+        text = _clean_jsx_text(match)
+        if not text or len(text) < 2:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        values.append(text[:160])
+        if len(values) >= limit:
+            break
+    return values
+
+
+def _extract_preview_snapshot_from_source(project_dir: Path, max_excerpt_chars: int = 800) -> dict:
+    source_files: list[Path] = []
+    for rel in ("src/App.tsx", "src/App.jsx", "src/main.tsx", "src/main.jsx", "app/page.tsx", "pages/index.tsx"):
+        path = project_dir / rel
+        if path.exists() and path.is_file():
+            source_files.append(path)
+    src_dir = project_dir / "src"
+    if src_dir.exists() and src_dir.is_dir():
+        for pattern in ("**/*.tsx", "**/*.jsx", "**/*.ts", "**/*.js"):
+            for path in src_dir.glob(pattern):
+                if path.is_file() and path not in source_files:
+                    source_files.append(path)
+                if len(source_files) >= 12:
+                    break
+            if len(source_files) >= 12:
+                break
+
+    title = ""
+    meta_description = ""
+    index_path = project_dir / "index.html"
+    if index_path.exists() and index_path.is_file():
+        try:
+            html = index_path.read_text(encoding="utf-8", errors="ignore")[:24000]
+            title_match = re.search(r"<title[^>]*>(.*?)</title>", html, flags=re.IGNORECASE | re.DOTALL)
+            if title_match:
+                title = _clean_html_text(title_match.group(1))
+            meta_match = re.search(r"<meta[^>]+name=['\"]description['\"][^>]+content=['\"](.*?)['\"]", html, flags=re.IGNORECASE | re.DOTALL)
+            if meta_match:
+                meta_description = _clean_html_text(meta_match.group(1))
+        except Exception:
+            pass
+
+    combined = ""
+    for path in source_files[:12]:
+        try:
+            combined += "\n" + path.read_text(encoding="utf-8", errors="ignore")[:32000]
+        except Exception:
+            continue
+
+    headings = _extract_jsx_text_matches(r"<h1\b[^>]*>(.*?)</h1>", combined, 3)
+    subheadings = _extract_jsx_text_matches(r"<h2\b[^>]*>(.*?)</h2>", combined, 4)
+    buttons = _extract_jsx_text_matches(r"<button\b[^>]*>(.*?)</button>", combined, 8)
+    links = _extract_jsx_text_matches(r"<a\b[^>]*>(.*?)</a>", combined, 8)
+    paragraphs = _extract_jsx_text_matches(r"<(?:p|span|strong|li)\b[^>]*>(.*?)</(?:p|span|strong|li)>", combined, 24)
+    excerpt = " ".join([*headings, *subheadings, *paragraphs])[:max_excerpt_chars]
+    text_blob = " ".join([title, meta_description, excerpt, " ".join(buttons), " ".join(links)])
+    input_count = len(re.findall(r"<(?:input|textarea|select)\b", combined, flags=re.IGNORECASE))
+    labeled_input_count = len(re.findall(r"<label\b|aria-label\s*=|aria-labelledby\s*=", combined, flags=re.IGNORECASE))
+    class_matches = re.findall(r"className\s*=\s*(?:['\"]([^'\"]+)['\"]|\{`([^`]+)`\})", combined, flags=re.IGNORECASE | re.DOTALL)
+    class_text = " ".join(" ".join(part for part in match if part) if isinstance(match, tuple) else str(match) for match in class_matches)
+    return {
+        "title": title,
+        "meta_description": meta_description,
+        "headings": headings,
+        "subheadings": subheadings,
+        "buttons": buttons,
+        "links": links,
+        "excerpt": excerpt,
+        "viewport_meta": bool(re.search(r"<meta[^>]+name=['\"]viewport['\"]", (index_path.read_text(encoding="utf-8", errors="ignore") if index_path.exists() else ""), re.IGNORECASE | re.DOTALL)),
+        "document_lang": "source",
+        "form_count": len(re.findall(r"<form\b", combined, flags=re.IGNORECASE)),
+        "section_count": len(re.findall(r"<(?:section|article)\b", combined, flags=re.IGNORECASE)),
+        "card_like_count": len(re.findall(r"<article\b|\b(card|panel|tile)\b", combined + " " + class_text, flags=re.IGNORECASE)),
+        "product_surface_count": len(re.findall(r"\b(dashboard|kanban|metric|table|queue|timeline|workflow|panel|card|chart|status|issue|risk)\b", combined, flags=re.IGNORECASE)),
+        "table_count": len(re.findall(r"<table\b|role=['\"]table['\"]", combined, flags=re.IGNORECASE)),
+        "input_count": input_count,
+        "labeled_input_count": labeled_input_count,
+        "landmark_count": len(re.findall(r"<(?:main|nav|header|footer|aside)\b", combined, flags=re.IGNORECASE)),
+        "main_count": len(re.findall(r"<main\b", combined, flags=re.IGNORECASE)),
+        "button_count": len(re.findall(r"<button\b", combined, flags=re.IGNORECASE)),
+        "interactive_count": len(re.findall(r"<(?:button|a|input|textarea|select|summary)\b", combined, flags=re.IGNORECASE)),
+        "word_count": len(re.findall(r"\b[\w'-]{2,}\b", text_blob)),
+        "image_count": len(re.findall(r"<img\b", combined, flags=re.IGNORECASE)),
+        "images_missing_alt": 0,
+        "source_snapshot": True,
+    }
+
+
+def _merge_preview_snapshots(primary: dict, fallback: dict) -> dict:
+    merged = dict(primary or {})
+    if not fallback:
+        return merged
+    for key in ("title", "meta_description", "document_lang", "excerpt"):
+        if not str(merged.get(key) or "").strip() and str(fallback.get(key) or "").strip():
+            merged[key] = fallback.get(key)
+    for key in ("headings", "subheadings", "buttons", "links"):
+        current = [str(item).strip() for item in (merged.get(key) or []) if str(item).strip()]
+        extra = [str(item).strip() for item in (fallback.get(key) or []) if str(item).strip()]
+        seen = {item.lower() for item in current}
+        for item in extra:
+            if item.lower() not in seen:
+                current.append(item)
+                seen.add(item.lower())
+        if current:
+            merged[key] = current[:8]
+    for key in (
+        "form_count",
+        "section_count",
+        "card_like_count",
+        "product_surface_count",
+        "table_count",
+        "input_count",
+        "labeled_input_count",
+        "landmark_count",
+        "main_count",
+        "button_count",
+        "interactive_count",
+        "word_count",
+        "image_count",
+    ):
+        merged[key] = max(max(0, int(merged.get(key) or 0)), max(0, int(fallback.get(key) or 0)))
+    if not merged.get("viewport_meta") and fallback.get("viewport_meta"):
+        merged["viewport_meta"] = True
+    if not merged.get("document_lang") and fallback.get("document_lang"):
+        merged["document_lang"] = fallback.get("document_lang")
+    if fallback.get("source_snapshot"):
+        merged["source_snapshot"] = True
+    return merged
 
 
 def _scan_project_quality_signals(project_dir: Path) -> dict[str, object]:
@@ -1771,6 +1922,21 @@ def _build_preview_audit_result(
     mobile_viewport = snapshot.get("mobile_viewport") if isinstance(snapshot.get("mobile_viewport"), dict) else {}
     screenshot_path = str(snapshot.get("screenshot_path") or "").strip()
     screenshot_viewport = str(snapshot.get("screenshot_viewport") or "").strip()
+    has_browser_screen = audit_mode in {"agent-browser", "browser", "playwright"}
+    has_dom_snapshot = bool(title or headings or excerpt or word_count or interactive_count or viewport or mobile_viewport)
+    has_screenshot = bool(screenshot_path)
+    visual_evidence = {
+        "has_screen": bool(has_browser_screen and has_dom_snapshot),
+        "screen_backend": audit_mode if has_browser_screen else "",
+        "has_dom_snapshot": has_dom_snapshot,
+        "has_screenshot": has_screenshot,
+        "screenshot_path": screenshot_path,
+        "screenshot_viewport": screenshot_viewport,
+        "desktop_viewport": viewport,
+        "mobile_viewport": mobile_viewport,
+        "desktop_overflow_x": bool(snapshot.get("desktop_overflow_x")),
+        "mobile_overflow_x": bool(snapshot.get("mobile_overflow_x")),
+    }
     visual_summary = {
         "mode": audit_mode,
         "title": title,
@@ -1847,6 +2013,7 @@ def _build_preview_audit_result(
         "audit_mode": audit_mode,
         "preview_url": preview_url,
         "repair_brief": repair_brief,
+        "visual_evidence": visual_evidence,
         "screenshot_path": screenshot_path,
         "screenshot_viewport": screenshot_viewport,
         "desktop_viewport": viewport,
@@ -1909,6 +2076,7 @@ def _build_preview_audit_result(
         "issue_details": issue_details,
         "quality_checks": quality_checks,
         "visual_summary": visual_summary,
+        "visual_evidence": visual_evidence,
         "evidence_pack": evidence_pack,
         "repair_targets": repair_targets,
         "repair_brief": repair_brief,
@@ -2329,6 +2497,13 @@ def _audit_preview_html(
     project_signals: dict[str, object] | None = None,
 ) -> dict:
     snapshot = _extract_preview_snapshot_from_html(html, max_excerpt_chars=max_excerpt_chars)
+    project_dir_value = (project_signals or {}).get("project_dir")
+    if isinstance(project_dir_value, str) and project_dir_value.strip():
+        try:
+            source_snapshot = _extract_preview_snapshot_from_source(Path(project_dir_value), max_excerpt_chars=max_excerpt_chars)
+            snapshot = _merge_preview_snapshots(snapshot, source_snapshot)
+        except Exception:
+            pass
     return _build_preview_audit_result(
         preview_url,
         snapshot,
@@ -3898,6 +4073,8 @@ def preview_audit(req: PreviewAuditReq):
     project_dir = safe_join(_ws(), project_root)
     warnings: list[str] = []
     project_signals = _scan_project_quality_signals(project_dir) if project_dir.exists() else {}
+    if project_dir.exists():
+        project_signals["project_dir"] = str(project_dir)
 
     requested_mode = str(req.mode or "auto").strip().lower()
     if requested_mode not in {"auto", "html", "browser"}:
@@ -4089,7 +4266,7 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
         supabase_warning = "Supabase RAG belum bisa diverifikasi dari backend ini, jadi retrieval masih fallback ke chunk lokal."
     return {
         "ok": True,
-        "runtime": "langgraph",
+        "runtime": "appora-linear-runtime-v2",
         "glossary": {
             "tools": "Tools are callable interfaces the agent is allowed to invoke to do work that cannot be reliably done with generative text alone (e.g., read/search repo, call external systems).",
             "mcp": "MCP (Model Context Protocol) is an interoperability layer to standardize how the agent connects to external data sources and tools. MCP servers expose tools, but MCP itself is not a tool.",
@@ -4097,15 +4274,19 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
         },
         "agent": {
             "name": "Appora Agent",
-            "vibe": "autonomous coder",
+            "vibe": "powerful coding agent",
             "modes": {
-                "full-agent": "Preview-first surface for end-to-end delivery.",
-                "hybrid": "Workspace/editor-first surface for focused coding.",
+                "hybrid": "Workspace editor-first layout with the full Appora Agent runtime.",
+                "full-agent": "Full Preview layout with the same Appora Agent and a larger preview surface.",
             },
             "same_capabilities": True,
         },
         "supports": {
-            "graph_runtime": True,
+            "linear_runtime": True,
+            "run_controller": True,
+            "run_ledger": True,
+            "runtime_hooks": True,
+            "read_only_scout": True,
             "short_term_memory_rag": True,
             "project_scoped_short_memory": True,
             "long_term_memory_rag": True,
@@ -4129,6 +4310,8 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
             "playwright_preview_audit": playwright_audit_ready,
             "webcontainer_runtime": False,
             "browser_dom_audit": browser_audit_ready,
+            "browser_visual_evidence": browser_audit_ready,
+            "browser_screenshot_evidence": agent_browser_ready,
             "preview_quality_checks": True,
             "preview_audit_mode": preview_audit_backend,
             "tool_actions": ["shell", "mcp", "tool"],
@@ -4671,6 +4854,8 @@ def _reverify_merged_verifier_output(req: AgentReq, ws_root: Path, changes: list
     style_issues = runtime._frontend_style_runtime_issues(ctx, changes)
     asset_quality_issues = runtime._frontend_asset_quality_issues(ctx, changes)
     referenced_asset_issues = runtime._mentioned_uploaded_asset_usage_issues(ctx, changes, str(req.input or ""))
+    prompt_domain_issues = runtime._prompt_domain_adherence_issues(str(req.input or ""), changes)
+    prompt_requirement_issues = runtime._prompt_requirement_coverage_issues(str(req.input or ""), changes)
     business_issues = runtime._frontend_business_data_honesty_issues(ctx, changes)
     interaction_issues = runtime._frontend_interaction_integrity_issues(ctx, changes)
     maintainability_issues = runtime._frontend_maintainability_integrity_issues(ctx, changes)
@@ -4690,6 +4875,8 @@ def _reverify_merged_verifier_output(req: AgentReq, ws_root: Path, changes: list
         check("frontend-style-runtime", not style_issues, "Frontend styling runtime matches the project setup." if not style_issues else "; ".join(style_issues[:2])),
         check("frontend-asset-quality", not asset_quality_issues, "Frontend media/assets avoid fake placeholder sources." if not asset_quality_issues else "; ".join(asset_quality_issues[:2])),
         check("referenced-asset-usage", not referenced_asset_issues, "Explicit @asset references are used in the implementation." if not referenced_asset_issues else "; ".join(referenced_asset_issues[:2])),
+        check("prompt-domain-adherence", not prompt_domain_issues, "Frontend output reflects the domain/workflow requested by the user." if not prompt_domain_issues else "; ".join(prompt_domain_issues[:2])),
+        check("prompt-requirement-coverage", not prompt_requirement_issues, "Frontend output covers explicit feature/state requirements from the user prompt." if not prompt_requirement_issues else "; ".join(prompt_requirement_issues[:3])),
         check("frontend-business-data-honesty", not business_issues, "Frontend does not invent fake business contact/data." if not business_issues else "; ".join(business_issues[:2])),
         check("frontend-interaction-integrity", not interaction_issues, "Frontend interactions are wired, valid anchors, or visibly gated." if not interaction_issues else "; ".join(interaction_issues[:2])),
         check("frontend-maintainability-integrity", not maintainability_issues, "Frontend implementation stays maintainable for product-scale UI." if not maintainability_issues else "; ".join(maintainability_issues[:2])),
@@ -4933,6 +5120,14 @@ def _failure_analysis_summary(signatures: list[dict[str, object]], *, repeated_f
         if command:
             primary = f"{primary} in `{command}`"
         next_move = "Read the failing validation output, edit the source that causes it, then rerun the same validation command."
+        excerpt = str(first.get("excerpt") or "")
+        lowered_excerpt = excerpt.lower()
+        if "not raised" in lowered_excerpt or "did not raise" in lowered_excerpt:
+            next_move = (
+                "The remaining failure is an expected exception/assertion branch. "
+                "add the missing validation branch for the exact failing input, keep the existing passing behavior, "
+                "then rerun the same validation command."
+            )
     elif kind == "shell":
         primary = f"shell action {'blocked by command policy' if policy_blocked else 'failed'}: {marker}"
         if command:
@@ -5084,6 +5279,19 @@ def _execution_has_parse_failure(execution: dict[str, object]) -> bool:
             if _TS_PARSE_FAILURE_RE.search(text):
                 return True
     return False
+
+
+def _merge_repair_execution_state(parent_execution: dict[str, object], repair_execution: dict[str, object]) -> None:
+    if not isinstance(parent_execution, dict) or not isinstance(repair_execution, dict):
+        return
+    if isinstance(repair_execution.get("preview_audit"), dict):
+        parent_execution["preview_audit"] = repair_execution["preview_audit"]
+    for key in ("apply", "shell", "validation", "replay"):
+        candidate = repair_execution.get(key)
+        if isinstance(candidate, dict):
+            parent_execution[key] = candidate
+    parent_execution["ok"] = not _execution_has_primary_failure(parent_execution)
+    parent_execution["failure_analysis"] = _execution_failure_analysis(parent_execution)
 
 
 def _repair_execution_degrades_parent(parent_execution: dict[str, object], repair_execution: dict[str, object]) -> bool:
@@ -5259,6 +5467,28 @@ def _execution_completion_report(execution: dict[str, object]) -> dict[str, obje
                 "passed" if preview_audit.get("ok") else "failed",
                 f"mode={preview_audit.get('audit_mode')} blocking={blocking} warnings={warnings}",
             ))
+            visual_evidence = preview_audit.get("visual_evidence") if isinstance(preview_audit.get("visual_evidence"), dict) else {}
+            has_screen = bool(visual_evidence.get("has_screen"))
+            has_screenshot = bool(visual_evidence.get("has_screenshot"))
+            screenshot_path = str(visual_evidence.get("screenshot_path") or "").strip()
+            screen_backend = str(visual_evidence.get("screen_backend") or preview_audit.get("audit_mode") or "").strip()
+            visual_required = bool(
+                execution.get("apply") is not None
+                and preview_audit.get("ok") is True
+                and (
+                    "visual_evidence" in preview_audit
+                    or str(preview_audit.get("audit_mode") or "").strip() in {"agent-browser", "playwright"}
+                )
+            )
+            visual_status = "passed" if has_screen else ("failed" if visual_required else "warning")
+            visual_detail = (
+                f"screen={screen_backend or 'unavailable'} dom_snapshot={bool(visual_evidence.get('has_dom_snapshot'))} "
+                f"screenshot={screenshot_path or ('captured' if has_screenshot else 'missing')} "
+                f"desktop={visual_evidence.get('desktop_viewport') or {}} mobile={visual_evidence.get('mobile_viewport') or {}}"
+            )
+            criteria.append(_criterion("visual-review", visual_status, visual_detail))
+            if not has_screen:
+                residual_risks.append("Preview audit did not capture live browser visual evidence; review is limited to fallback inspection.")
             if warnings and preview_audit.get("ok"):
                 residual_risks.append(f"Preview audit still has {warnings} warning(s).")
             polish_debt = _preview_polish_debt(execution)
@@ -5367,6 +5597,7 @@ def _execution_repair_report(execution: dict[str, object], max_chars: int = 9000
             "skipped": preview_audit.get("skipped"),
             "summary": preview_audit.get("summary"),
             "repair_brief": preview_audit.get("repair_brief"),
+            "visual_evidence": preview_audit.get("visual_evidence"),
             "visual_summary": preview_audit.get("visual_summary"),
             "evidence_pack": preview_audit.get("evidence_pack"),
             "issue_details": list(preview_audit.get("issue_details") or [])[:8],
@@ -5938,6 +6169,32 @@ def _run_harness_shell_actions_internal(
     }
 
 
+def _split_validation_commands_by_existing_shell_evidence(validation_commands: list[str], shell_result: dict[str, object] | None) -> tuple[list[str], list[dict]]:
+    if not validation_commands or not isinstance(shell_result, dict):
+        return validation_commands, []
+    passed_by_command: dict[str, dict] = {}
+    for item in list(shell_result.get("results") or []):
+        if not isinstance(item, dict) or item.get("ok") is not True:
+            continue
+        command = str(item.get("command") or "").strip()
+        if command:
+            passed_by_command[command] = item
+
+    pending: list[str] = []
+    reused: list[dict] = []
+    for command in validation_commands:
+        clean = str(command or "").strip()
+        existing = passed_by_command.get(clean)
+        if existing is None:
+            pending.append(command)
+            continue
+        reused_result = dict(existing)
+        reused_result["command"] = clean
+        reused_result["reused_from"] = "shell"
+        reused.append(reused_result)
+    return pending, reused
+
+
 _EXECUTION_LEDGER_PHASES = {
     "apply": "edit",
     "shell": "run",
@@ -6124,6 +6381,7 @@ def _run_backend_repair_pass(req: AgentReq, execution: dict[str, object], emit, 
             "If build/validation already passes but preview audit still has production-polish warnings, treat those warnings as the active objective and return concrete source fixes.",
             "Production-polish warning fixes include: specific document title/meta description, accessible tap target sizing, removing loose any/as any, eliminating generic copy, and improving visible product depth.",
             "If failure_analysis.primary_failure starts with preview audit, do not return shell-only or install-only actions; return concrete TSX/CSS/HTML source changes and let backend rerun build/preview.",
+            "Use preview_audit.visual_evidence, visual_summary, screenshot_path, and evidence_pack as the visual source of truth. If visual evidence says the screen is blank, overflowing, sparse, or showing the wrong route, repair that visible result before claiming completion.",
             "Repair the project now with concrete file changes and only safe project-scoped shell actions if needed.",
             "If a scaffold generator command such as npm create/npx init was blocked, do not retry it. Create or repair package.json, index.html, src files, and CSS directly, then use npm install/npm run build.",
             "If earlier repair passes failed, use their evidence and choose a different concrete fix.",
@@ -6396,35 +6654,47 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
         except Exception:
             validation_commands = []
         if validation_commands:
+            pending_validation_commands, reused_validation_results = _split_validation_commands_by_existing_shell_evidence(
+                validation_commands,
+                execution.get("shell") if isinstance(execution.get("shell"), dict) else None,
+            )
             emit("status", {"phase": "executing_validation", "message": "Backend harness validating project output..."})
             emit("tool_call", _harness_tool_call_payload(
                 "validate",
                 "executing_validation",
                 project_root=project_root,
-                summary=f"Running {len(validation_commands)} validation command(s).",
+                summary=(
+                    f"Running {len(pending_validation_commands)} validation command(s), "
+                    f"reusing {len(reused_validation_results)} shell result(s)."
+                ),
                 commands=validation_commands,
                 count=len(validation_commands),
+                pending=len(pending_validation_commands),
+                reused=len(reused_validation_results),
             ))
-            _emit_command_start_events(emit, tool="validate", phase="executing_validation", project_root=project_root, commands=validation_commands, group="validation")
-            validation_shell = _run_harness_shell_actions_internal(
-                ws_root_path=_ws(),
-                project_root=project_root,
-                actions=[
-                    AgentHarnessShellAction(command=command, cwd=project_root, reason="Backend auto validation")
-                    for command in validation_commands
-                ],
-                emit=emit,
-                tool="validate",
-                phase="executing_validation",
-                group="validation",
-            )
-            validation_results = list(validation_shell.get("results") or [])
+            validation_results = list(reused_validation_results)
+            if pending_validation_commands:
+                _emit_command_start_events(emit, tool="validate", phase="executing_validation", project_root=project_root, commands=pending_validation_commands, group="validation")
+                validation_shell = _run_harness_shell_actions_internal(
+                    ws_root_path=_ws(),
+                    project_root=project_root,
+                    actions=[
+                        AgentHarnessShellAction(command=command, cwd=project_root, reason="Backend auto validation")
+                        for command in pending_validation_commands
+                    ],
+                    emit=emit,
+                    tool="validate",
+                    phase="executing_validation",
+                    group="validation",
+                )
+                validation_results.extend(list(validation_shell.get("results") or []))
             validation = {
                 "ok": all(bool(item.get("ok")) for item in validation_results if isinstance(item, dict)) if validation_results else True,
                 "project_root": project_root,
                 "commands": validation_commands,
                 "results": validation_results,
-                "ran": len(validation_results),
+                "ran": max(0, len(validation_results) - len(reused_validation_results)),
+                "reused": len(reused_validation_results),
                 "passed": sum(1 for item in validation_results if isinstance(item, dict) and item.get("ok")),
                 "failed": sum(1 for item in validation_results if isinstance(item, dict) and not item.get("ok")),
             }
@@ -6665,19 +6935,14 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
             repair_rolled_back = bool(isinstance(rollback_result, dict) and rollback_result.get("ok"))
             if isinstance(repair_execution, dict) and not repair_rolled_back:
                 polish_only_parent = bool(parent_before_repair.get("ok")) and not _execution_has_primary_failure(parent_before_repair) and bool(_preview_polish_debt(parent_before_repair))
-                if isinstance(repair_execution.get("preview_audit"), dict):
-                    execution["preview_audit"] = repair_execution["preview_audit"]
-                for key in ("apply", "shell", "validation", "replay"):
-                    candidate = repair_execution.get(key)
-                    if isinstance(candidate, dict) and candidate.get("ok") is True:
-                        execution[key] = candidate
                 if repair_ok:
+                    _merge_repair_execution_state(execution, repair_execution)
                     execution["ok"] = True
                 elif polish_only_parent:
+                    _merge_repair_execution_state(execution, repair_execution)
                     execution["ok"] = True
                 else:
-                    execution["ok"] = not _execution_has_primary_failure(execution)
-                execution["failure_analysis"] = _execution_failure_analysis(execution)
+                    _merge_repair_execution_state(execution, repair_execution)
             elif repair_rolled_back:
                 execution["failure_analysis"] = _execution_failure_analysis(execution)
             if repair_ok or (bool(execution.get("ok")) and not _execution_needs_repair(execution)):
@@ -6807,7 +7072,7 @@ def _build_backend_verifier_repair_prompt(
     mode_directive = (
         "Appora Agent, stay in full ownership mode and produce a complete, valid implementation."
         if build_mode == "full-agent"
-        else "Appora Agent, stay scoped to the current workspace context, but return a valid actionable fix."
+        else "Appora Agent, use the current Workspace context and produce a complete, valid implementation. Keep it surgical only when the task is surgical."
     )
     failure_summary = _trace_verifier_failure_summary(trace)
     intent_repair_directive = (
@@ -6963,7 +7228,7 @@ def _backend_verifier_repair_context(
     extra_context = "\n\n".join(
         [
             "BACKEND VERIFIER TARGETED REPAIR CONTEXT:",
-            "The previous output already ran through the agent graph. Do not restart planning; repair only the verifier failures.",
+            "The previous output already ran through the Appora runtime pipeline. Do not restart planning; repair only the verifier failures.",
             f"Project root: {project_root}",
             f"Changed paths: {', '.join(sorted(relevant_files.keys())[:12]) or '(none)'}",
         ]
@@ -8626,6 +8891,95 @@ def _remember_backend_execution_state(req: AgentReq, result: dict) -> None:
     )
 
 
+def _execution_memory_outcome(execution: dict | None) -> dict:
+    if not isinstance(execution, dict):
+        return {}
+    completion = execution.get("completion_report") if isinstance(execution.get("completion_report"), dict) else {}
+    validation = execution.get("validation") if isinstance(execution.get("validation"), dict) else {}
+    preview = execution.get("preview_audit") if isinstance(execution.get("preview_audit"), dict) else {}
+    repairs = execution.get("repairs") if isinstance(execution.get("repairs"), list) else []
+    commands: list[str] = []
+    for command in list(validation.get("commands") or [])[:6]:
+        text = str(command or "").strip()
+        if text:
+            commands.append(text)
+    final_changed_paths: list[str] = []
+    rollback_paths: list[str] = []
+
+    def add_path(target: list[str], raw: object) -> None:
+        text = str(raw or "").strip()
+        if text and text not in target:
+            target.append(text)
+
+    apply_result = execution.get("apply") if isinstance(execution.get("apply"), dict) else {}
+    for path in list(apply_result.get("paths") or []):
+        add_path(final_changed_paths, path)
+    for repair in repairs:
+        if not isinstance(repair, dict):
+            continue
+        for path in list(repair.get("changed_paths") or []):
+            add_path(final_changed_paths, path)
+        repair_execution = repair.get("execution") if isinstance(repair.get("execution"), dict) else {}
+        repair_apply = repair_execution.get("apply") if isinstance(repair_execution.get("apply"), dict) else {}
+        for path in list(repair_apply.get("paths") or []):
+            add_path(final_changed_paths, path)
+        rollback = repair.get("rollback") if isinstance(repair.get("rollback"), dict) else {}
+        if rollback and rollback.get("ok"):
+            for path in list(rollback.get("paths") or rollback.get("restored_paths") or repair_apply.get("paths") or repair.get("changed_paths") or []):
+                add_path(rollback_paths, path)
+    for item in list(execution.get("quick_repairs") or []):
+        if not isinstance(item, dict):
+            continue
+        for path in list(item.get("changed_paths") or []):
+            add_path(final_changed_paths, path)
+        for path in list(item.get("rolled_back") or []):
+            add_path(rollback_paths, path)
+    return {
+        "ok": bool(completion.get("ok", execution.get("ok"))),
+        "state": str(completion.get("state") or ("completed" if execution.get("ok") else "blocked")),
+        "summary": str(completion.get("summary") or execution.get("summary") or ""),
+        "validation_ok": validation.get("ok") if validation else None,
+        "preview_ok": preview.get("ok") if preview and not preview.get("skipped") else None,
+        "preview_summary": str(preview.get("summary") or "") if preview else "",
+        "repair_passes": len(repairs),
+        "validation_commands": commands,
+        "rollback_count": len(rollback_paths),
+        "rollback_paths": rollback_paths[:8],
+        "final_changed_paths": final_changed_paths[:12],
+    }
+
+
+def _remember_backend_execution_memory(req: AgentReq, ws_root: Path, result: dict) -> None:
+    execution = result.get("execution") if isinstance(result.get("execution"), dict) else None
+    if not isinstance(execution, dict) or execution.get("auto_execute") is not True:
+        return
+    if not (result.get("changes") or result.get("actions")):
+        return
+    trace = result.get("trace") if isinstance(result.get("trace"), dict) else {}
+    execution = result.get("execution") if isinstance(result.get("execution"), dict) else {}
+    execution_outcome = _execution_memory_outcome(execution)
+    if not execution_outcome.get("final_changed_paths"):
+        execution_outcome["final_changed_paths"] = [
+            str(item.get("path") or "").strip()
+            for item in list(result.get("changes") or [])
+            if isinstance(item, dict) and str(item.get("path") or "").strip()
+        ][:12]
+    remember_agent_run(
+        ws_root,
+        project_root=str(req.project_root or ".").strip().strip("/") or ".",
+        build_mode=str(req.build_mode or "full-agent"),
+        interaction_kind=str((result.get("intent") or {}).get("kind") or "command") if isinstance(result.get("intent"), dict) else "command",
+        user_input=str(req.input or ""),
+        spoken=str(result.get("spoken") or ""),
+        changes=list(result.get("changes") or []),
+        actions=list(result.get("actions") or []),
+        execution_outcome=execution_outcome,
+        task_state=dict(trace.get("task_state") or {}) if isinstance(trace.get("task_state"), dict) else {},
+        completion_report=dict(execution.get("completion_report") or {}) if isinstance(execution.get("completion_report"), dict) else {},
+        failure_analysis=dict(execution.get("failure_analysis") or {}) if isinstance(execution.get("failure_analysis"), dict) else {},
+    )
+
+
 @app.post("/api/agent/worker/run")
 def agent_worker_run(req: AgentWorkerRunReq, request: Request):
     _require_worker_auth(request)
@@ -8764,6 +9118,10 @@ def _run_agent_impl(req: AgentReq, event_cb=None, job_id: str | None = None):
         if req.auto_execute and (out_changes or normalized_actions) and not _trace_has_blocking_verifier_failures(result["trace"]):
             result["execution"] = _auto_execute_agent_result(req, out_changes, normalized_actions, emit)
             _remember_backend_execution_state(req, result)
+            try:
+                _remember_backend_execution_memory(req, ws_root, result)
+            except Exception:
+                pass
         elif req.auto_execute and _trace_has_blocking_verifier_failures(result["trace"]):
             result["execution"] = {
                 "auto_execute": True,

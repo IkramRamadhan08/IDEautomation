@@ -306,6 +306,14 @@ a {
   border: 1px solid var(--border);
 }
 
+.topbarModeLabel {
+  padding: 0 6px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
 .topbarActions {
   display: flex;
   align-items: center;
@@ -540,8 +548,6 @@ a {
 
 :root[data-app-theme="light"] .hybridEditorPane,
 :root[data-app-theme="light"] .hybridExplorerPane,
-:root[data-app-theme="light"] .fullPreviewHeader,
-:root[data-app-theme="light"] .fullAgentPreview,
 :root[data-app-theme="light"] .hybridSidePane {
   background: rgba(255, 255, 255, 0.72);
 }
@@ -973,8 +979,9 @@ a {
   border: 0;
   border-radius: 0;
   overflow: hidden;
-  background: #071015;
+  background: #1a1b26;
   display: flex;
+  flex-direction: column;
   min-height: 0;
 }
 
@@ -984,11 +991,93 @@ a {
   min-height: 0;
 }
 
-.codeEditorShell .monaco-editor,
-.codeEditorShell .monaco-editor .overflow-guard,
-.codeEditorShell .monaco-editor-background {
-  width: 100% !important;
-  height: 100% !important;
+.nvimTopline,
+.nvimStatusline {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 30px;
+  padding: 0 12px;
+  background: #16161e;
+  border-bottom: 1px solid rgba(122, 162, 247, 0.16);
+  color: #a9b1d6;
+  font: 12px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+.nvimStatusline {
+  justify-content: space-between;
+  min-height: 26px;
+  border-top: 1px solid rgba(122, 162, 247, 0.16);
+  border-bottom: 0;
+  background: #1f2335;
+  color: #c0caf5;
+}
+
+.nvimMode {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 3px;
+  background: #9ece6a;
+  color: #11131a;
+  font-weight: 800;
+}
+
+.nvimPath {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #c0caf5;
+}
+
+.nvimLanguage {
+  margin-left: auto;
+  color: #7aa2f7;
+}
+
+.nvimEditorBody {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  background:
+    linear-gradient(90deg, rgba(22, 22, 30, 0.98), rgba(22, 22, 30, 0.98) 56px, transparent 56px),
+    #1a1b26;
+}
+
+.nvimGutter {
+  padding: 14px 12px 18px 0;
+  overflow: hidden;
+  user-select: none;
+  text-align: right;
+  color: #565f89;
+  border-right: 1px solid rgba(122, 162, 247, 0.12);
+  font: 13px/22px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+.nvimGutter span {
+  display: block;
+  height: 22px;
+}
+
+.codeTextArea {
+  width: 100%;
+  height: 100%;
+  resize: none;
+  border: 0;
+  outline: 0;
+  padding: 14px 18px 18px;
+  background: transparent;
+  color: #c0caf5;
+  font: 13px/22px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  tab-size: 2;
+  white-space: pre;
+  overflow: auto;
+  caret-color: #bb9af7;
+  scrollbar-color: #3b4261 #1a1b26;
 }
 
 .emptyEditor {
@@ -1794,8 +1883,8 @@ a {
 
 .fullAgentWorkspaceShell {
   flex-direction: column;
-  padding: 10px;
-  gap: 10px;
+  padding: 0;
+  gap: 0;
   background: #050a0e;
 }
 
@@ -1837,9 +1926,9 @@ a {
   flex: 1 1 auto;
   display: flex;
   overflow: hidden;
-  border: 1px solid rgba(209, 250, 229, 0.1);
-  border-radius: 10px;
-  background: rgba(3, 8, 12, 0.94);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .missionCard {
@@ -7206,8 +7295,6 @@ a {
 
 :root[data-app-theme="light"] .hybridEditorPane,
 :root[data-app-theme="light"] .hybridExplorerPane,
-:root[data-app-theme="light"] .fullPreviewHeader,
-:root[data-app-theme="light"] .fullAgentPreview,
 :root[data-app-theme="light"] .hybridSidePane {
   background: rgba(255, 255, 255, 0.72);
 }

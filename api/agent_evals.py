@@ -10,44 +10,46 @@ from typing import Any
 from unittest.mock import patch
 
 from api.agent import AgentSuggestion
+from api.agent_memory import remember_agent_run
 from api.agent_runtime import run_agent_pipeline
+from api.app_state import CURRENT_SESSION_ID, CURRENT_USER_ID, STATE
 from api.project_templates import list_project_templates, render_project_template
 
 
 @dataclass(frozen=True)
-class ClaraEvalScenario:
+class ApporaEvalScenario:
     id: str
     prompt: str
     template_id: str
     expected_files: tuple[str, ...]
 
 
-CLARA_EVAL_SCENARIOS: tuple[ClaraEvalScenario, ...] = (
-    ClaraEvalScenario(
+APPORA_EVAL_SCENARIOS: tuple[ApporaEvalScenario, ...] = (
+    ApporaEvalScenario(
         id="portfolio_polish",
         prompt="Bikin portfolio modern yang siap dipakai freelance designer, lengkap section work dan contact.",
         template_id="portfolio",
         expected_files=("src/pages/Home.tsx", "src/app.css"),
     ),
-    ClaraEvalScenario(
+    ApporaEvalScenario(
         id="saas_dashboard",
         prompt="Build SaaS dashboard untuk founder non teknis, ada metrics, activity, empty state, dan settings-ready copy.",
         template_id="saas-dashboard",
         expected_files=("src/pages/Dashboard.tsx", "src/app.css"),
     ),
-    ClaraEvalScenario(
+    ApporaEvalScenario(
         id="admin_crud",
         prompt="Bikin admin CRUD inventory yang searchable, table-first, ada status, create state, dan validasi copy.",
         template_id="admin-crud",
         expected_files=("src/pages/Dashboard.tsx", "src/app.css"),
     ),
-    ClaraEvalScenario(
+    ApporaEvalScenario(
         id="ai_tool",
         prompt="Bikin AI tool app untuk generate campaign brief, ada prompt panel, result, history, dan usage state.",
         template_id="ai-tool-app",
         expected_files=("src/pages/Dashboard.tsx", "src/app.css"),
     ),
-    ClaraEvalScenario(
+    ApporaEvalScenario(
         id="landing_pricing",
         prompt="Bikin landing page pricing yang conversion-ready, ada FAQ, CTA, pricing, dan copy yang jelas.",
         template_id="landing-pricing",
@@ -56,7 +58,7 @@ CLARA_EVAL_SCENARIOS: tuple[ClaraEvalScenario, ...] = (
 )
 
 
-def _write_template_project(workspace: Path, scenario: ClaraEvalScenario) -> Path:
+def _write_template_project(workspace: Path, scenario: ApporaEvalScenario) -> Path:
     project_root = scenario.id
     files = render_project_template(template_id=scenario.template_id, project_root=project_root, project_name=scenario.id.replace("_", " ").title())
     project_dir = workspace / project_root
@@ -68,21 +70,28 @@ def _write_template_project(workspace: Path, scenario: ClaraEvalScenario) -> Pat
     return project_dir
 
 
-def _fake_clara_suggest(scenario: ClaraEvalScenario):
+def _fake_appora_suggest(scenario: ApporaEvalScenario):
     calls = {"count": 0}
     primary_file = scenario.expected_files[0]
     css_file = scenario.expected_files[1]
 
     def fake_suggest(**_: Any) -> AgentSuggestion:
         calls["count"] += 1
+        scenario_terms = {
+            "portfolio_polish": "Portfolio work gallery, selected case studies, freelance contact CTA, and polished designer sections.",
+            "saas_dashboard": "Founder SaaS dashboard with metrics summary, activity feed, empty state, and settings-ready copy.",
+            "admin_crud": "Inventory admin CRUD with searchable table, create state, item status, validation copy, and progress-ready operations.",
+            "ai_tool": "AI campaign brief tool with prompt panel, generated result, history, usage state, and clear run status.",
+            "landing_pricing": "Pricing landing page with FAQ, CTA, price tiers, conversion copy, and billing-ready sections.",
+        }
         page_content = f'''export default function EvalPage() {{
   const rows = ["Planning", "Build", "Preview", "Ship"];
   return (
     <main className="evalSurface">
       <section className="evalHero">
-        <p className="eyebrow">Clara Autopilot Eval</p>
+        <p className="eyebrow">Appora Agent Eval</p>
         <h1>{scenario.id.replace("_", " ").title()}</h1>
-        <p>Production-minded starter shaped from a rough non-technical prompt.</p>
+        <p>{scenario_terms.get(scenario.id, "Production-minded starter shaped from a rough non-technical prompt.")}</p>
         <button type="button" aria-label="Start build" onClick={{() => document.getElementById("workflow-stages")?.scrollIntoView({{ behavior: "smooth" }})}}>Start Build</button>
       </section>
       <section id="workflow-stages" className="evalGrid" aria-label="Workflow stages">
@@ -105,7 +114,7 @@ def _fake_clara_suggest(scenario: ClaraEvalScenario):
         if calls["count"] >= 3:
             changes[1]["new_content"] = css_content + ".evalHero button { width: fit-content; min-height: 40px; }\n"
         return AgentSuggestion(
-            spoken="Clara sudah bikin surface yang preview-ready dan bisa dilanjutkan.",
+            spoken="Appora Agent sudah bikin surface yang preview-ready dan bisa dilanjutkan.",
             log="eval implementation: generated files and refinement",
             changes=changes,
             actions=[{"type": "shell", "command": "npm run build", "reason": "Validate generated app before handoff."}],
@@ -114,11 +123,11 @@ def _fake_clara_suggest(scenario: ClaraEvalScenario):
     return fake_suggest
 
 
-def run_clara_contract_eval() -> dict[str, Any]:
+def run_appora_contract_eval() -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     with tempfile.TemporaryDirectory() as tmp:
         workspace = Path(tmp)
-        for scenario in CLARA_EVAL_SCENARIOS:
+        for scenario in APPORA_EVAL_SCENARIOS:
             _write_template_project(workspace, scenario)
             req = SimpleNamespace(
                 input=scenario.prompt,
@@ -133,7 +142,7 @@ def run_clara_contract_eval() -> dict[str, Any]:
                 editor_status=None,
                 asset_paths=[],
             )
-            with patch("api.agent_runtime.suggest", side_effect=_fake_clara_suggest(scenario)), \
+            with patch("api.agent_runtime.suggest", side_effect=_fake_appora_suggest(scenario)), \
                 patch("api.agent_runtime.settings_mod.settings.friendly_free_tier_mode", True), \
                 patch("api.agent_runtime.settings_mod.settings.agent_refinement_mode", "auto"):
                 output = run_agent_pipeline(req, ws_root=workspace)
@@ -195,6 +204,119 @@ def validate_template_registry() -> dict[str, Any]:
     return {"ok": all(item["ok"] for item in results), "templates": results}
 
 
+def run_memory_failure_recall_eval() -> dict[str, Any]:
+    session_id = "appora-memory-failure-eval"
+    user_id = "appora-memory-failure-eval-user"
+    STATE.get("sessions", {}).pop(session_id, None)
+    session_token = CURRENT_SESSION_ID.set(session_id)
+    user_token = CURRENT_USER_ID.set(user_id)
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            project = workspace / "memory_failure"
+            (project / "src").mkdir(parents=True)
+            (project / "src" / "App.tsx").write_text("export default function App(){ return null }\n", encoding="utf-8")
+            remember_agent_run(
+                workspace,
+                project_root="memory_failure",
+                build_mode="full-agent",
+                interaction_kind="command",
+                user_input="Fix preview blank by only changing CSS opacity",
+                spoken="Build failed because the same CSS-only repair did not restore a rendered root route.",
+                changes=[{"path": "memory_failure/src/app.css", "new_content": "body{opacity:1}\n"}],
+                actions=[{"type": "shell", "command": "npm run build"}],
+                execution_outcome={
+                    "ok": False,
+                    "state": "blocked",
+                    "summary": "Blocked: preview stayed blank after CSS-only repair.",
+                    "validation_ok": True,
+                    "preview_ok": False,
+                    "repair_passes": 1,
+                    "validation_commands": ["npm run build"],
+                    "final_changed_paths": ["memory_failure/src/app.css"],
+                },
+                task_state={
+                    "goal": "Fix preview blank",
+                    "status": "blocked",
+                    "next_action": "Inspect root route and change implementation shape.",
+                    "blocking_checks": ["preview-audit"],
+                },
+                completion_report={
+                    "ok": False,
+                    "state": "blocked",
+                    "summary": "Blocked: preview stayed blank after CSS-only repair.",
+                    "criteria": [{"label": "preview", "status": "failed"}],
+                    "residual_risks": ["CSS-only repair already failed."],
+                },
+                failure_analysis={
+                    "current_signature": "preview-blank-css-only",
+                    "primary_failure": "preview audit failed: blank screen after CSS-only repair",
+                    "suggested_next_move": "Inspect src/App.tsx and render visible root content instead of editing CSS again.",
+                    "evidence_excerpt": "Previous attempt only touched src/app.css and preview remained blank.",
+                    "repeated_failure": True,
+                },
+            )
+
+            observed_context: dict[str, str] = {}
+
+            def fake_suggest(**kwargs: Any) -> AgentSuggestion:
+                context = str(kwargs.get("extra_context") or "") + "\n" + str(kwargs.get("memory_prompt") or "")
+                observed_context["text"] = context
+                repeats_css_only = "CSS-only repair already failed" in context and "src/app.css" in context
+                changes = [
+                    {
+                        "path": "src/App.tsx",
+                        "new_content": "export default function App(){ return <main><h1>Preview repaired</h1></main> }\n",
+                    }
+                ] if repeats_css_only else [
+                    {"path": "src/app.css", "new_content": "body{opacity:1}\n"}
+                ]
+                return AgentSuggestion(
+                    spoken="Aku pakai failure memory sebelumnya dan ganti strategi ke root render path.",
+                    log="memory eval anti-repeat",
+                    changes=changes,
+                    actions=[{"type": "shell", "command": "npm run build"}],
+                )
+
+            req = SimpleNamespace(
+                input="lanjut",
+                mode="type",
+                active_file="src/App.tsx",
+                selection=None,
+                current_content=None,
+                open_files=["src/App.tsx"],
+                project_root="memory_failure",
+                build_mode="full-agent",
+                preview_url=None,
+                editor_status=None,
+                asset_paths=[],
+            )
+            STATE.get("sessions", {}).pop(session_id, None)
+            with patch("api.agent_runtime.suggest", side_effect=fake_suggest):
+                output = run_agent_pipeline(req, ws_root=workspace)
+
+        changed_paths = {str(item.get("path") or "") for item in output.get("changes", []) if isinstance(item, dict)}
+        context = observed_context.get("text", "")
+        touched_root_render = any(path.endswith("src/App.tsx") for path in changed_paths)
+        css_only_repeat = bool(changed_paths) and all(path.endswith("src/app.css") for path in changed_paths)
+        ok = (
+            "CSS-only repair already failed" in context
+            and "Suggested next move: Inspect src/App.tsx" in context
+            and touched_root_render
+            and not css_only_repeat
+        )
+        return {
+            "ok": ok,
+            "remembered_failure": "CSS-only repair already failed" in context,
+            "changed_paths": sorted(changed_paths),
+            "did_not_repeat_css_only": not css_only_repeat,
+        }
+    finally:
+        CURRENT_USER_ID.reset(user_token)
+        CURRENT_SESSION_ID.reset(session_token)
+        STATE.get("sessions", {}).pop(session_id, None)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run Appora offline agent reliability evals.")
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON only.")
@@ -202,10 +324,11 @@ def main() -> int:
 
     result = {
         "ok": True,
-        "clara_contract": run_clara_contract_eval(),
+        "appora_contract": run_appora_contract_eval(),
         "template_registry": validate_template_registry(),
+        "memory_failure_recall": run_memory_failure_recall_eval(),
     }
-    result["ok"] = bool(result["clara_contract"]["ok"] and result["template_registry"]["ok"])
+    result["ok"] = bool(result["appora_contract"]["ok"] and result["template_registry"]["ok"] and result["memory_failure_recall"]["ok"])
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:

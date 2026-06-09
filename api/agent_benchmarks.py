@@ -4,6 +4,7 @@ import argparse
 import json
 import multiprocessing as mp
 import queue
+import re
 import signal
 import shutil
 import tempfile
@@ -31,6 +32,10 @@ class AgentBenchmarkScenario:
     active_file: str
     open_files: tuple[str, ...]
     min_score: int = 70
+    required_terms: tuple[str, ...] = ()
+    forbidden_terms: tuple[str, ...] = ()
+    target_duration_seconds: int = 120
+    max_autonomous_passes: int = 3
 
 
 AGENT_BENCHMARK_SCENARIOS: tuple[AgentBenchmarkScenario, ...] = (
@@ -46,6 +51,9 @@ AGENT_BENCHMARK_SCENARIOS: tuple[AgentBenchmarkScenario, ...] = (
         active_file="src/App.tsx",
         open_files=("src/App.tsx", "src/app.css", "package.json"),
         min_score=80,
+        required_terms=("task", "priority", "owner", "status", "progress", "metric", "empty"),
+        forbidden_terms=("laundry", "portfolio", "pricing", "testimonial"),
+        target_duration_seconds=90,
     ),
     AgentBenchmarkScenario(
         id="preview_blank_repair",
@@ -58,6 +66,9 @@ AGENT_BENCHMARK_SCENARIOS: tuple[AgentBenchmarkScenario, ...] = (
         active_file="src/App.tsx",
         open_files=("src/App.tsx", "src/pages/Home.tsx", "src/app.css", "package.json"),
         min_score=80,
+        required_terms=("preview", "home", "portfolio", "section", "build"),
+        forbidden_terms=("laundry", "task tracker", "pricing table"),
+        target_duration_seconds=90,
     ),
     AgentBenchmarkScenario(
         id="nontechnical_landing",
@@ -70,6 +81,9 @@ AGENT_BENCHMARK_SCENARIOS: tuple[AgentBenchmarkScenario, ...] = (
         active_file="src/pages/Home.tsx",
         open_files=("src/pages/Home.tsx", "src/app.css", "package.json"),
         min_score=75,
+        required_terms=("laundry", "booking", "price", "testimonial", "premium", "cta"),
+        forbidden_terms=("task tracker", "dashboard", "portfolio"),
+        target_duration_seconds=90,
     ),
 )
 
@@ -147,7 +161,67 @@ def _write_benchmark_project(workspace: Path, scenario: AgentBenchmarkScenario) 
     return project_dir
 
 
-def _score_live_result(result: dict[str, Any], events: list[dict[str, Any]]) -> dict[str, Any]:
+def _normalize_score_text(value: Any) -> str:
+    text = str(value or "").lower()
+    return re.sub(r"[^a-z0-9]+", " ", text)
+
+
+def _changed_text_blob(result: dict[str, Any]) -> str:
+    changes = result.get("changes") if isinstance(result.get("changes"), list) else []
+    parts: list[str] = [str(result.get("spoken") or ""), str(result.get("log") or "")]
+    for change in changes:
+        if not isinstance(change, dict):
+            continue
+        parts.append(str(change.get("path") or ""))
+        for key in ("new_content", "content", "diff", "patch"):
+            value = change.get(key)
+            if isinstance(value, str):
+                parts.append(value)
+    return _normalize_score_text("\n".join(parts))
+
+
+def _final_project_text_blob(project_dir: Path | None, scenario: AgentBenchmarkScenario | None, result: dict[str, Any]) -> str:
+    if project_dir is None or scenario is None or not project_dir.exists():
+        return ""
+    changes = result.get("changes") if isinstance(result.get("changes"), list) else []
+    paths: set[str] = {path for path in scenario.open_files if path}
+    for change in changes:
+        if not isinstance(change, dict):
+            continue
+        raw = str(change.get("path") or "").strip()
+        if not raw:
+            continue
+        prefix = f"{scenario.project_root.strip('/')}/"
+        rel = raw[len(prefix):] if raw.startswith(prefix) else raw
+        paths.add(rel)
+    parts: list[str] = []
+    for rel in sorted(paths):
+        if not rel or rel.endswith("package.json"):
+            continue
+        try:
+            path = project_dir / rel
+            if path.is_file() and path.stat().st_size <= 300_000:
+                parts.append(path.read_text(encoding="utf-8", errors="ignore")[:40_000])
+        except Exception:
+            continue
+    return _normalize_score_text("\n".join(parts))
+
+
+def _term_present(blob: str, term: str) -> bool:
+    normalized = _normalize_score_text(term)
+    if not normalized:
+        return True
+    return normalized in blob
+
+
+def _score_live_result(
+    result: dict[str, Any],
+    events: list[dict[str, Any]],
+    *,
+    scenario: AgentBenchmarkScenario | None = None,
+    duration_seconds: float | None = None,
+    project_dir: Path | None = None,
+) -> dict[str, Any]:
     execution = result.get("execution") if isinstance(result.get("execution"), dict) else {}
     trace = result.get("trace") if isinstance(result.get("trace"), dict) else {}
     changes = result.get("changes") if isinstance(result.get("changes"), list) else []
@@ -172,6 +246,55 @@ def _score_live_result(result: dict[str, Any], events: list[dict[str, Any]]) -> 
         score += 10
     if not failed_verification:
         score += 5
+
+    changed_blob = " ".join([
+        _changed_text_blob(result),
+        _final_project_text_blob(project_dir, scenario, result),
+    ]).strip()
+    required_terms = tuple(scenario.required_terms if scenario else ())
+    missing_required_terms = [term for term in required_terms if not _term_present(changed_blob, term)]
+    forbidden_terms = tuple(scenario.forbidden_terms if scenario else ())
+    matched_forbidden_terms = [term for term in forbidden_terms if _term_present(changed_blob, term)]
+    requirement_coverage = 1.0
+    if required_terms:
+        requirement_coverage = (len(required_terms) - len(missing_required_terms)) / len(required_terms)
+        if requirement_coverage >= 0.85:
+            score += 15
+        elif requirement_coverage >= 0.65:
+            score += 5
+        else:
+            score -= 25
+    if matched_forbidden_terms:
+        score -= min(30, 10 * len(matched_forbidden_terms))
+
+    task_state = trace.get("task_state") if isinstance(trace.get("task_state"), dict) else {}
+    local_tools = trace.get("local_tools_used")
+    if not isinstance(local_tools, list):
+        local_tools = trace.get("local_tools") if isinstance(trace.get("local_tools"), list) else []
+    skills = trace.get("skills") if isinstance(trace.get("skills"), list) else []
+    mcp_tools = trace.get("mcp_tools_used")
+    if not isinstance(mcp_tools, list):
+        mcp_tools = trace.get("mcp_tools") if isinstance(trace.get("mcp_tools"), list) else []
+    scouts = trace.get("scouts") if isinstance(trace.get("scouts"), list) else []
+    passes = trace.get("passes")
+    if passes is None and isinstance(task_state, dict):
+        passes = task_state.get("autonomous_iterations")
+    try:
+        pass_count = int(passes or 0)
+    except (TypeError, ValueError):
+        pass_count = 0
+    if scenario and scenario.max_autonomous_passes > 0 and pass_count > scenario.max_autonomous_passes:
+        score -= min(20, (pass_count - scenario.max_autonomous_passes) * 7)
+
+    target_duration = scenario.target_duration_seconds if scenario else 0
+    if duration_seconds is not None and target_duration > 0:
+        if duration_seconds <= target_duration:
+            score += 5
+        elif duration_seconds > target_duration * 2:
+            score -= 15
+        elif duration_seconds > target_duration * 1.35:
+            score -= 8
+
     score = max(0, min(100, score))
 
     return {
@@ -182,8 +305,17 @@ def _score_live_result(result: dict[str, Any], events: list[dict[str, Any]]) -> 
             "execution_ok": execution.get("ok"),
             "event_count": len(events),
             "tool_event_count": sum(1 for item in events if item.get("event") in {"tool_call", "tool_output", "command_start", "command_output"}),
+            "local_tool_count": len(local_tools),
+            "skill_count": len(skills),
+            "mcp_call_count": len(mcp_tools),
+            "scout_count": len(scouts),
             "failed_verification": len(failed_verification),
-            "task_state": trace.get("task_state") if isinstance(trace.get("task_state"), dict) else {},
+            "task_state": task_state,
+            "requirement_coverage": round(requirement_coverage, 3),
+            "missing_required_terms": missing_required_terms,
+            "matched_forbidden_terms": matched_forbidden_terms,
+            "autonomous_passes": pass_count,
+            "target_duration_seconds": target_duration,
         },
     }
 
@@ -222,6 +354,32 @@ def _nine_router_benchmark_readiness(*, check_route: bool = False, model: str | 
         readiness["ok"] = bool(readiness["route_test"].get("ok"))
         readiness["summary"] = str(readiness["route_test"].get("summary") or readiness["summary"])
     return readiness
+
+
+class _TemporaryBenchmarkModel:
+    def __init__(self, model: str | None) -> None:
+        self.model = str(model or "").strip()
+        self.previous: Any = None
+        self.enabled = False
+
+    def __enter__(self) -> "_TemporaryBenchmarkModel":
+        if not self.model:
+            return self
+        self.previous = getattr(settings_mod.settings, "nine_router_model", None)
+        try:
+            setattr(settings_mod.settings, "nine_router_model", self.model)
+        except Exception:
+            object.__setattr__(settings_mod.settings, "nine_router_model", self.model)
+        self.enabled = True
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+        if self.enabled:
+            try:
+                setattr(settings_mod.settings, "nine_router_model", self.previous)
+            except Exception:
+                object.__setattr__(settings_mod.settings, "nine_router_model", self.previous)
+        return False
 
 
 def _run_live_scenario(workspace: Path, scenario: AgentBenchmarkScenario, *, timeout_seconds: int | None = 180) -> dict[str, Any]:
@@ -270,7 +428,14 @@ def _run_live_scenario(workspace: Path, scenario: AgentBenchmarkScenario, *, tim
             [{"event_type": item.get("event"), "payload": {"phase": item.get("phase"), "message": item.get("message")}, "created_at": item.get("t")} for item in events],
             result=result if isinstance(result, dict) else {},
         )
-        scored = _score_live_result(result if isinstance(result, dict) else {}, events)
+        duration_seconds = time.monotonic() - started
+        scored = _score_live_result(
+            result if isinstance(result, dict) else {},
+            events,
+            scenario=scenario,
+            duration_seconds=duration_seconds,
+            project_dir=workspace / scenario.project_root,
+        )
         ok = scored["score"] >= scenario.min_score and scored["metrics"]["execution_ok"] is True
         return {
             "id": scenario.id,
@@ -414,6 +579,7 @@ def run_agent_benchmark_suite(
     max_scenarios: int | None = None,
     scenario_timeout_seconds: int | None = 180,
     isolate_scenarios: bool = True,
+    model: str | None = None,
 ) -> dict[str, Any]:
     selected = _scenario_catalog(set(scenario_ids) if scenario_ids else None)
     if max_scenarios is not None and max_scenarios > 0:
@@ -436,7 +602,7 @@ def run_agent_benchmark_suite(
             output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         return result
 
-    readiness = _nine_router_benchmark_readiness(check_route=check_route)
+    readiness = _nine_router_benchmark_readiness(check_route=check_route, model=model)
     started_at = int(time.time())
     if require_ready and not readiness.get("ok"):
         result = {
@@ -455,13 +621,14 @@ def run_agent_benchmark_suite(
         return result
 
     scenario_runner = _run_live_scenario_isolated if isolate_scenarios else _run_live_scenario
-    if workspace_root is not None:
-        workspace_root.mkdir(parents=True, exist_ok=True)
-        results = [scenario_runner(workspace_root, scenario, timeout_seconds=scenario_timeout_seconds) for scenario in selected]
-    else:
-        with tempfile.TemporaryDirectory(prefix="appora-agent-benchmark-") as tmp:
-            workspace = Path(tmp)
-            results = [scenario_runner(workspace, scenario, timeout_seconds=scenario_timeout_seconds) for scenario in selected]
+    with _TemporaryBenchmarkModel(model):
+        if workspace_root is not None:
+            workspace_root.mkdir(parents=True, exist_ok=True)
+            results = [scenario_runner(workspace_root, scenario, timeout_seconds=scenario_timeout_seconds) for scenario in selected]
+        else:
+            with tempfile.TemporaryDirectory(prefix="appora-agent-benchmark-") as tmp:
+                workspace = Path(tmp)
+                results = [scenario_runner(workspace, scenario, timeout_seconds=scenario_timeout_seconds) for scenario in selected]
     result = {
         "ok": all(item.get("ok") for item in results),
         "mode": "live",
@@ -488,6 +655,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=None, help="Write benchmark report JSON to this path.")
     parser.add_argument("--max-scenarios", type=int, default=None, help="Run at most this many selected scenarios.")
     parser.add_argument("--scenario-timeout", type=int, default=180, help="Max seconds per live scenario before marking it failed.")
+    parser.add_argument("--model", default=None, help="Temporarily use a specific 9Router model/route for this benchmark run.")
     parser.add_argument("--check-route", action="store_true", help="Run a tiny 9Router /chat/completions preflight before live benchmark.")
     parser.add_argument("--skip-route-test", action="store_true", help="Skip live 9Router route preflight even when --live is used.")
     parser.add_argument("--allow-unready", action="store_true", help="Run scenarios even if 9Router readiness check fails.")
@@ -502,6 +670,7 @@ def main() -> int:
         output_path=args.output,
         max_scenarios=args.max_scenarios,
         scenario_timeout_seconds=args.scenario_timeout,
+        model=args.model,
     )
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))

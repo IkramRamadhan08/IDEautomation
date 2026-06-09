@@ -27,6 +27,10 @@ playwright-report/
 .voiceide-projects.json
 .voiceide-home/
 .tmp-agent-live/
+.tmp-agent-bench*/
+.tmp-agent-direct-web-large*/
+.tmp-aider-benchmark/
+.tmp-aider-test/
 *.log
 
 # misc

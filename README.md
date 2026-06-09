@@ -1,15 +1,17 @@
 # Appora
 
-Appora is an agentic web/app builder for non-coders and fast-moving builders. It combines a hosted browser IDE, Supabase-backed project persistence, BYOK model providers, and two coding agents designed to help users move from rough intent to a working web application.
+Appora is an experimental agentic web/app builder for non-coders and fast-moving builders. It combines a hosted browser IDE, Supabase-backed project persistence, BYOK model routing, and one coding agent designed to help users move from rough intent to a working web application.
+
+This repository is moving toward a serious coding-agent product, but it is not yet honestly comparable to mature agents such as Codex, Cursor, Claude Code, or Aider on large arbitrary codebases. The current system has a real tool backbone, validation loop, preview audit, memory, and guarded execution, but long-horizon reliability and benchmark performance still need hardening.
 
 The target runtime is **Vercel serverless + Supabase**. The product is not positioned as a local-only experiment or short-lived showcase; the architecture is meant for a hosted experience where users sign in, paste their own model API keys, create projects, and ask an agent to build or improve apps.
 
 ## Product Direction
 
-Appora is built around two agents:
+Appora is built around one agent with two workspace layouts:
 
-- **Clara**: full-agent mode. Clara is the autonomous product builder that can take a rough brief, inspect the repo, plan the implementation, edit files, validate, repair, and push toward a coherent preview-ready result.
-- **Raka**: hybrid mode. Raka is the IDE copilot that stays close to the active file, editor state, and current project context for precise assisted coding.
+- **Workspace**: the primary IDE layout with file explorer, Monaco editor, preview, settings, and the agent orb. The agent stays close to the active file and project context when the user is working directly.
+- **Full Preview**: the same agent and runtime shown in a preview-first layout. This is not a second agent; it only gives the running app more screen space while the agent keeps the same tools, memory, validation, and repair loop.
 
 The intended user is someone who may not know how to code but wants to build a real web/app surface by chatting with an agent, reviewing the result, and iterating.
 
@@ -17,31 +19,57 @@ The intended user is someone who may not know how to code but wants to build a r
 
 - Hosted auth and project persistence with Supabase
 - Browser-based project workspace and file explorer
-- Monaco-powered hybrid IDE surface
-- Full-agent autonomous build mode
+- Lightweight nvim-style workspace editor surface
+- Full Preview layout for larger app review
 - Floating agent orb for conversational streaming
 - Separate live interaction module for agent actions only
 - Supabase-backed user settings and project files
 - BYOK provider settings per user
-- Multi-provider model support:
-  - OpenAI
-  - Anthropic
-  - OpenRouter
-  - Groq
-  - Gemini
-  - Together AI
-  - Cerebras
-  - xAI
+- 9Router-backed model routing with BYOK support
 - Free-tier friendly mode for providers with strict limits
 - Agent memory and RAG-ready Supabase document chunks
 - Durable agent job ledger with `job_id`, event history, and recoverable final result
 - Checkpoint and restore before agent file writes
 - Serverless-compatible terminal command execution surface
 - Project validation and preview audit hooks
+- Real local edit tools for line-range and search/replace file edits
+- Formatter/linter tool wrapper for project files
+- Local SQLite database query/migration tool
+- Guarded local Git branch/commit tool
+- Aider benchmark adapter for measuring Appora against coding-agent tasks
+
+## Current Maturity
+
+Appora is best described as an early serious coding agent, not a finished top-tier one.
+
+Rough current confidence:
+
+- Tool backbone: about 75-80%
+- Agent flow/orchestration: about 65-75%
+- Frontend/web app delivery: about 65-75%
+- General coding across varied repos: about 60-70%
+- Benchmark readiness: about 60-70%
+
+What is already solid:
+
+- The runtime inspects project structure before broad work.
+- The agent can read/search/map files, apply focused edits, run bounded validation, run formatter/linter checks, query local SQLite, and inspect/commit local Git changes.
+- Frontend tasks are blocked by source-quality, requirement-coverage, task-depth, interaction, business-data honesty, and preview-audit checks.
+- Browser visual evidence is part of the completion report when preview audit runs.
+- Agent runs persist state, events, memory, checkpoints, validation results, preview audit results, repairs, and completion reports.
+
+What is still not solved:
+
+- Supabase/Postgres app database operations are not yet a first-class agent tool. SQLite is supported locally; Supabase/Postgres should be wired through MCP or a dedicated guarded backend client.
+- GitHub push and PR automation are intentionally gated. Local branch/commit is supported; remote push/PR requires explicit remote permission and a configured GitHub workflow.
+- Dependency/version conflict resolution is still basic. The agent can inspect and run package managers, but it is not yet a full dependency solver.
+- The model/tool loop can still underuse tools or produce shallow work if the model output is weak, although the verifier now blocks more generic fallback cases.
+- Aider benchmark support exists, but Appora does not yet claim competitive pass rates.
+- Hosted serverless execution is bounded; this is not a persistent VM or fully isolated cloud sandbox.
 
 ## Agent Runtime
 
-The backend agent runtime uses **LangGraph**. The current graph is:
+The backend agent runtime uses Appora's own **linear runtime v2**. The current pipeline is:
 
 ```text
 intent
@@ -50,6 +78,7 @@ intent
   -> mcp
   -> plan
   -> deep_preflight
+  -> read_only_scout (complex tasks only)
   -> draft
   -> tooling / refine
   -> verify
@@ -59,7 +88,11 @@ intent
 Important runtime behavior:
 
 - Intent detection keeps greetings and normal chat read-only.
+- `AgentRunController` bounds driver steps, LLM calls, and tool calls so long tasks stop with a clear reason instead of looping indefinitely.
+- `run_ledger` records compact phase-level evidence for every run.
+- Runtime hooks record internal lifecycle events for phase entry, tools, scout, budget stop, and finalize without executing user hook commands in this slice.
 - Deep work preflight automatically inspects larger tasks before drafting.
+- Read-only scout runs project-scoped repo analysis for complex tasks without letting parallel workers write files.
 - Local read-only tools give the model structured repo context.
 - MCP tools can be discovered and executed through registered configs.
 - Verifier checks block unsafe or invalid output before files are applied.
@@ -68,25 +101,47 @@ Important runtime behavior:
 
 ## Local Agent Tools
 
-The runtime exposes read-only local tools to the model:
+The runtime exposes project-scoped local tools to the model:
 
 - `repo_list`: list project files without dependency/build noise
 - `repo_read`: read one file
 - `repo_read_many`: read multiple files in one bounded call
 - `repo_search`: search source files
+- `repo_map`: build an aider-style repo map
+- `file_window`: inspect a line-numbered file window
+- `symbol_search`: find functions/classes/components/types
+- `style_stack`: inspect styling conventions
+- `line_replace_preview` / `line_replace_apply`: preview or apply line-range edits
+- `search_replace_preview` / `search_replace_apply`: preview or apply search/replace edits
 - `package_scripts`: inspect scripts, dependencies, and package manager hints
 - `repo_overview`: summarize project shape and key files
+- `stack_profile`: detect languages, frameworks, database, infra, and preview signals
+- `validation_plan`: suggest stack-specific validation commands
+- `test_runner`: run bounded validation commands
+- `format_lint`: run bounded formatter/linter checks or fixes
+- `database_client`: query/migrate/schema local SQLite databases
+- `git_manager`: inspect Git and perform guarded local branch/commit operations
+- `docs_browser`: fetch bounded public HTTPS documentation text
+- `skill_catalog` / `skill_read`: discover local/imported skills
 - `dependency_graph`: build a bounded JS/TS import graph
+- `component_index`: index React components and hooks
+- `route_map`: inspect likely app routes and navigation
+- `quality_scan`: scan production-readiness risks
+- `memory_overview`: inspect memory backend readiness
+- `mcp_status`: inspect configured MCP servers
+- `preview_capabilities`: inspect preview surfaces
 
-These tools are designed to reduce guessing and make Clara/Raka behave more like real coding agents.
+These tools are designed to reduce guessing and make the Appora agent behave more like a real coding agent.
+
+Some tools are intentionally guarded. Remote Git push/PR and production database operations should not run silently. The current default is local-first safety.
 
 ## Stack
 
 - Frontend: React 19, Vite, TypeScript
-- Editor: Monaco
+- Editor: lightweight nvim-style textarea surface
 - UI primitives: Radix UI, lucide-react, framer-motion
 - Backend: FastAPI
-- Agent graph: LangGraph
+- Agent runtime: Appora linear runtime v2
 - Auth and persistence: Supabase
 - Deploy target: Vercel serverless
 
@@ -100,7 +155,7 @@ scripts/                Utility scripts and preview audit
 src/                    React frontend
 src/agent/              Frontend agent workflow/runtime helpers
 src/components/         UI components
-src/modes/              Full-agent and hybrid workspaces
+src/modes/              Workspace and Full Preview layouts
 SUPABASE_SCHEMA.sql     Main Supabase schema
 vercel.json             Vercel routing/build config
 ```
@@ -187,7 +242,7 @@ VOICEIDE_SECRET_KEY=...
 Recommended defaults:
 
 ```env
-LLM_PROVIDER=openrouter
+LLM_PROVIDER=nine_router
 BUILD_MODE=hybrid
 FRIENDLY_FREE_TIER_MODE=true
 AGENT_REFINEMENT_MODE=auto
@@ -196,7 +251,14 @@ AGENT_REQUESTS_PER_MINUTE=8
 AGENT_CONTEXT_CHAR_BUDGET=48000
 ```
 
-Optional default model settings:
+Recommended 9Router defaults:
+
+```env
+NINE_ROUTER_BASE_URL=http://127.0.0.1:20128/v1
+NINE_ROUTER_MODEL=appora
+```
+
+Optional legacy direct-provider model defaults:
 
 ```env
 OPENAI_MODEL=gpt-5.5
@@ -219,6 +281,7 @@ GOOGLE_OAUTH_CLIENT_SECRET=...
 Optional server-level provider keys:
 
 ```env
+NINE_ROUTER_API_KEY=...
 OPENAI_API_KEY=...
 ANTHROPIC_API_KEY=...
 OPENROUTER_API_KEY=...
@@ -233,9 +296,9 @@ For hosted public usage, prefer per-user BYOK through Settings instead of sharin
 
 ## BYOK Provider Model
 
-Appora is designed for bring-your-own-key usage. Users can paste provider API keys in Settings. Keys are stored per account in Supabase and encrypted using `VOICEIDE_SECRET_KEY`.
+Appora is designed for bring-your-own-key usage. The current agent path is centered on 9Router, so users can paste a 9Router endpoint/key in Settings and let 9Router handle the underlying provider routes. Keys are stored per account in Supabase and encrypted using `VOICEIDE_SECRET_KEY`.
 
-OpenRouter is a good default provider for public hosted deployments because it gives users one router key and access to free or lower-cost models. Groq, Gemini, and Cerebras are useful for users who want free/dev-tier experimentation with stricter limits. OpenAI remains available because it is familiar, but OpenAI API usage is credit/billing based rather than unlimited free tier.
+For hosted public usage, prefer per-user 9Router BYOK through Settings instead of sharing one server-level key across all users. Direct provider settings may still appear in older code paths and catalog data, but the intended agent runtime is one Appora agent routed through 9Router.
 
 ## Validation
 
@@ -253,6 +316,16 @@ Backend targeted tests can also be run with:
 api/.venv/bin/python -m unittest api.tests.test_agent_regressions.AgentToolsRegressionTests
 ```
 
+Agent benchmark helpers:
+
+```bash
+npm run bench:agent:aider:setup
+npm run bench:agent:aider:smoke
+npm run bench:agent:internal:live:smoke
+```
+
+Benchmark results should be treated as evidence, not marketing copy. Appora should not be described as benchmark-competitive until repeatable pass rates prove it.
+
 ## Current Engineering Boundaries
 
 Appora is built for a hosted serverless app-builder workflow. The current architecture is intentionally not a heavy self-hosted container platform.
@@ -268,9 +341,9 @@ The product direction is to keep improving agent reliability through stronger to
 
 ## Vision
 
-The goal is for Clara and Raka to become competitive coding agents for web/app building:
+The goal is for the Appora agent to become a competitive coding agent for web/app building:
 
-- Clara should be able to take broad product intent and ship a coherent first version.
-- Raka should make the hybrid IDE feel like working with a sharp coding partner.
+- In Workspace layout, the agent should feel like a sharp coding partner inside the editor.
+- In Full Preview layout, the same agent should take broad product intent and ship a coherent preview-ready version.
 - The system should inspect before editing, validate before claiming success, and protect user work with checkpoints.
 - Non-coders should be able to create and iterate on real web apps by talking to the agent, not by learning the toolchain first.

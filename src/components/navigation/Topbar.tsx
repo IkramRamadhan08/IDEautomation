@@ -66,16 +66,19 @@ export const Topbar: React.FC<TopbarProps> = ({
 
       <div className="spacer" />
 
-      <div className="topbarModeSwitch">
+      <div className="topbarModeSwitch" aria-label="Layout switch" title="Same Appora Agent, different workspace layout">
+        <span className="topbarModeLabel">Layout</span>
         <button
           className={`btn modeBtn ${buildMode === "hybrid" ? "primary" : ""}`}
           onClick={() => onQuickSwitchBuildMode("hybrid")}
+          title="Editor-first workspace with the same Appora Agent"
         >
           Workspace
         </button>
         <button
           className={`btn modeBtn ${buildMode === "full-agent" ? "primary" : ""}`}
           onClick={() => onQuickSwitchBuildMode("full-agent")}
+          title="Large preview layout with the same Appora Agent"
         >
           Full Preview
         </button>

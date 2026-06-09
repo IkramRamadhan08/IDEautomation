@@ -1,5 +1,5 @@
 import process from 'node:process';
-import { chromium } from '@playwright/test';
+import { firefox } from '@playwright/test';
 
 const url = (process.argv[2] || '').trim();
 const timeoutMs = Number(process.argv[3] || 12000);
@@ -34,7 +34,7 @@ if (!url) {
 
 let browser;
 try {
-  browser = await chromium.launch({ headless: true });
+  browser = await firefox.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const consoleErrors = [];
   const pageErrors = [];
@@ -104,7 +104,21 @@ try {
     const interactiveNodes = Array.from(document.querySelectorAll('button, [role="button"], a[href], input, textarea, select, summary, [tabindex]:not([tabindex="-1"])'));
     const unlabeledInteractive = interactiveNodes
       .filter((node) => {
-        const label = clean(node.textContent || node.getAttribute('aria-label') || node.getAttribute('title') || node.getAttribute('value') || node.getAttribute('alt') || '');
+        const id = clean(node.getAttribute('id') || '');
+        const labelledBy = clean(node.getAttribute('aria-labelledby') || '');
+        const nestedLabel = node.closest('label');
+        const explicitLabel = id ? document.querySelector(`label[for="${id}"]`) : null;
+        const label = clean(
+          node.textContent
+          || node.getAttribute('aria-label')
+          || node.getAttribute('title')
+          || node.getAttribute('value')
+          || node.getAttribute('alt')
+          || (labelledBy ? labelledBy.split(/\s+/).map((ref) => document.getElementById(ref)?.textContent || '').join(' ') : '')
+          || nestedLabel?.textContent
+          || explicitLabel?.textContent
+          || ''
+        );
         return !label;
       })
       .map(cssPath)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import shlex
+import sqlite3
 import subprocess
 import time
 from dataclasses import dataclass
@@ -181,8 +182,38 @@ _LOCAL_TOOLS: list[LocalToolInfo] = [
         },
     ),
     LocalToolInfo(
+        name="line_replace_apply",
+        description="Apply a SWE-agent style line-range replacement to a workspace file and return a unified diff plus an after-window.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Path relative to workspace"},
+                "start_line": {"type": "integer", "description": "1-based first line to replace"},
+                "end_line": {"type": "integer", "description": "1-based last line to replace, inclusive"},
+                "replacement": {"type": "string", "description": "Replacement text for the selected line range"},
+                "context": {"type": "integer", "default": 4},
+            },
+            "required": ["path", "start_line", "end_line", "replacement"],
+        },
+    ),
+    LocalToolInfo(
         name="search_replace_preview",
         description="Preview an aider-style SEARCH/REPLACE edit with exact, whitespace-flexible, ellipsis, and fuzzy line-window matching; returns suggested_change without writing files.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Path relative to workspace"},
+                "search": {"type": "string", "description": "Original text to find"},
+                "replace": {"type": "string", "description": "Replacement text"},
+                "context": {"type": "integer", "default": 4},
+                "allow_fuzzy": {"type": "boolean", "default": True},
+            },
+            "required": ["path", "search", "replace"],
+        },
+    ),
+    LocalToolInfo(
+        name="search_replace_apply",
+        description="Apply an aider-style SEARCH/REPLACE edit to a workspace file and return a unified diff plus an after-window.",
         input_schema={
             "type": "object",
             "properties": {
@@ -250,14 +281,46 @@ _LOCAL_TOOLS: list[LocalToolInfo] = [
         },
     ),
     LocalToolInfo(
-        name="git_manager",
-        description="Inspect git status/diff and produce a safe add/commit command plan without mutating the repository.",
+        name="format_lint",
+        description="Run bounded formatter/linter fixes or checks for selected files. Supports built-in JSON formatting plus local Prettier/ESLint/Ruff/Black when available.",
         input_schema={
             "type": "object",
             "properties": {
                 "project_root": {"type": "string", "description": "Project root relative to workspace"},
-                "mode": {"type": "string", "enum": ["status", "diff", "commit_plan"], "default": "status"},
-                "message": {"type": "string", "description": "Suggested commit message for commit_plan"},
+                "mode": {"type": "string", "enum": ["check", "fix"], "default": "fix"},
+                "files": {"type": "array", "items": {"type": "string"}, "description": "Project-relative files to format/lint"},
+                "tools": {"type": "array", "items": {"type": "string"}, "description": "Subset of json, prettier, eslint, ruff, black"},
+                "timeout_seconds": {"type": "integer", "default": 90},
+            },
+        },
+    ),
+    LocalToolInfo(
+        name="database_client",
+        description="Inspect or mutate a local project database through a bounded client. Supports SQLite query/migrate/schema now; Supabase/Postgres should be wired through MCP or backend config later.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "project_root": {"type": "string", "description": "Project root relative to workspace"},
+                "backend": {"type": "string", "enum": ["sqlite"], "default": "sqlite"},
+                "database": {"type": "string", "description": "SQLite database path relative to project_root"},
+                "mode": {"type": "string", "enum": ["query", "migrate", "schema"], "default": "query"},
+                "sql": {"type": "string", "description": "SQL to execute"},
+                "max_rows": {"type": "integer", "default": 100},
+            },
+        },
+    ),
+    LocalToolInfo(
+        name="git_manager",
+        description="Inspect git status/diff, produce commit plans, or perform guarded local git mutations. Remote push/PR modes require allow_remote=true.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "project_root": {"type": "string", "description": "Project root relative to workspace"},
+                "mode": {"type": "string", "enum": ["status", "diff", "commit_plan", "branch", "commit", "push", "pr_plan"], "default": "status"},
+                "message": {"type": "string", "description": "Commit message for commit/commit_plan"},
+                "branch": {"type": "string", "description": "Branch name for branch mode"},
+                "paths": {"type": "array", "items": {"type": "string"}, "description": "Project-relative paths for commit staging"},
+                "allow_remote": {"type": "boolean", "default": False},
                 "max_diff_chars": {"type": "integer", "default": 12000},
             },
         },
@@ -700,6 +763,117 @@ def _with_original_trailing_newline(original: str, candidate: str) -> str:
     return candidate
 
 
+def _write_workspace_text(ws_root: Path, rel_path: str, content: str) -> Path:
+    target = safe_join(ws_root, rel_path)
+    if target.exists() and not target.is_file():
+        raise RuntimeError("path must be a file")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    return target
+
+
+def _unified_diff_for_text(path: str, before: str, after: str, *, context: int = 3) -> str:
+    before_lines = before.splitlines(keepends=True)
+    after_lines = after.splitlines(keepends=True)
+    diff = difflib.unified_diff(
+        before_lines,
+        after_lines,
+        fromfile=path,
+        tofile=path,
+        n=max(0, min(int(context or 3), 12)),
+    )
+    return "".join(diff)
+
+
+def _project_relative_file(project_dir: Path, raw_path: str) -> Path:
+    clean = str(raw_path or "").strip().lstrip("/")
+    if not clean:
+        raise RuntimeError("file path is required")
+    if clean.startswith("./"):
+        clean = clean[2:]
+    target = safe_join(project_dir, clean)
+    if not target.exists() or not target.is_file():
+        raise RuntimeError(f"file does not exist: {clean}")
+    return target
+
+
+def _format_json_text(content: str) -> str:
+    parsed = json.loads(content)
+    return json.dumps(parsed, ensure_ascii=False, indent=2) + "\n"
+
+
+def _node_bin(project_dir: Path, name: str) -> Path | None:
+    candidates = [
+        project_dir / "node_modules" / ".bin" / name,
+        Path(__file__).resolve().parents[1] / "node_modules" / ".bin" / name,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _available_format_commands(project_dir: Path, *, mode: str, tools: set[str], files: list[str]) -> list[tuple[str, list[str]]]:
+    commands: list[tuple[str, list[str]]] = []
+    if not files:
+        return commands
+    prettier = _node_bin(project_dir, "prettier")
+    if prettier and "prettier" in tools:
+        commands.append(("prettier", [str(prettier), "--write" if mode == "fix" else "--check", *files]))
+    eslint = _node_bin(project_dir, "eslint")
+    if eslint and "eslint" in tools:
+        command = [str(eslint), *(( "--fix",) if mode == "fix" else ()), *files]
+        commands.append(("eslint", command))
+    if "ruff" in tools:
+        ruff = "ruff"
+        commands.append(("ruff", [ruff, "check", "--fix" if mode == "fix" else "--no-fix", *files]))
+    if "black" in tools:
+        black = "black"
+        commands.append(("black", [black, *(("--check",) if mode == "check" else ()), *files]))
+    return commands
+
+
+def _safe_sqlite_database_path(project_dir: Path, raw_database: str) -> Path:
+    clean = str(raw_database or "").strip().lstrip("/")
+    if not clean:
+        clean = "app.db"
+    if clean.startswith("./"):
+        clean = clean[2:]
+    if Path(clean).suffix.lower() not in {".db", ".sqlite", ".sqlite3"}:
+        raise RuntimeError("sqlite database path must end with .db, .sqlite, or .sqlite3")
+    return safe_join(project_dir, clean)
+
+
+def _looks_like_readonly_sql(sql: str) -> bool:
+    clean = str(sql or "").strip().lower()
+    if not clean:
+        return False
+    return clean.startswith(("select", "with", "pragma", "explain"))
+
+
+def _sqlite_schema_rows(conn: sqlite3.Connection) -> tuple[list[str], list[list[Any]]]:
+    cursor = conn.execute(
+        "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE type IN ('table','index','view','trigger') ORDER BY type, name"
+    )
+    columns = [item[0] for item in cursor.description or []]
+    rows = [list(row) for row in cursor.fetchall()]
+    return columns, rows
+
+
+def _git_safe_paths(project_dir: Path, raw_paths: Any, changed_paths: list[str]) -> list[str]:
+    if isinstance(raw_paths, list) and raw_paths:
+        candidates = [str(item or "").strip().lstrip("/") for item in raw_paths if str(item or "").strip()]
+    else:
+        candidates = list(changed_paths)
+    safe: list[str] = []
+    for rel in candidates:
+        if not rel or rel.startswith("../") or "/../" in rel or rel == ".":
+            raise RuntimeError(f"unsafe git path: {rel}")
+        safe_join(project_dir, rel)
+        safe.append(rel)
+    return safe
+
+
 def _span_from_ellipsis_search(content: str, search: str) -> tuple[int, int] | None:
     if "..." not in search:
         return None
@@ -1083,6 +1257,42 @@ def execute_local_tool(ws_root: Path, project_dir: Path, *, tool_name: str, argu
             duration_ms = int((time.perf_counter() - started) * 1000)
             return LocalToolCallResult(tool=name, arguments=args, ok=True, text=text[:30_000], raw=payload, duration_ms=duration_ms)
 
+        if name == "line_replace_apply":
+            path = _workspace_or_project_path(ws_root, project_dir, str(args.get("path") or ""))
+            if not path:
+                raise RuntimeError("path is required")
+            start_line = int(args.get("start_line") or 0)
+            end_line = int(args.get("end_line") or 0)
+            replacement = str(args.get("replacement") if args.get("replacement") is not None else "")
+            context = int(args.get("context") or 4)
+            if start_line < 1 or end_line < start_line:
+                raise RuntimeError("start_line/end_line must be a valid 1-based inclusive range")
+            content = read_text(ws_root, path)
+            lines = content.splitlines(keepends=True)
+            if end_line > len(lines):
+                raise RuntimeError(f"line range exceeds file length ({len(lines)} lines)")
+            replacement_text = replacement
+            if replacement_text and not replacement_text.endswith("\n") and end_line < len(lines):
+                replacement_text += "\n"
+            new_content = "".join(lines[: start_line - 1]) + replacement_text + "".join(lines[end_line:])
+            new_content = _with_original_trailing_newline(content, new_content)
+            _write_workspace_text(ws_root, path, new_content)
+            diff = _unified_diff_for_text(path, content, new_content, context=context)
+            payload = {
+                "path": path,
+                "applied": True,
+                "strategy": "line-range",
+                "start_line": start_line,
+                "end_line": end_line,
+                "diff": diff,
+            }
+            window = _line_window_text(path, new_content, center_line=start_line, context=context)
+            text = json.dumps({key: value for key, value in payload.items() if key != "diff"}, ensure_ascii=False, indent=2)
+            text += "\n\nDIFF:\n" + diff[:20_000]
+            text += "\n\nAFTER WINDOW:\n" + window
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            return LocalToolCallResult(tool=name, arguments=args, ok=True, text=text[:30_000], raw=payload, duration_ms=duration_ms)
+
         if name == "search_replace_preview":
             path = _workspace_or_project_path(ws_root, project_dir, str(args.get("path") or ""))
             search = str(args.get("search") if args.get("search") is not None else "")
@@ -1124,6 +1334,52 @@ def execute_local_tool(ws_root: Path, project_dir: Path, *, tool_name: str, argu
             text = json.dumps({key: value for key, value in payload.items() if key != "suggested_change"}, ensure_ascii=False, indent=2)
             text += "\n\nAFTER WINDOW:\n" + window
             text += "\n\n\"suggested_change\":\n" + json.dumps(payload["suggested_change"], ensure_ascii=False, indent=2)[:20_000]
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            return LocalToolCallResult(tool=name, arguments=args, ok=True, text=text[:30_000], raw=payload, duration_ms=duration_ms)
+
+        if name == "search_replace_apply":
+            path = _workspace_or_project_path(ws_root, project_dir, str(args.get("path") or ""))
+            search = str(args.get("search") if args.get("search") is not None else "")
+            replace = str(args.get("replace") if args.get("replace") is not None else "")
+            context = int(args.get("context") or 4)
+            allow_fuzzy = bool(args.get("allow_fuzzy", True))
+            if not path:
+                raise RuntimeError("path is required")
+            if not search:
+                raise RuntimeError("search is required")
+            content = read_text(ws_root, path)
+            match = _find_search_replace_span(content, search, allow_fuzzy=allow_fuzzy)
+            if not match.get("ok"):
+                payload = {"path": path, "ok": False, **match}
+                duration_ms = int((time.perf_counter() - started) * 1000)
+                return LocalToolCallResult(
+                    tool=name,
+                    arguments=args,
+                    ok=False,
+                    text=json.dumps(payload, ensure_ascii=False, indent=2),
+                    raw=payload,
+                    duration_ms=duration_ms,
+                    error=str(match.get("error") or "search text was not found"),
+                )
+            start = int(match["start"])
+            end = int(match["end"])
+            new_content = content[:start] + replace + content[end:]
+            new_content = _with_original_trailing_newline(content, new_content)
+            _write_workspace_text(ws_root, path, new_content)
+            line = _line_for_span(content, start)
+            diff = _unified_diff_for_text(path, content, new_content, context=context)
+            payload = {
+                "path": path,
+                "applied": True,
+                "strategy": match.get("strategy"),
+                "confidence": match.get("confidence"),
+                "start_line": line,
+                "diff": diff,
+            }
+            window = _line_window_text(path, new_content, center_line=line, context=context)
+            text = json.dumps({key: value for key, value in payload.items() if key != "diff"}, ensure_ascii=False, indent=2)
+            text += "\n\nDIFF:\n" + diff[:20_000]
+            text += "\n\nAFTER WINDOW:\n" + window
             duration_ms = int((time.perf_counter() - started) * 1000)
             return LocalToolCallResult(tool=name, arguments=args, ok=True, text=text[:30_000], raw=payload, duration_ms=duration_ms)
 
@@ -1442,22 +1698,183 @@ def execute_local_tool(ws_root: Path, project_dir: Path, *, tool_name: str, argu
             duration_ms = int((time.perf_counter() - started) * 1000)
             return LocalToolCallResult(tool=name, arguments=args, ok=bool(payload["ok"]), text=text[:max_output_chars + 4000], raw=payload, duration_ms=duration_ms)
 
+        if name == "format_lint":
+            req_root = str(args.get("project_root") or ".").strip() or "."
+            proj = _safe_project_dir(ws_root, req_root)
+            mode = str(args.get("mode") or "fix").strip().lower()
+            if mode not in {"check", "fix"}:
+                raise RuntimeError("mode must be check or fix")
+            timeout = int(args.get("timeout_seconds") or 90)
+            timeout = max(5, min(timeout, 180))
+            raw_files = args.get("files")
+            files = [str(item or "").strip().lstrip("/") for item in raw_files if str(item or "").strip()] if isinstance(raw_files, list) else []
+            if not files:
+                candidates = [
+                    path.relative_to(proj).as_posix()
+                    for path in _walk_candidate_files(proj, limit_files=80)
+                    if path.suffix.lower() in {".json", ".js", ".jsx", ".ts", ".tsx", ".css", ".scss", ".py"}
+                ]
+                files = candidates[:24]
+            files = files[:40]
+            raw_tools = args.get("tools")
+            requested_tools = {str(item or "").strip().lower() for item in raw_tools if str(item or "").strip()} if isinstance(raw_tools, list) else set()
+            tools = requested_tools or {"json", "prettier", "eslint", "ruff", "black"}
+
+            results: list[dict[str, Any]] = []
+            changed_paths: list[str] = []
+            ok = True
+
+            if "json" in tools:
+                for rel in files:
+                    if Path(rel).suffix.lower() != ".json":
+                        continue
+                    target = _project_relative_file(proj, rel)
+                    before = target.read_text(encoding="utf-8")
+                    try:
+                        formatted = _format_json_text(before)
+                    except Exception as exc:
+                        ok = False
+                        results.append({"tool": "json", "file": rel, "ok": False, "error": str(exc)})
+                        continue
+                    diff = _unified_diff_for_text(rel, before, formatted, context=3)
+                    changed = before != formatted
+                    if changed and mode == "fix":
+                        target.write_text(formatted, encoding="utf-8")
+                        changed_paths.append(rel)
+                    if changed and mode == "check":
+                        ok = False
+                    results.append({
+                        "tool": "json",
+                        "file": rel,
+                        "ok": not changed or mode == "fix",
+                        "changed": changed,
+                        "applied": bool(changed and mode == "fix"),
+                        "diff": diff[:12000],
+                    })
+
+            command_files = [rel for rel in files if Path(rel).suffix.lower() != ".json" or "json" not in tools]
+            command_tools = tools.difference({"json"})
+            for tool, command in _available_format_commands(proj, mode=mode, tools=command_tools, files=command_files):
+                ran = _run_process(command, proj, timeout=timeout)
+                if not ran.get("ok"):
+                    ok = False
+                results.append({
+                    "tool": tool,
+                    "command": " ".join(shlex.quote(part) for part in command),
+                    "ok": bool(ran.get("ok")),
+                    "returncode": ran.get("returncode"),
+                    "stdout": str(ran.get("stdout") or "")[:8000],
+                    "stderr": str(ran.get("stderr") or "")[:8000],
+                })
+
+            payload = {
+                "project_root": req_root,
+                "mode": mode,
+                "ok": ok,
+                "applied": bool(changed_paths),
+                "changed_paths": changed_paths,
+                "results": results,
+            }
+            text = json.dumps(payload, ensure_ascii=False, indent=2)
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            return LocalToolCallResult(tool=name, arguments=args, ok=ok, text=text[:30000], raw=payload, duration_ms=duration_ms)
+
+        if name == "database_client":
+            req_root = str(args.get("project_root") or ".").strip() or "."
+            proj = _safe_project_dir(ws_root, req_root)
+            backend = str(args.get("backend") or "sqlite").strip().lower()
+            if backend != "sqlite":
+                raise RuntimeError("database_client currently supports backend=sqlite only")
+            mode = str(args.get("mode") or "query").strip().lower()
+            if mode not in {"query", "migrate", "schema"}:
+                raise RuntimeError("mode must be one of: query, migrate, schema")
+            sql = str(args.get("sql") or "").strip()
+            if mode in {"query", "migrate"} and not sql:
+                raise RuntimeError("sql is required for query/migrate")
+            if mode == "query" and not _looks_like_readonly_sql(sql):
+                raise RuntimeError("query mode only accepts read-only SELECT/WITH/PRAGMA/EXPLAIN SQL; use mode=migrate for writes")
+            max_rows = int(args.get("max_rows") or 100)
+            max_rows = max(1, min(max_rows, 500))
+            db_path = _safe_sqlite_database_path(proj, str(args.get("database") or "app.db"))
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            rows: list[list[Any]] = []
+            columns: list[str] = []
+            writes_performed = False
+            conn = sqlite3.connect(str(db_path))
+            try:
+                if mode == "schema":
+                    columns, rows = _sqlite_schema_rows(conn)
+                elif mode == "query":
+                    cursor = conn.execute(sql)
+                    columns = [item[0] for item in cursor.description or []]
+                    rows = [list(row) for row in cursor.fetchmany(max_rows)]
+                else:
+                    conn.executescript(sql)
+                    conn.commit()
+                    writes_performed = True
+                    columns, rows = _sqlite_schema_rows(conn)
+            finally:
+                conn.close()
+            payload = {
+                "project_root": req_root,
+                "backend": "sqlite",
+                "database": db_path.relative_to(proj).as_posix(),
+                "mode": mode,
+                "ok": True,
+                "writes_performed": writes_performed,
+                "columns": columns,
+                "rows": rows,
+                "row_count": len(rows),
+                "truncated": bool(mode == "query" and len(rows) >= max_rows),
+            }
+            text = json.dumps(payload, ensure_ascii=False, indent=2)
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            return LocalToolCallResult(tool=name, arguments=args, ok=True, text=text[:30000], raw=payload, duration_ms=duration_ms)
+
         if name == "git_manager":
             req_root = str(args.get("project_root") or ".").strip() or "."
             mode = str(args.get("mode") or "status").strip() or "status"
             message = str(args.get("message") or "Update project").strip() or "Update project"
+            branch = str(args.get("branch") or "").strip()
+            allow_remote = bool(args.get("allow_remote") or False)
             max_diff_chars = int(args.get("max_diff_chars") or 12000)
             max_diff_chars = max(1000, min(max_diff_chars, 80_000))
-            if mode not in {"status", "diff", "commit_plan"}:
-                raise RuntimeError("mode must be one of: status, diff, commit_plan")
+            if mode not in {"status", "diff", "commit_plan", "branch", "commit", "push", "pr_plan"}:
+                raise RuntimeError("mode must be one of: status, diff, commit_plan, branch, commit, push, pr_plan")
+            if mode in {"push", "pr_plan"} and not allow_remote:
+                raise RuntimeError("remote git modes require allow_remote=true")
             proj = _safe_project_dir(ws_root, req_root)
             inside = _run_process(["git", "rev-parse", "--is-inside-work-tree"], proj, timeout=10)
             if not inside.get("ok") or str(inside.get("stdout") or "").strip() != "true":
                 raise RuntimeError("project_root is not inside a git worktree")
+            writes_performed = False
+            operation_results: list[dict[str, Any]] = []
+            if mode == "branch":
+                if not re.fullmatch(r"[A-Za-z0-9._/-]{1,120}", branch) or branch.startswith("-") or ".." in branch:
+                    raise RuntimeError("branch must be a safe git branch name")
+                ran = _run_process(["git", "switch", "-c", branch], proj, timeout=20)
+                operation_results.append({"command": f"git switch -c {branch}", **ran})
+                writes_performed = bool(ran.get("ok"))
+            elif mode == "commit":
+                pre_status = _run_process(["git", "status", "--short"], proj, timeout=10)
+                pre_changed = _extract_git_status_paths(str(pre_status.get("stdout") or ""))
+                safe_paths = _git_safe_paths(proj, args.get("paths"), pre_changed)
+                if not safe_paths:
+                    raise RuntimeError("no changed paths to commit")
+                add = _run_process(["git", "add", "--", *safe_paths], proj, timeout=20)
+                operation_results.append({"command": "git add -- " + " ".join(shlex.quote(path) for path in safe_paths), **add})
+                if add.get("ok"):
+                    commit = _run_process(["git", "commit", "-m", message], proj, timeout=60)
+                    operation_results.append({"command": f"git commit -m {shlex.quote(message)}", **commit})
+                    writes_performed = bool(commit.get("ok"))
+            elif mode == "push":
+                push = _run_process(["git", "push"], proj, timeout=120)
+                operation_results.append({"command": "git push", **push})
+                writes_performed = bool(push.get("ok"))
             status = _run_process(["git", "status", "--short"], proj, timeout=10)
             diff_stat = _run_process(["git", "diff", "--stat"], proj, timeout=10)
             diff: dict[str, Any] | None = None
-            if mode in {"diff", "commit_plan"}:
+            if mode in {"diff", "commit_plan", "commit"}:
                 diff = _run_process(["git", "diff", "--"], proj, timeout=20)
             changed_paths = _extract_git_status_paths(str(status.get("stdout") or ""))
             quoted_paths = " ".join(shlex.quote(path) for path in changed_paths)
@@ -1477,8 +1894,13 @@ def execute_local_tool(ws_root: Path, project_dir: Path, *, tool_name: str, argu
                 "diff_stat": str(diff_stat.get("stdout") or ""),
                 "diff": str((diff or {}).get("stdout") or "")[:max_diff_chars] if diff is not None else "",
                 "command_plan": command_plan,
-                "writes_performed": False,
+                "operation_results": operation_results,
+                "writes_performed": writes_performed,
             }
+            if mode == "pr_plan":
+                payload["command_plan"] = ["git push -u origin HEAD", "open pull request in GitHub/GitLab UI or MCP connector"]
+            if operation_results and not all(bool(item.get("ok")) for item in operation_results):
+                payload["ok"] = False
             text = json.dumps(payload, ensure_ascii=False, indent=2)
             duration_ms = int((time.perf_counter() - started) * 1000)
             return LocalToolCallResult(tool=name, arguments=args, ok=bool(payload["ok"]), text=text[:max_diff_chars + 5000], raw=payload, duration_ms=duration_ms)
@@ -1844,9 +2266,10 @@ def execute_local_tool(ws_root: Path, project_dir: Path, *, tool_name: str, argu
 
 def format_local_tools_prompt() -> str:
     lines = [
-        "LOCAL TOOLS (read-only):",
+        "LOCAL TOOLS:",
         "These tools run inside this backend, no external MCP server required.",
         "If you need one, return an action like {\"type\": \"tool\", \"tool\": \"repo_search\", \"arguments\": { ... }}.",
+        "Most tools are read-only. Tools ending in `_apply` write workspace files and return a diff; use them only after reading enough context.",
         "Use local tools before MCP for repo-local facts. Use MCP only for external systems or integrations not represented in the local workspace.",
     ]
     for tool in _LOCAL_TOOLS:

@@ -1027,7 +1027,11 @@ export type AgentCapabilities = {
   ok: boolean;
   runtime: string;
   supports: {
-    graph_runtime: boolean;
+    linear_runtime?: boolean;
+    run_controller?: boolean;
+    run_ledger?: boolean;
+    runtime_hooks?: boolean;
+    read_only_scout?: boolean;
     short_term_memory_rag: boolean;
     project_scoped_short_memory?: boolean;
     long_term_memory_rag: boolean;

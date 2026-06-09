@@ -5,12 +5,15 @@ from pathlib import Path
 import hashlib
 import json
 import math
+import os
 import re
 import time
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from .app_state import CURRENT_SESSION_ID, CURRENT_USER_ID
-from .supabase_store import get_agent_memory_chunks_table_status, has_supabase, list_agent_memory_chunks, upsert_agent_memory_chunks
+from .supabase_store import get_agent_memory_chunks_table_status, get_latest_agent_job_result, has_supabase, list_agent_memory_chunks, upsert_agent_memory_chunks
 
 _TOKEN_RE = re.compile(r"[a-zA-Z0-9_:-]{2,}")
 _STOPWORDS = {
@@ -45,6 +48,7 @@ class MemoryChunk:
     content_hash: str
     updated_at: str
     embedding: list[float] | None = None
+    embedding_backend: str = "hash"
 
 
 @dataclass
@@ -139,6 +143,81 @@ def _embed_text_cached(text: str, *, cache_key: str) -> list[float]:
     vector = _hash_vector(text)
     _VECTOR_CACHE[cache_key] = vector
     return vector
+
+
+def _real_embedding_model() -> str:
+    return str(os.getenv("AGENT_MEMORY_EMBEDDING_MODEL") or "text-embedding-3-small").strip() or "text-embedding-3-small"
+
+
+def _real_embedding_backend_ready() -> bool:
+    return bool(str(os.getenv("OPENAI_API_KEY") or "").strip())
+
+
+def _normalize_real_embedding(raw: Any) -> list[float] | None:
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            return None
+    if not isinstance(raw, list):
+        return None
+    out: list[float] = []
+    for item in raw:
+        try:
+            out.append(float(item))
+        except Exception:
+            return None
+    return out if out else None
+
+
+def _embed_real_texts(texts: list[str]) -> list[list[float]]:
+    clean = [str(text or "")[:8_000] for text in texts]
+    if not clean:
+        return []
+    api_key = str(os.getenv("OPENAI_API_KEY") or "").strip()
+    if not api_key:
+        return []
+    body = json.dumps({"model": _real_embedding_model(), "input": clean}).encode("utf-8")
+    req = Request(
+        "https://api.openai.com/v1/embeddings",
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+    )
+    try:
+        with urlopen(req, timeout=45) as resp:
+            payload = json.loads(resp.read().decode("utf-8", "replace"))
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError):
+        return []
+    rows = payload.get("data") if isinstance(payload, dict) else []
+    vectors: list[list[float]] = []
+    for row in rows if isinstance(rows, list) else []:
+        vector = _normalize_real_embedding(row.get("embedding") if isinstance(row, dict) else None)
+        if vector:
+            vectors.append(vector)
+    return vectors if len(vectors) == len(clean) else []
+
+
+def _with_real_embeddings(chunks: list[MemoryChunk]) -> list[MemoryChunk]:
+    if not chunks or not _real_embedding_backend_ready():
+        return chunks
+    vectors = _embed_real_texts([f"{chunk.title}\n{chunk.text}" for chunk in chunks])
+    if len(vectors) != len(chunks):
+        return chunks
+    return [
+        MemoryChunk(
+            source=chunk.source,
+            title=chunk.title,
+            text=chunk.text,
+            chunk_index=chunk.chunk_index,
+            chunk_count=chunk.chunk_count,
+            content_hash=chunk.content_hash,
+            updated_at=chunk.updated_at,
+            embedding=vectors[index],
+            embedding_backend="real",
+        )
+        for index, chunk in enumerate(chunks)
+    ]
 
 
 def _cosine_similarity(left: list[float] | None, right: list[float] | None) -> float:
@@ -267,6 +346,194 @@ def _infer_project_conventions(entry: dict[str, Any], change_paths: list[str], a
     return conventions
 
 
+def _compact_execution_outcome(outcome: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(outcome, dict) or not outcome:
+        return {}
+    validation_commands = [
+        str(item).strip()[:180]
+        for item in list(outcome.get("validation_commands") or [])[:6]
+        if str(item).strip()
+    ]
+    compact: dict[str, Any] = {
+        "ok": bool(outcome.get("ok")),
+        "state": str(outcome.get("state") or "").strip()[:80],
+        "summary": str(outcome.get("summary") or "").strip()[:500],
+        "validation_ok": bool(outcome.get("validation_ok")) if outcome.get("validation_ok") is not None else None,
+        "preview_ok": bool(outcome.get("preview_ok")) if outcome.get("preview_ok") is not None else None,
+        "preview_summary": str(outcome.get("preview_summary") or "").strip()[:500],
+        "repair_passes": int(outcome.get("repair_passes") or 0) if str(outcome.get("repair_passes") or "").isdigit() else outcome.get("repair_passes"),
+        "rollback_count": int(outcome.get("rollback_count") or 0) if str(outcome.get("rollback_count") or "").isdigit() else outcome.get("rollback_count"),
+        "rollback_paths": [str(item).strip()[:180] for item in list(outcome.get("rollback_paths") or [])[:8] if str(item).strip()],
+        "final_changed_paths": [str(item).strip()[:180] for item in list(outcome.get("final_changed_paths") or [])[:12] if str(item).strip()],
+        "validation_commands": validation_commands,
+    }
+    return {key: value for key, value in compact.items() if value not in ("", None, [])}
+
+
+def _format_execution_outcome(outcome: dict[str, Any] | None) -> str:
+    compact = _compact_execution_outcome(outcome)
+    if not compact:
+        return ""
+    state = str(compact.get("state") or "unknown")
+    ok_label = "passed" if compact.get("ok") else "failed"
+    validation = compact.get("validation_ok")
+    preview = compact.get("preview_ok")
+    validation_label = "unknown" if validation is None else ("passed" if validation else "failed")
+    preview_label = "unknown" if preview is None else ("passed" if preview else "failed")
+    lines = [
+        "EXECUTION OUTCOME:",
+        f"state={state} ok={ok_label} validation={validation_label} preview={preview_label} repairs={compact.get('repair_passes', 0)} rollbacks={compact.get('rollback_count', 0)}",
+    ]
+    summary = str(compact.get("summary") or "").strip()
+    if summary:
+        lines.append(f"summary={summary}")
+    commands = [str(item) for item in list(compact.get("validation_commands") or []) if str(item).strip()]
+    if commands:
+        lines.append("validation_commands=" + ", ".join(commands[:6]))
+    preview_summary = str(compact.get("preview_summary") or "").strip()
+    if preview_summary:
+        lines.append(f"preview_summary={preview_summary}")
+    rollback_paths = [str(item) for item in list(compact.get("rollback_paths") or []) if str(item).strip()]
+    if rollback_paths:
+        lines.append("rollback_paths=" + ", ".join(rollback_paths[:8]))
+    final_paths = [str(item) for item in list(compact.get("final_changed_paths") or []) if str(item).strip()]
+    if final_paths:
+        lines.append("final_changed_paths=" + ", ".join(final_paths[:12]))
+    return " | ".join(lines)
+
+
+def _compact_task_state(task_state: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(task_state, dict) or not task_state:
+        return {}
+    nodes: list[dict[str, Any]] = []
+    for node in list(task_state.get("nodes") or [])[:10]:
+        if not isinstance(node, dict):
+            continue
+        nodes.append({
+            "id": str(node.get("id") or "")[:80],
+            "stage": str(node.get("stage") or "")[:80],
+            "title": str(node.get("title") or "")[:140],
+            "status": str(node.get("status") or "")[:60],
+            "detail": str(node.get("detail") or "")[:220],
+            "files": [str(item)[:180] for item in list(node.get("files") or [])[:6]],
+        })
+    horizon = task_state.get("horizon") if isinstance(task_state.get("horizon"), dict) else {}
+    return {
+        "goal": str(task_state.get("goal") or "")[:260],
+        "intent": str(task_state.get("intent") or "")[:80],
+        "status": str(task_state.get("status") or "")[:80],
+        "next_action": str(task_state.get("next_action") or "")[:260],
+        "changes": int(task_state.get("changes") or 0) if str(task_state.get("changes") or "").isdigit() else task_state.get("changes"),
+        "actions": int(task_state.get("actions") or 0) if str(task_state.get("actions") or "").isdigit() else task_state.get("actions"),
+        "blocking_checks": [str(item)[:120] for item in list(task_state.get("blocking_checks") or [])[:8]],
+        "nodes": nodes,
+        "horizon": _compact_horizon(horizon),
+    }
+
+
+def _compact_horizon(horizon: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(horizon, dict) or not horizon:
+        return {}
+    checkpoints: list[dict[str, str]] = []
+    for item in list(horizon.get("checkpoints") or [])[:8]:
+        if not isinstance(item, dict):
+            continue
+        checkpoints.append({
+            "id": str(item.get("id") or "")[:80],
+            "title": str(item.get("title") or "")[:120],
+            "status": str(item.get("status") or "")[:60],
+        })
+    return {
+        "enabled": bool(horizon.get("enabled")),
+        "status": str(horizon.get("status") or "")[:80],
+        "complexity": str(horizon.get("complexity") or "")[:80],
+        "current_checkpoint": str(horizon.get("current_checkpoint") or "")[:80],
+        "checkpoints": checkpoints,
+        "completion_criteria": [str(item)[:180] for item in list(horizon.get("completion_criteria") or [])[:6]],
+    }
+
+
+def _compact_completion_report(completion_report: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(completion_report, dict) or not completion_report:
+        return {}
+    criteria: list[dict[str, str]] = []
+    for item in list(completion_report.get("criteria") or [])[:8]:
+        if not isinstance(item, dict):
+            continue
+        criteria.append({
+            "label": str(item.get("label") or "")[:80],
+            "status": str(item.get("status") or "")[:80],
+            "detail": str(item.get("detail") or "")[:220],
+        })
+    return {
+        "ok": bool(completion_report.get("ok")),
+        "state": str(completion_report.get("state") or "")[:80],
+        "summary": str(completion_report.get("summary") or "")[:360],
+        "criteria": criteria,
+        "residual_risks": [str(item)[:220] for item in list(completion_report.get("residual_risks") or [])[:6]],
+    }
+
+
+def _compact_failure_analysis(failure_analysis: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(failure_analysis, dict) or not failure_analysis:
+        return {}
+    failures: list[dict[str, str]] = []
+    for item in list(failure_analysis.get("failures") or [])[:4]:
+        if not isinstance(item, dict):
+            continue
+        failures.append({
+            "kind": str(item.get("kind") or "")[:80],
+            "marker": str(item.get("marker") or "")[:120],
+            "command": str(item.get("command") or "")[:180],
+            "category": str(item.get("category") or "")[:120],
+            "excerpt": str(item.get("excerpt") or "")[:360],
+        })
+    return {
+        "current_signature": str(failure_analysis.get("current_signature") or "")[:80],
+        "primary_failure": str(failure_analysis.get("primary_failure") or "")[:240],
+        "summary": str(failure_analysis.get("summary") or "")[:360],
+        "suggested_next_move": str(failure_analysis.get("suggested_next_move") or "")[:360],
+        "evidence_excerpt": str(failure_analysis.get("evidence_excerpt") or "")[:900],
+        "failures": failures,
+        "repeated_failure": bool(failure_analysis.get("repeated_failure")),
+    }
+
+
+def _build_active_work_state(
+    *,
+    project_root: str,
+    build_mode: str,
+    entry: dict[str, Any],
+    change_paths: list[str],
+    actions: list[dict[str, Any]],
+    task_state: dict[str, Any] | None,
+    completion_report: dict[str, Any] | None,
+    failure_analysis: dict[str, Any] | None,
+) -> dict[str, Any]:
+    compact_task_state = _compact_task_state(task_state)
+    compact_completion = _compact_completion_report(completion_report)
+    compact_failure = _compact_failure_analysis(failure_analysis)
+    if not (compact_task_state or compact_completion or compact_failure or change_paths or actions):
+        return {}
+    return {
+        "kind": "command",
+        "project_root": project_root,
+        "build_mode": build_mode,
+        "last_input": str(entry.get("input") or "")[:500],
+        "last_spoken": str(entry.get("spoken") or "")[:500],
+        "change_paths": change_paths[:12],
+        "action_commands": [
+            str(item.get("command") or "")[:180]
+            for item in actions
+            if isinstance(item, dict) and str(item.get("command") or "").strip()
+        ][:8],
+        "task_state": compact_task_state,
+        "completion_report": compact_completion,
+        "failure_analysis": compact_failure,
+        "updated_at": int(entry.get("ts") or time.time()),
+    }
+
+
 def _append_unique_capped(existing: list[Any], new_items: list[Any], *, cap: int) -> list[Any]:
     out: list[Any] = []
     seen: set[str] = set()
@@ -287,6 +554,9 @@ def _update_project_profile(
     entry: dict[str, Any],
     changes: list[dict[str, Any]],
     actions: list[dict[str, Any]],
+    task_state: dict[str, Any] | None = None,
+    completion_report: dict[str, Any] | None = None,
+    failure_analysis: dict[str, Any] | None = None,
 ) -> None:
     profile = _read_project_profile(ws_root, user_id=user_id, project_root=project_root)
     now = int(time.time())
@@ -327,6 +597,18 @@ def _update_project_profile(
     })
     if decision:
         profile["decisions"] = _append_unique_capped(list(profile.get("decisions") or []), [decision], cap=16)
+    active_work_state = _build_active_work_state(
+        project_root=project_root,
+        build_mode=str(entry.get("build_mode") or ""),
+        entry=entry,
+        change_paths=change_paths,
+        actions=actions,
+        task_state=task_state,
+        completion_report=completion_report,
+        failure_analysis=failure_analysis,
+    )
+    if active_work_state:
+        profile["active_work_state"] = active_work_state
 
     _write_project_profile(ws_root, user_id=user_id, project_root=project_root, profile=profile)
 
@@ -367,7 +649,71 @@ def _format_project_profile(profile: dict[str, Any]) -> str:
             files = item.get("files") if isinstance(item.get("files"), list) else []
             file_text = f" ({', '.join(str(path) for path in files[:3])})" if files else ""
             lines.append(f"  - {str(item.get('kind') or 'task')}: {str(item.get('task') or '').strip()[:180]}{file_text}")
+    active = profile.get("active_work_state") if isinstance(profile.get("active_work_state"), dict) else {}
+    if active:
+        task_state = active.get("task_state") if isinstance(active.get("task_state"), dict) else {}
+        completion = active.get("completion_report") if isinstance(active.get("completion_report"), dict) else {}
+        lines.append("- Active task state:")
+        lines.append(f"  - Last task: {str(active.get('last_input') or '').strip()[:180]}")
+        if task_state:
+            lines.append(f"  - Status: {str(task_state.get('status') or '').strip()[:80]} next={str(task_state.get('next_action') or '').strip()[:180]}")
+            horizon = task_state.get("horizon") if isinstance(task_state.get("horizon"), dict) else {}
+            checkpoints = [item for item in list(horizon.get("checkpoints") or []) if isinstance(item, dict)]
+            if horizon or checkpoints:
+                current = str(horizon.get("current_checkpoint") or "").strip() or "(none)"
+                status = str(horizon.get("status") or "").strip()
+                suffix = f" status={status}" if status else ""
+                lines.append(f"  - Horizon: current={current}{suffix}")
+                if checkpoints:
+                    lines.append("  - Checkpoints: " + ", ".join(
+                        f"{item.get('id') or '?'}={item.get('status') or '?'}"
+                        for item in checkpoints[:8]
+                    ))
+        if completion:
+            lines.append(f"  - Execution: {str(completion.get('state') or '').strip()[:80]} {str(completion.get('summary') or '').strip()[:220]}")
     return "\n".join(lines)
+
+
+def get_project_active_work_state(ws_root: Path, *, project_root: str) -> dict[str, Any] | None:
+    profile = _read_project_profile(ws_root, user_id=CURRENT_USER_ID.get(), project_root=project_root)
+    active = profile.get("active_work_state") if isinstance(profile.get("active_work_state"), dict) else None
+    if active and str(active.get("kind") or "") == "command":
+        return active
+    return _get_supabase_job_active_work_state(project_root=project_root)
+
+
+def _get_supabase_job_active_work_state(*, project_root: str) -> dict[str, Any] | None:
+    if not has_supabase():
+        return None
+    row = get_latest_agent_job_result(owner_id=CURRENT_USER_ID.get(), project_root=project_root)
+    if not isinstance(row, dict):
+        return None
+    result = row.get("result") if isinstance(row.get("result"), dict) else {}
+    execution = result.get("execution") if isinstance(result.get("execution"), dict) else {}
+    trace = result.get("trace") if isinstance(result.get("trace"), dict) else {}
+    task_state = trace.get("task_state") if isinstance(trace.get("task_state"), dict) else {}
+    changes = list(result.get("changes") or []) if isinstance(result.get("changes"), list) else []
+    actions = list(result.get("actions") or []) if isinstance(result.get("actions"), list) else []
+    active = _build_active_work_state(
+        project_root=str(row.get("project_root") or project_root or ".").strip() or ".",
+        build_mode=str(result.get("build_mode") or row.get("build_mode") or ""),
+        entry={
+            "input": str(result.get("input") or row.get("input") or ""),
+            "spoken": str(result.get("spoken") or ""),
+            "build_mode": str(result.get("build_mode") or row.get("build_mode") or ""),
+            "ts": int(time.time()),
+        },
+        change_paths=[str(item.get("path") or "").strip() for item in changes if isinstance(item, dict) and str(item.get("path") or "").strip()],
+        actions=actions,
+        task_state=task_state,
+        completion_report=execution.get("completion_report") if isinstance(execution.get("completion_report"), dict) else {},
+        failure_analysis=execution.get("failure_analysis") if isinstance(execution.get("failure_analysis"), dict) else {},
+    )
+    if not active:
+        return None
+    active["source"] = "supabase-agent-job"
+    active["job_id"] = str(row.get("id") or "")
+    return active
 
 
 def _ltm_candidate_paths(project_dir: Path) -> list[Path]:
@@ -416,6 +762,10 @@ def remember_agent_run(
     spoken: str,
     changes: list[dict[str, Any]],
     actions: list[dict[str, Any]],
+    execution_outcome: dict[str, Any] | None = None,
+    task_state: dict[str, Any] | None = None,
+    completion_report: dict[str, Any] | None = None,
+    failure_analysis: dict[str, Any] | None = None,
 ) -> None:
     user_id = CURRENT_USER_ID.get()
     session_id = CURRENT_SESSION_ID.get()
@@ -431,6 +781,10 @@ def remember_agent_run(
         summary_parts.append("files: " + ", ".join(change_paths[:6]))
     if action_types:
         summary_parts.append("actions: " + ", ".join(action_types[:4]))
+    outcome_text = _format_execution_outcome(execution_outcome)
+    if outcome_text:
+        summary_parts.append(outcome_text)
+    compact_outcome = _compact_execution_outcome(execution_outcome)
 
     entry = {
         "ts": int(time.time()),
@@ -441,6 +795,7 @@ def remember_agent_run(
         "spoken": spoken.strip()[:2500],
         "change_paths": change_paths[:12],
         "action_types": action_types[:12],
+        "execution_outcome": compact_outcome,
         "summary": " | ".join(part for part in summary_parts if part)[:4000],
     }
     _append_memory_entry(session_path, entry)
@@ -452,6 +807,9 @@ def remember_agent_run(
         entry=entry,
         changes=changes,
         actions=actions,
+        task_state=task_state,
+        completion_report=completion_report,
+        failure_analysis=failure_analysis,
     )
 
 
@@ -607,6 +965,8 @@ def _sync_supabase_doc_chunks(project_root: str, chunks: list[MemoryChunk]) -> b
             "chunk_count": chunk.chunk_count,
             "content_hash": chunk.content_hash,
             "updated_at": chunk.updated_at,
+            "embedding": chunk.embedding if chunk.embedding_backend == "real" else None,
+            "embedding_model": _real_embedding_model() if chunk.embedding_backend == "real" else None,
         }
         for chunk in chunks
     ]
@@ -656,6 +1016,7 @@ def _load_supabase_doc_chunks(project_root: str, limit: int) -> list[MemoryChunk
         if row_hash != content_hash or chunk_index < 0 or chunk_index >= chunk_count:
             continue
         key = (source, chunk_index)
+        real_embedding = _normalize_real_embedding(row.get("embedding"))
         selected[key] = MemoryChunk(
             source=source,
             title=title,
@@ -664,7 +1025,8 @@ def _load_supabase_doc_chunks(project_root: str, limit: int) -> list[MemoryChunk
             chunk_count=chunk_count,
             content_hash=content_hash,
             updated_at=updated_at,
-            embedding=_embed_text_cached(f"{title}\n{content}", cache_key=f"supabase:{content_hash}:{chunk_index}"),
+            embedding=real_embedding or _embed_text_cached(f"{title}\n{content}", cache_key=f"supabase:{content_hash}:{chunk_index}"),
+            embedding_backend="real" if real_embedding else "hash",
         )
 
     return [selected[key] for key in sorted(selected.keys(), key=lambda item: (item[0], item[1]))]
@@ -762,13 +1124,24 @@ def retrieve_agent_memory(
         if table_status == "missing":
             warnings.append("Supabase RAG belum siap karena tabel public.agent_memory_chunks belum dibuat, jadi retrieval doc fallback ke chunk lokal.")
         else:
-            sync_ok = _sync_supabase_doc_chunks(project_root, local_doc_chunks) if local_doc_chunks else False
+            real_embedding_ready = _real_embedding_backend_ready()
+            sync_chunks = _with_real_embeddings(local_doc_chunks) if real_embedding_ready else local_doc_chunks
+            sync_ok = _sync_supabase_doc_chunks(project_root, sync_chunks) if sync_chunks else False
             if local_doc_chunks and not sync_ok:
                 warnings.append("Supabase RAG sync gagal, jadi retrieval doc sementara fallback ke chunk lokal.")
             remote_doc_chunks = _load_supabase_doc_chunks(project_root, limit=max(240, len(local_doc_chunks) + 40))
             if remote_doc_chunks:
                 candidate_chunks = remote_doc_chunks
-                backend = "supabase-hash-vector-chunks"
+                if real_embedding_ready and any(chunk.embedding_backend == "real" for chunk in candidate_chunks):
+                    real_query = _embed_real_texts([query_text])
+                    if real_query:
+                        query_embedding = real_query[0]
+                        backend = "supabase-real-embedding-chunks"
+                    else:
+                        backend = "supabase-hash-vector-chunks"
+                        warnings.append("Embedding query real gagal, jadi ranking Supabase sementara fallback hash-vector.")
+                else:
+                    backend = "supabase-hash-vector-chunks"
             elif remote_doc_chunks is None:
                 if table_status == "error":
                     warnings.append("Supabase RAG nggak bisa diverifikasi sekarang, jadi retrieval doc sementara fallback ke chunk lokal.")

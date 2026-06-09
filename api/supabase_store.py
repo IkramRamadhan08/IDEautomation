@@ -390,6 +390,8 @@ def upsert_agent_memory_chunks(*, owner_id: str, project_root: str, chunks: list
             "chunk_count": max(1, int(chunk.get("chunk_count") or 1)),
             "content_hash": str(chunk.get("content_hash") or chunk_id).strip() or chunk_id,
             "updated_at": str(chunk.get("updated_at") or "").strip() or None,
+            "embedding": chunk.get("embedding") if isinstance(chunk.get("embedding"), list) else None,
+            "embedding_model": str(chunk.get("embedding_model") or "").strip() or None,
         })
     if not payload:
         return False
@@ -410,7 +412,7 @@ def list_agent_memory_chunks(*, owner_id: str, project_root: str, limit: int = 2
     try:
         res = (
             client.table("agent_memory_chunks")
-            .select("chunk_id, owner_id, project_root, source_path, title, content, chunk_index, chunk_count, content_hash, updated_at")
+            .select("chunk_id, owner_id, project_root, source_path, title, content, chunk_index, chunk_count, content_hash, updated_at, embedding, embedding_model")
             .eq("owner_id", owner_id)
             .eq("project_root", str(project_root or ".").strip() or ".")
             .order("updated_at", desc=True)
@@ -423,6 +425,27 @@ def list_agent_memory_chunks(*, owner_id: str, project_root: str, limit: int = 2
         return None
     data = getattr(res, "data", None)
     return data if isinstance(data, list) else []
+
+
+def get_latest_agent_job_result(*, owner_id: str, project_root: str) -> dict[str, Any] | None:
+    client = get_supabase_admin()
+    if not client:
+        return None
+    try:
+        res = (
+            client.table("agent_jobs")
+            .select("id, owner_id, project_root, build_mode, input, status, result, completed_at, updated_at, created_at")
+            .eq("owner_id", owner_id)
+            .eq("project_root", str(project_root or ".").strip() or ".")
+            .in_("status", ["completed", "failed"])
+            .order("completed_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        data = getattr(res, "data", None) or []
+        return data[0] if data and isinstance(data[0], dict) else None
+    except Exception:
+        return None
 
 
 def get_agent_memory_chunks_summary(*, owner_id: str, project_root: str, limit: int = 1000) -> dict[str, Any] | None:

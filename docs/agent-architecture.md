@@ -2,11 +2,14 @@
 
 Appora agent is being reset around explicit boundaries instead of procedural orchestration.
 
+Appora has one coding agent. Workspace and Full Preview are UI layouts around that same agent: Workspace is editor-first, while Full Preview is only a larger preview-first surface. They must share the same runtime, tools, memory, validation, and repair behavior.
+
 ## Runtime boundaries
 
-1. **Graph runtime**
-   - owns state transitions
-   - decides which phase runs next
+1. **Appora linear runtime v2**
+   - owns phase transitions through `AgentDriver`
+   - uses `AgentRunController` to bound driver steps, LLM calls, and tool calls
+   - writes a compact `run_ledger` and internal runtime hook trace for auditability
    - keeps refinement optional and explicit
 
 2. **Intent boundary**
@@ -32,9 +35,14 @@ Appora agent is being reset around explicit boundaries instead of procedural orc
 5. **MCP registry + execution loop**
    - discovers declared MCP servers from workspace or project config
    - surfaces capability boundaries to the agent runtime
-   - can execute MCP tool calls during the graph loop, then feed real tool results back into the next draft pass
+   - can execute MCP tool calls during the runtime loop, then feed real tool results back into the next draft pass
 
-6. **Browser validation boundary**
+6. **Read-only scout boundary**
+   - runs only for complex/gede/rumit/production-style tasks
+   - uses project-scoped read-only tools such as `dependency_graph`, `component_index`, and `route_map`
+   - feeds compact scout summaries into context and trace without allowing parallel file writes
+
+7. **Browser validation boundary**
    - preview audit can fall back to static HTML inspection
    - when Playwright + Node runtime are available, preview audit can inspect the live DOM in a real browser context
    - browser-backed validation should stay honest about fallbacks and runtime gaps

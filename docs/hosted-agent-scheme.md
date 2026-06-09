@@ -5,8 +5,9 @@ Target product: a Vercel serverless web builder for non-coders, with Supabase as
 ## Product Contract
 
 - Users should describe outcomes in plain language.
-- Clara owns end-to-end product building and should make sensible product decisions from vague briefs.
-- Raka is the scoped copilot for focused edits, review, and explanation.
+- Appora has one coding agent. Workspace and Full Preview are UI layouts around the same agent, not separate personas or separate runtimes.
+- In Workspace layout, the agent should stay close to the active file, editor state, project tree, and current user momentum.
+- In Full Preview layout, the same agent should work preview-first with more screen space for reviewing the running app, while keeping the same tools, memory, validation, and repair loop.
 - The app must not depend on a local terminal, local folders, or long-running server state in hosted mode.
 - Text project files are persisted in Supabase and hydrated into `/tmp` only as a request-time working cache.
 
@@ -23,16 +24,11 @@ Target product: a Vercel serverless web builder for non-coders, with Supabase as
 
 ## Provider Strategy
 
-Provider access is BYOK. The hosted product should guide non-coders toward the least-friction provider:
+Provider access is BYOK. The hosted product should guide non-coders toward the least-friction routing path:
 
-- OpenRouter: recommended default for trial/free users. Prefer `openrouter/free`, `:free`, or cheap models first.
-- OpenAI: familiar path for non-coders. It can use trial/account credits when available, but should be described as token-billed rather than unlimited free-tier.
-- Anthropic: careful edit path for users with API credits.
-- Groq: fast OpenAI-compatible free-plan path for users who want paste-key-and-build behavior with rate limits.
-- Gemini: Google AI Studio path for users who already have Google/Gemini keys and free quota.
-- Together AI: broad open-source model catalog through an OpenAI-compatible API.
-- Cerebras: smaller catalog, very fast inference for supported open models.
-- xAI: Grok model path for users with xAI API access.
+- 9Router is the primary agent route. Users paste a 9Router endpoint/key, then 9Router handles the underlying provider/model routing.
+- Managed Appora 9Router can provide a hosted free route when configured server-side.
+- Direct provider catalog entries can remain visible for migration or legacy settings, but the intended hosted agent architecture is one Appora agent routed through 9Router.
 
 The wrapper should:
 

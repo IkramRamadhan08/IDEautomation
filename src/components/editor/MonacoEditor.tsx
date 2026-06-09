@@ -1,5 +1,4 @@
 import React from "react";
-import { type OnMount } from "@monaco-editor/react";
 import { type AgentAction, type AgentLiveItem, type FileBuffer } from "../../types";
 import { PanelBottomClose, PanelBottomOpen, RotateCcw, Save, Sparkles, TerminalSquare, Trash2 } from "lucide-react";
 import { terminalRun } from "../../api";
@@ -23,8 +22,6 @@ interface MonacoEditorProps {
   onOpenFile: (path: string) => void;
   onBufferChange: (path: string, content: string) => void;
 }
-
-const LazyEditor = React.lazy(() => import("@monaco-editor/react"));
 
 export const MonacoEditor: React.FC<MonacoEditorProps> = React.memo(({
   activeFile,
@@ -77,11 +74,9 @@ export const MonacoEditor: React.FC<MonacoEditorProps> = React.memo(({
   const visibleActions = recentActions.slice(-5);
   const visibleTools = agentLiveItems.filter(isOperationalLiveItem).slice(-4);
   const hasActivity = terminalHistory.length > 0 || visibleActions.length > 0 || visibleTools.length > 0;
-
-  const handleEditorMount: OnMount = (editor) => {
-    requestAnimationFrame(() => editor.layout());
-    window.setTimeout(() => editor.layout(), 80);
-  };
+  const activeContent = activeBuffer?.content || "";
+  const lineCount = Math.max(1, activeContent.split("\n").length);
+  const lineNumbers = Array.from({ length: Math.min(lineCount, 400) }, (_, index) => index + 1);
 
   const runFreeShellCommand = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -189,29 +184,31 @@ export const MonacoEditor: React.FC<MonacoEditorProps> = React.memo(({
           <div className="hybridPrimarySurface">
             {activeFile ? (
               <div className="codeEditorShell">
-                <React.Suspense fallback={<div className="emptyEditor"><div className="emptyState"><div className="emptyStateTitle">Loading editor…</div></div></div>}>
-                  <LazyEditor
-                    path={activeFile}
-                    height="100%"
-                    width="100%"
-                    language={languageForFile(activeFile)}
-                    value={activeBuffer?.content || ""}
-                    onMount={handleEditorMount}
-                    onChange={(next) => onBufferChange(activeFile, next ?? "")}
-                    theme={appTheme === "dark" ? "vs-dark" : "light"}
-                    options={{
-                      automaticLayout: true,
-                      minimap: { enabled: false },
-                      fontSize: 13,
-                      lineHeight: 22,
-                      tabSize: 2,
-                      smoothScrolling: true,
-                      scrollBeyondLastLine: false,
-                      wordWrap: "on",
-                      padding: { top: 18, bottom: 18 },
-                    }}
+                <div className="nvimTopline">
+                  <span className="nvimMode">NORMAL</span>
+                  <span className="nvimPath">{activeFile}</span>
+                  <span className="nvimLanguage">{languageForFile(activeFile)}</span>
+                </div>
+                <div className="nvimEditorBody">
+                  <div className="nvimGutter" aria-hidden="true">
+                    {lineNumbers.map((line) => <span key={line}>{line}</span>)}
+                    {lineCount > lineNumbers.length ? <span>...</span> : null}
+                  </div>
+                  <textarea
+                    className="codeTextArea"
+                    value={activeContent}
+                    onChange={(event) => onBufferChange(activeFile, event.target.value)}
+                    spellCheck={false}
+                    autoCapitalize="off"
+                    autoComplete="off"
+                    autoCorrect="off"
+                    aria-label={`${languageForFile(activeFile)} editor for ${activeFile}`}
                   />
-                </React.Suspense>
+                </div>
+                <div className="nvimStatusline">
+                  <span>{activeBuffer?.dirty ? "[+]" : "[-]"} {activeFile.split("/").pop()}</span>
+                  <span>{lineCount} lines</span>
+                </div>
               </div>
             ) : (
               <div className="emptyEditor">

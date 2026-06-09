@@ -87,7 +87,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         <div className="settingsGrid compactSettingsGrid">
           <div className="settingsSection compactSettingsSection settingsSectionWide">
             <div className="settingsRowHead">
-              <div className="brainTitle">Mode</div>
+              <div className="brainTitle">Layout</div>
               <div className="providerStatusLine compactStatusLine">
                 <span className="providerStatusChip">{identity?.managed_workspace_mode === "user" ? "User" : "Session"}</span>
                 <span className={`providerStatusChip ${settings?.supabase_rag_status === "ready" ? "connected" : "disconnected"}`}>
@@ -111,6 +111,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               >
                 Full Preview
               </button>
+            </div>
+            <div className="settingsSubtle compactHint">
+              Satu Appora Agent dipakai di dua layout. Workspace memberi editor, files, dan preview dalam satu permukaan; Full Preview cuma memperbesar area preview untuk review app.
             </div>
           </div>
 

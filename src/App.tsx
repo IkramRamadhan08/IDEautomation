@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { Toaster, toast } from "sonner";
-import { getCachedSupabaseAccessToken, supabase } from "./lib/supabase";
+import { getCachedSupabaseAccessToken, supabase, supabaseConfigured } from "./lib/supabase";
 
 import "./app.css";
 import {
@@ -98,6 +98,7 @@ const SettingsModal = lazy(() => import("./components/settings/SettingsModal").t
 const HybridWorkspace = lazy(() => import("./modes/HybridWorkspace").then((module) => ({ default: module.HybridWorkspace })));
 const FullAgentWorkspace = lazy(() => import("./modes/FullAgentWorkspace").then((module) => ({ default: module.FullAgentWorkspace })));
 const astronautLoaderUrl = new URL("../Astronaut Illustration.webm", import.meta.url).href;
+const localDevAuthEnabled = Boolean(import.meta.env.DEV && !supabaseConfigured);
 
 type AppTheme = "light" | "dark";
 
@@ -210,6 +211,18 @@ export default function App() {
   const [showExplorerPane, setShowExplorerPane] = useState(true);
   const [showAssistPane, setShowAssistPane] = useState(true);
   const [assistPaneWidth, setAssistPaneWidth] = useState(getDefaultAssistPaneWidth);
+
+  const localDevUser = (): GoogleAuthStatus => ({
+    ok: true,
+    authenticated: true,
+    phase: "local-dev",
+    user: {
+      sub: "local-dev-user",
+      email: "local@appora.dev",
+      name: "Local Appora Tester",
+      picture: null,
+    },
+  });
 
   const modelFromSettings = (provider: ProviderChoice, source: SettingsInfo | null): string => {
     if (!source) return "";
@@ -380,6 +393,17 @@ export default function App() {
     };
 
     const minimumLoader = new Promise((resolve) => window.setTimeout(resolve, 850));
+    if (localDevAuthEnabled) {
+      setProjectSetupError("");
+      setGoogleAuth(localDevUser());
+      minimumLoader.then(() => {
+        if (mounted) setGoogleAuthLoading(false);
+      });
+      return () => {
+        mounted = false;
+      };
+    }
+
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       applySessionAuth(session);
       await minimumLoader;
@@ -509,14 +533,14 @@ export default function App() {
         setWorkspaceSetupComplete(false);
         return;
       }
-      if (isHostedBrowser()) {
+      if (isHostedBrowser() || localDevAuthEnabled) {
         const provisioned = await provisionWorkspace();
         if (requestAuthUserKey !== latestAuthUserKeyRef.current) return;
         setWs(provisioned.path);
         setWorkspaceSetupComplete(false);
       }
     } catch {
-      if (!isHostedBrowser()) return;
+      if (!isHostedBrowser() && !localDevAuthEnabled) return;
       try {
         const provisioned = await provisionWorkspace();
         if (requestAuthUserKey !== latestAuthUserKeyRef.current) return;
@@ -545,14 +569,23 @@ export default function App() {
       navigateTo("/app");
       return;
     }
+    if (localDevAuthEnabled) {
+      setProjectSetupError("");
+      setGoogleAuth(localDevUser());
+      setGoogleAuthLoading(false);
+      navigateTo("/app");
+      return;
+    }
     void startGoogleLogin("/app");
   };
 
   const logoutToStart = async () => {
-    try {
-      await supabase.auth.signOut();
-    } catch {
-      // ignore sign-out transport errors and clear local state anyway
+    if (!localDevAuthEnabled) {
+      try {
+        await supabase.auth.signOut();
+      } catch {
+        // ignore sign-out transport errors and clear local state anyway
+      }
     }
     resetClientIdentity();
     clearWorkspaceUiState();
@@ -1309,7 +1342,7 @@ export default function App() {
 
   const quickSwitchBuildMode = (mode: BuildMode) => {
     setBuildMode(mode);
-    void updateSettings({ build_mode: mode });
+    setBuildModeDraft(mode);
     if (hasVerifiedHostedAuth) {
       void updateUserPreferences({ build_mode: mode });
     }
@@ -1408,8 +1441,8 @@ export default function App() {
               </div>
               <div className="apporaPromptLine">Build a booking app with auth, admin dashboard, and deploy notes.</div>
               <div className="apporaAgentRows">
-                <div><Bot size={17} /><strong>Appora Agent</strong><span>one autonomous coder with tools, memory, terminal, preview, and repair loop</span></div>
-                <div><Terminal size={17} /><strong>Two surfaces</strong><span>Workspace for editor-first work, Full Preview for product-first delivery</span></div>
+                <div><Bot size={17} /><strong>One Appora Agent</strong><span>one powerful coding agent with tools, memory, terminal, preview, validation, and repair loop</span></div>
+                <div><Terminal size={17} /><strong>Two layouts</strong><span>Workspace is editor-first, Full Preview is the same agent with a larger preview</span></div>
               </div>
             </div>
             <div className="apporaNodeGrid">
@@ -1848,11 +1881,8 @@ export default function App() {
   const renderFullAgentMode = () => (
     <FullAgentWorkspace
       ws={ws}
-      selectedProject={selectedProject}
       previewUrl={previewUrl}
       previewFrameKey={previewFrameKey}
-      agentStatus={agentStatus}
-      workingMsg={workingMsg}
       onEnsurePreviewRunning={ensurePreviewRunning}
     />
   );

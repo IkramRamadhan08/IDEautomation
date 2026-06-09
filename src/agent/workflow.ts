@@ -392,32 +392,36 @@ function previewWarningIssueCount(audit: PreviewAuditResult | null) {
 }
 
 function toAuditSnapshot(label: string, trace: AgentRunTrace, makeId: () => string, evidence?: RunEvidence): AgentAuditSnapshot {
+  const memoryHits = trace.memory_hits || [];
+  const skills = trace.skills || [];
+  const mcpServers = trace.mcp_servers || [];
+  const mcpToolsUsed = trace.mcp_tools_used || [];
   return {
     id: makeId(),
     label,
     passes: trace.passes,
     contextFiles: trace.context_files || [],
     finalConfidence: trace.final_confidence,
-    memoryHits: trace.memory_hits.map((hit) => ({
+    memoryHits: memoryHits.map((hit) => ({
       kind: hit.kind,
       source: hit.source,
       title: hit.title,
       score: hit.score,
       text: hit.text,
     })),
-    skills: trace.skills.map((skill) => ({
+    skills: skills.map((skill) => ({
       skillId: skill.skill_id,
       title: skill.title,
       source: skill.source,
     })),
-    mcpServers: trace.mcp_servers.map((server) => ({
+    mcpServers: mcpServers.map((server) => ({
       name: server.name,
       transport: server.transport,
       target: server.target,
       tools: server.tools,
       source: server.source,
     })),
-    mcpToolsUsed: trace.mcp_tools_used.map((tool) => ({
+    mcpToolsUsed: mcpToolsUsed.map((tool) => ({
       server: tool.server,
       tool: tool.tool,
       ok: tool.ok,
@@ -515,10 +519,14 @@ const LIVE_LEDGER_PHASES: Record<string, { phase: string; kind: string; label: s
 function pushRunTrace(pushAgentLiveItem: WorkflowArgs["pushAgentLiveItem"], trace: AgentRunTrace | undefined) {
   if (!trace) return;
 
-  const memoryCount = trace.memory_hits.length;
-  const skillCount = trace.skills.length;
-  const mcpUsedCount = trace.mcp_tools_used.length;
-  const mcpSeenCount = trace.mcp_servers.length;
+  const memoryHits = trace.memory_hits || [];
+  const skills = trace.skills || [];
+  const mcpToolsUsed = trace.mcp_tools_used || [];
+  const mcpServers = trace.mcp_servers || [];
+  const memoryCount = memoryHits.length;
+  const skillCount = skills.length;
+  const mcpUsedCount = mcpToolsUsed.length;
+  const mcpSeenCount = mcpServers.length;
   const planCount = trace.plan?.length || 0;
   const verificationCount = trace.verification?.length || 0;
   const taskStatus = trace.task_state?.status;
@@ -544,7 +552,7 @@ function pushRunTrace(pushAgentLiveItem: WorkflowArgs["pushAgentLiveItem"], trac
       role: "tool",
       tone: "default",
       text: "Memory yang kepake di run ini.",
-      meta: trace.memory_hits.slice(0, 4).map((hit) => `${hit.title} (${hit.kind})`).join(" • "),
+      meta: memoryHits.slice(0, 4).map((hit) => `${hit.title} (${hit.kind})`).join(" • "),
     });
   }
 
@@ -617,6 +625,40 @@ function retryActionsForFailedShell(results: ShellActionRun[]): AgentAction[] {
       return true;
     })
     .map((command) => ({ type: "shell", command }));
+}
+
+function formatCompletionReportBubble(report: Record<string, unknown> | null, fallback: string) {
+  if (!report) {
+    return {
+      tone: "default" as AgentLiveItem["tone"],
+      text: fallback || "Run selesai.",
+      meta: null,
+    };
+  }
+
+  const ok = report.ok === true;
+  const state = String(report.state || (ok ? "complete" : "blocked"));
+  const summary = String(report.summary || fallback || (ok ? "Run selesai dan tervalidasi." : "Run berhenti dengan blocker."));
+  const criteria = Array.isArray(report.criteria)
+    ? report.criteria
+        .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+        .slice(0, 5)
+        .map((item) => `${String(item.label || "check")}: ${String(item.status || "unknown")}`)
+    : [];
+  const residualRisks = Array.isArray(report.residual_risks)
+    ? report.residual_risks.map(String).filter(Boolean).slice(0, 3)
+    : [];
+  const metaParts = [
+    `state=${state}`,
+    criteria.length ? criteria.join(" | ") : "",
+    residualRisks.length ? `risk: ${residualRisks.join(" | ")}` : "",
+  ].filter(Boolean);
+
+  return {
+    tone: ok ? "success" as AgentLiveItem["tone"] : "error" as AgentLiveItem["tone"],
+    text: summary,
+    meta: metaParts.join(" • ") || null,
+  };
 }
 
 function installCommandForMissingProjectTool(validation: ProjectValidationRun | null): AgentAction | null {
@@ -1319,7 +1361,9 @@ export async function runAgentWorkflow({
               if (!prev) return nativeStream ? spokenChunk.trimStart() : spokenChunk;
               return nativeStream ? `${prev}${spokenChunk}` : `${prev} ${spokenChunk}`;
             });
-            appendAssistantLiveText(spokenChunk, "default", nativeStream);
+            if (!nativeStream) {
+              appendAssistantLiveText(spokenChunk, "default", false);
+            }
           }
           if (message) {
             setWorkingMsg(message);
@@ -1405,7 +1449,7 @@ export async function runAgentWorkflow({
   ): Promise<{ changes: AgentChange[]; actions: AgentAction[] }> => {
     let nextChanges = initialChanges;
     let nextActions = initialActions;
-    const maxConflictRepairPasses = buildMode === "full-agent" ? 2 : 1;
+    const maxConflictRepairPasses = 2;
 
     for (let pass = 0; pass <= maxConflictRepairPasses; pass += 1) {
       try {
@@ -1873,12 +1917,12 @@ export async function runAgentWorkflow({
     let latestPreviewAudit = previewAudit;
     let latestShellResults = shellResults;
     let latestVerifierFailures = mainVerifierFailures;
-    const maxRepairPasses = buildMode === "full-agent" ? 2 : (friendlyFreeTierMode ? 1 : 2);
+    const maxRepairPasses = 2;
     const needsRepair = () => {
       const validationFailing = Boolean(latestValidation && !latestValidation.ok);
       const shellFailing = latestShellResults.some((result) => !result.ok);
       const previewFailing = previewBlockingIssueCount(latestPreviewAudit) > 0;
-      return shellFailing || validationFailing || (buildMode === "full-agent" || !friendlyFreeTierMode ? previewFailing : false);
+      return shellFailing || validationFailing || previewFailing;
     };
     const hasValidationIssues = Boolean(latestValidation && !latestValidation.ok);
     const hasPreviewIssues = previewBlockingIssueCount(latestPreviewAudit) > 0;
@@ -1895,7 +1939,7 @@ export async function runAgentWorkflow({
           role: "tool",
           tone: "working",
           text: `Repair loop ${pass}/${maxRepairPasses}: agent baca output terbaru lalu coba benerin lagi.`,
-          meta: buildMode === "full-agent" ? "Full Preview reliability loop: maksimal 2 repair" : (friendlyFreeTierMode ? "free-tier guard: maksimal 1 repair" : "bounded loop: maksimal 2 repair"),
+          meta: buildMode === "full-agent" ? "Full Preview reliability loop: maksimal 2 repair" : "Workspace reliability loop: maksimal 2 repair",
         });
 
         const validationReport = latestValidation && !latestValidation.ok ? formatValidationReport(latestValidation, 6000) : null;
@@ -2031,6 +2075,18 @@ export async function runAgentWorkflow({
       };
     } else if (changes.length > 0 && shouldDrivePreview) {
       finalStatus = auditedPreviewUrl ? "Preview refreshed after agent changes" : "Preview live after agent changes";
+    }
+
+    if (backendAutoExecuted) {
+      const finalBubble = formatCompletionReportBubble(backendCompletionReport, res.spoken || finalStatus);
+      setAgentReply(finalBubble.text);
+      setAgentLiveItems((prev) => {
+        const lastUser = [...prev].reverse().find((item) => item.role === "user");
+        return [
+          lastUser || { id: makeAgentLiveId(), role: "user", tone: "default", text: agentInput.trim() },
+          { id: makeAgentLiveId(), role: "assistant", tone: finalBubble.tone, text: finalBubble.text, meta: finalBubble.meta },
+        ];
+      });
     }
 
     setEditorStatus(finalStatus);

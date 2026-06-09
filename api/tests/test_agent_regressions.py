@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -13,9 +14,10 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException, Request
 
+from api.aider_benchmarks import AiderBenchmarkConfig, _benchmark_env, _parse_aider_stats, build_docker_preflight_command, build_docker_run_command, build_setup_commands, run_aider_benchmark, write_appora_aider_model_profile
 from api.agent_intent import AgentIntent, classify_agent_intent
-from api.agent_benchmarks import run_agent_benchmark_suite
-from api.agent_evals import run_clara_contract_eval, validate_template_registry
+from api.agent_benchmarks import AGENT_BENCHMARK_SCENARIOS, _score_live_result, run_agent_benchmark_suite
+from api.agent_evals import run_appora_contract_eval, run_memory_failure_recall_eval, validate_template_registry
 from api.agent_observability import build_agent_observability
 from api.agent_planner import build_long_horizon_plan, update_long_horizon_progress
 from api import agent as agent_mod
@@ -23,7 +25,7 @@ from api import agent_runtime as agent_runtime_mod
 from api import main as main_mod
 from api.agent_mcp import MCPServerInfo, MCPToolCallResult, MCPToolInfo, discover_mcp_servers, execute_mcp_tool, suggest_mcp_actions
 from api.agent_memory import get_agent_memory_overview, remember_agent_run, retrieve_agent_memory
-from api.agent_runtime import AgentDriver, _autonomous_continue_node, _compact_no_work_context, _deep_preflight_node, _draft_node, _finalize_node, _intent_with_active_work_context, _is_no_work_recovery, _looks_like_plan_only_reply, _max_tool_loops_for_run, _plan_node, _remember_project_work_state, _route_after_strict_retry, _route_after_verify, _should_finalize_to_emergency_fallback, _should_run_deep_preflight, _should_run_refinement, _strict_agentic_retry_node, _verify_node, get_agent_mode_profile, prepare_agent_context, run_agent_pipeline
+from api.agent_runtime import AgentDriver, AgentRunController, _autonomous_continue_node, _compact_no_work_context, _deep_preflight_node, _draft_node, _finalize_node, _intent_with_active_work_context, _is_no_work_recovery, _looks_like_plan_only_reply, _max_tool_loops_for_run, _plan_node, _remember_project_work_state, _route_after_strict_retry, _route_after_verify, _should_finalize_to_emergency_fallback, _should_run_deep_preflight, _should_run_readonly_scout, _should_run_refinement, _strict_agentic_retry_node, _verify_node, get_agent_mode_profile, prepare_agent_context, run_agent_pipeline
 from api.agent_editing import assess_edit_strategy
 from api.agent_skills import build_validation_plan, detect_project_stack, resolve_agent_skills
 from api.agent_tools import execute_local_tool
@@ -213,9 +215,165 @@ class AgentIntentRegressionTests(unittest.TestCase):
             CURRENT_SESSION_ID.reset(session_token)
             STATE.get("sessions", {}).pop(session_id, None)
 
+    def test_persisted_active_work_state_promotes_short_continuation_after_session_state_loss(self) -> None:
+        session_id = "test-session-persisted-active-continuation"
+        user_id = "test-user-persisted-active-continuation"
+        STATE.get("sessions", {}).pop(session_id, None)
+        session_token = CURRENT_SESSION_ID.set(session_id)
+        user_token = CURRENT_USER_ID.set(user_id)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                ws_root = Path(tmp)
+                project_dir = ws_root / "demo"
+                project_dir.mkdir(parents=True)
+                remember_agent_run(
+                    ws_root,
+                    project_root="demo",
+                    build_mode="full-agent",
+                    interaction_kind="command",
+                    user_input="Perbaiki preview blank sampai audit lolos",
+                    spoken="Build sudah lolos tapi preview audit masih blocking.",
+                    changes=[{"path": "demo/src/App.tsx", "new_content": "export default function App(){return <main>Ready</main>}"}],
+                    actions=[{"type": "shell", "command": "npm run build"}],
+                    task_state={
+                        "goal": "Perbaiki preview blank sampai audit lolos",
+                        "status": "blocked",
+                        "next_action": "Repair verifier failure: preview-audit",
+                        "blocking_checks": ["preview-audit"],
+                        "horizon": {
+                            "enabled": True,
+                            "status": "blocked",
+                            "complexity": "high",
+                            "current_checkpoint": "preview",
+                            "checkpoints": [
+                                {"id": "context", "title": "Audit current app", "status": "done"},
+                                {"id": "preview", "title": "Repair preview evidence", "status": "blocked"},
+                                {"id": "validation", "title": "Run validation", "status": "pending"},
+                            ],
+                            "completion_criteria": [
+                                "Root route renders visible product UI",
+                                "Preview audit reports no blank screen",
+                            ],
+                        },
+                        "nodes": [
+                            {"id": "01-act", "stage": "act", "title": "Patch render path", "status": "done"},
+                            {"id": "02-verify", "stage": "verify", "title": "Preview audit", "status": "blocked"},
+                        ],
+                    },
+                    completion_report={
+                        "ok": False,
+                        "state": "blocked",
+                        "summary": "Blocked: preview audit still reports blank screen.",
+                        "criteria": [
+                            {"label": "validation", "status": "passed"},
+                            {"label": "preview", "status": "failed"},
+                        ],
+                    },
+                    failure_analysis={
+                        "primary_failure": "preview audit failed: blank screen",
+                        "suggested_next_move": "Inspect root route and repair visible content.",
+                    },
+                    execution_outcome={
+                        "ok": False,
+                        "state": "blocked",
+                        "summary": "Blocked: preview audit still reports blank screen.",
+                        "validation_ok": True,
+                        "preview_ok": False,
+                        "repair_passes": 1,
+                        "validation_commands": ["npm run build"],
+                    },
+                )
+
+                STATE.get("sessions", {}).pop(session_id, None)
+                base = classify_agent_intent("lanjut", build_mode="full-agent", active_file="src/App.tsx", open_files=["src/App.tsx"])
+                inherited, context = _intent_with_active_work_context(
+                    base,
+                    text="lanjut",
+                    project_root="demo",
+                    build_mode="full-agent",
+                    ws_root=ws_root,
+                )
+
+            self.assertEqual(inherited.kind, "command")
+            self.assertTrue(inherited.should_write_files)
+            self.assertIn("ACTIVE WORK CONTINUATION", context or "")
+            self.assertIn("Perbaiki preview blank sampai audit lolos", context or "")
+            self.assertIn("Task status: blocked", context or "")
+            self.assertIn("Long-horizon checkpoints: context=done, preview=blocked, validation=pending", context or "")
+            self.assertIn("Long-horizon completion criteria: Root route renders visible product UI | Preview audit reports no blank screen", context or "")
+            self.assertIn("Last execution summary: Blocked: preview audit still reports blank screen.", context or "")
+            self.assertIn("Suggested next move: Inspect root route and repair visible content.", context or "")
+        finally:
+            CURRENT_USER_ID.reset(user_token)
+            CURRENT_SESSION_ID.reset(session_token)
+            STATE.get("sessions", {}).pop(session_id, None)
+
+    def test_supabase_job_memory_promotes_short_continuation_when_project_profile_is_empty(self) -> None:
+        session_id = "test-session-supabase-job-continuation"
+        user_id = "test-user-supabase-job-continuation"
+        STATE.get("sessions", {}).pop(session_id, None)
+        session_token = CURRENT_SESSION_ID.set(session_id)
+        user_token = CURRENT_USER_ID.set(user_id)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                ws_root = Path(tmp)
+                (ws_root / "demo").mkdir(parents=True)
+                job_row = {
+                    "id": "job-1",
+                    "project_root": "demo",
+                    "build_mode": "full-agent",
+                    "input": "Fix build failure without repeating CSS-only repair",
+                    "result": {
+                        "spoken": "Build masih gagal setelah repair CSS-only.",
+                        "changes": [{"path": "demo/src/app.css", "new_content": "body{opacity:1}\n"}],
+                        "actions": [{"type": "shell", "command": "npm run build"}],
+                        "trace": {
+                            "task_state": {
+                                "goal": "Fix build failure without repeating CSS-only repair",
+                                "status": "blocked",
+                                "next_action": "Inspect root route and change implementation shape.",
+                                "blocking_checks": ["preview-audit"],
+                            },
+                        },
+                        "execution": {
+                            "completion_report": {
+                                "ok": False,
+                                "state": "blocked",
+                                "summary": "Blocked: CSS-only repair repeated the broken approach.",
+                                "criteria": [{"label": "preview", "status": "failed"}],
+                            },
+                            "failure_analysis": {
+                                "primary_failure": "preview audit failed after CSS-only repair",
+                                "suggested_next_move": "Patch src/App.tsx render path instead of editing CSS again.",
+                                "repeated_failure": True,
+                            },
+                        },
+                    },
+                }
+
+                base = classify_agent_intent("lanjut", build_mode="full-agent", active_file="src/App.tsx", open_files=["src/App.tsx"])
+                with patch("api.agent_memory.has_supabase", return_value=True), \
+                    patch("api.agent_memory.get_latest_agent_job_result", return_value=job_row):
+                    inherited, context = _intent_with_active_work_context(
+                        base,
+                        text="lanjut",
+                        project_root="demo",
+                        build_mode="full-agent",
+                        ws_root=ws_root,
+                    )
+
+            self.assertEqual(inherited.kind, "command")
+            self.assertIn("Fix build failure without repeating CSS-only repair", context or "")
+            self.assertIn("Last execution summary: Blocked: CSS-only repair repeated the broken approach.", context or "")
+            self.assertIn("Suggested next move: Patch src/App.tsx render path instead of editing CSS again.", context or "")
+        finally:
+            CURRENT_USER_ID.reset(user_token)
+            CURRENT_SESSION_ID.reset(session_token)
+            STATE.get("sessions", {}).pop(session_id, None)
+
 
 class AgentRuntimeContextRegressionTests(unittest.TestCase):
-    def test_agent_driver_runs_pipeline_without_langgraph_static_graph(self) -> None:
+    def test_agent_driver_runs_pipeline_without_legacy_static_graph(self) -> None:
         self.assertFalse(hasattr(agent_runtime_mod, "_AGENT_GRAPH"))
         self.assertIsInstance(AgentDriver(max_steps=12), AgentDriver)
         with tempfile.TemporaryDirectory() as tmp:
@@ -249,6 +407,135 @@ class AgentRuntimeContextRegressionTests(unittest.TestCase):
         self.assertEqual(result["changes"][0]["path"], "demo/src/App.tsx")
         self.assertIn("provider=test", result["log"])
         self.assertTrue(any(item.get("stage") == "act" for item in result["trace"]["plan"]))
+
+    def test_agent_runtime_does_not_depend_on_langgraph_package(self) -> None:
+        repo_root = Path(__file__).resolve().parents[2]
+        dependency_files = [
+            repo_root / "api" / "pyproject.toml",
+            repo_root / "api" / "requirements.txt",
+            repo_root / "api" / "appora_api.egg-info" / "PKG-INFO",
+            repo_root / "api" / "appora_api.egg-info" / "requires.txt",
+        ]
+
+        for path in dependency_files:
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("langgraph", text.lower(), str(path))
+
+        for path in (repo_root / "api").glob("*.py"):
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            self.assertNotIn("from langgraph", text, str(path))
+            self.assertNotIn("import langgraph", text, str(path))
+
+    def test_agent_trace_exposes_run_controller_ledger_and_hooks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src").mkdir(parents=True)
+            (project_dir / "package.json").write_text('{"scripts":{"build":"vite build"},"dependencies":{"@vitejs/plugin-react":"latest","vite":"latest","typescript":"latest","react":"latest","react-dom":"latest"}}\n', encoding="utf-8")
+            (project_dir / "src" / "App.tsx").write_text("export default function App() { return <main>Old</main> }\n", encoding="utf-8")
+            req = SimpleNamespace(
+                input="maksimalin app besar ini jadi dashboard serius",
+                project_root="demo",
+                build_mode="full-agent",
+                active_file="src/App.tsx",
+                open_files=["src/App.tsx"],
+                current_content=None,
+                selection=None,
+                preview_url=None,
+                editor_status=None,
+                auto_execute=False,
+                asset_paths=[],
+            )
+            suggestion = SimpleNamespace(
+                spoken="Dashboard serius sudah dibuat.",
+                log="provider=test",
+                changes=[{"path": "src/App.tsx", "new_content": "export default function App() { return <main><h1>Operations dashboard</h1></main> }\n"}],
+                actions=[],
+            )
+
+            with patch("api.agent_runtime.suggest", return_value=suggestion):
+                result = run_agent_pipeline(req, ws_root=ws_root, emit=lambda *_args: None)
+
+        trace = result["trace"]
+        self.assertIn("run_controller", trace)
+        self.assertGreaterEqual(trace["run_controller"]["driver_steps"], 1)
+        self.assertGreaterEqual(trace["run_controller"]["tool_calls"], 1)
+        self.assertTrue(trace["run_ledger"])
+        self.assertTrue(any(item["name"] == "driver_phase_start" for item in trace["runtime_hooks"]))
+        self.assertTrue(any(item["kind"] == "driver_phase" for item in trace["run_ledger"]))
+
+    def test_agent_driver_stops_cleanly_when_llm_budget_is_exhausted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            (ws_root / "demo").mkdir()
+            req = SimpleNamespace(
+                input="hello",
+                project_root="demo",
+                build_mode="hybrid",
+                active_file=None,
+                open_files=[],
+                current_content=None,
+                selection=None,
+                preview_url=None,
+                editor_status=None,
+                auto_execute=False,
+                asset_paths=[],
+            )
+            ctx = prepare_agent_context(req, ws_root)
+            controller = AgentRunController(max_driver_steps=8, max_llm_calls=0, max_tool_calls=2)
+            result = AgentDriver(max_steps=8).run({
+                "input": req.input,
+                "context": ctx,
+                "run_controller": controller,
+                "tool_iterations": 0,
+                "mcp_call_count": 0,
+                "autonomous_iterations": 0,
+                "emit": lambda *_args: None,
+            })
+
+        self.assertTrue(result["run_controller"].stopped)
+        self.assertIn("LLM call budget exhausted", result["run_controller"].stop_reason)
+        trace = result["trace"]
+        self.assertTrue(trace["run_controller"]["stopped"])
+        self.assertTrue(any(item["kind"] == "budget_stop" for item in trace["run_ledger"]))
+        self.assertTrue(any(item["name"] == "budget_stop" for item in trace["runtime_hooks"]))
+
+    def test_readonly_scout_runs_for_complex_full_agent_tasks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src" / "components").mkdir(parents=True)
+            (project_dir / "package.json").write_text('{"dependencies":{"react":"latest","react-dom":"latest","vite":"latest","typescript":"latest"}}\n', encoding="utf-8")
+            (project_dir / "src" / "main.tsx").write_text("import App from './App';\n", encoding="utf-8")
+            (project_dir / "src" / "App.tsx").write_text("import Button from './components/Button';\nexport default function App(){return <Button />}\n", encoding="utf-8")
+            (project_dir / "src" / "components" / "Button.tsx").write_text("export default function Button(){return <button>Run</button>}\n", encoding="utf-8")
+            req = SimpleNamespace(
+                input="build project gede dengan workflow profesional",
+                project_root="demo",
+                build_mode="full-agent",
+                active_file="src/App.tsx",
+                open_files=["src/App.tsx"],
+                current_content=None,
+                selection=None,
+                preview_url=None,
+                editor_status=None,
+                auto_execute=False,
+                asset_paths=[],
+            )
+            suggestion = SimpleNamespace(
+                spoken="Workflow profesional sudah siap.",
+                log="provider=test",
+                changes=[{"path": "src/App.tsx", "new_content": "export default function App(){return <main><h1>Workflow</h1></main>}\n"}],
+                actions=[],
+            )
+
+            with patch("api.agent_runtime.suggest", return_value=suggestion):
+                result = run_agent_pipeline(req, ws_root=ws_root, emit=lambda *_args: None)
+
+        scouts = result["trace"]["scouts"]
+        self.assertGreaterEqual(len(scouts), 2)
+        self.assertIn("dependency_graph", {item["tool"] for item in scouts})
+        self.assertTrue(any(item["kind"] == "readonly_scout" for item in result["trace"]["run_ledger"]))
 
     def test_task_state_tracks_plan_and_verify_outcome(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -571,6 +858,45 @@ class AgentRuntimeContextRegressionTests(unittest.TestCase):
             self.assertEqual(_route_after_verify(state), "autonomous_continue")
             state["autonomous_iterations"] = 4
             self.assertEqual(_route_after_verify(state), "finalize")
+
+    def test_blank_preview_autonomous_continue_adds_render_path_directive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            project_dir.mkdir()
+            req = SimpleNamespace(
+                input="fix preview blank putih sampai selesai",
+                project_root="demo",
+                build_mode="full-agent",
+                active_file=None,
+                open_files=[],
+                current_content=None,
+                asset_paths=[],
+            )
+            ctx = prepare_agent_context(req, ws_root)
+            ctx.trace_task_state = {
+                "status": "blocked",
+                "next_action": "Repair verifier failure: has-work-output",
+                "blocking_checks": ["has-work-output"],
+            }
+            ctx.trace_verification = [
+                {"name": "has-work-output", "ok": False, "severity": "hard", "detail": "Build request produced no file changes/actions."}
+            ]
+            state = {
+                "context": ctx,
+                "input": req.input,
+                "spoken": "Aku cek dulu.",
+                "changes": [],
+                "actions": [],
+                "autonomous_iterations": 0,
+                "emit": lambda *_args: None,
+            }
+
+            continued = _autonomous_continue_node(state)
+
+        self.assertIn("blank preview repair", continued["context"].extra_context.lower())
+        self.assertIn("index.html/main.tsx", continued["context"].extra_context)
+        self.assertIn("App renders a non-null route for '/'", continued["context"].extra_context)
 
     def test_autonomous_continue_marks_repeated_verifier_failure_and_changes_strategy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -938,7 +1264,7 @@ class AgentRuntimeContextRegressionTests(unittest.TestCase):
 
         paths = [item["path"] for item in drafted["changes"]]
         self.assertIn("demo/src/App.tsx", paths)
-        self.assertIn("demo/src/styles.css", paths)
+        self.assertIn("demo/src/app.css", paths)
         self.assertTrue(any(item.get("type") == "shell" and "npm run build" in item.get("command", "") for item in drafted["actions"]))
         app = next(item["new_content"] for item in drafted["changes"] if item["path"] == "demo/src/App.tsx")
         self.assertIn("Arka Pratama", app)
@@ -973,7 +1299,7 @@ class AgentRuntimeContextRegressionTests(unittest.TestCase):
 
         paths = [item["path"] for item in changes]
         self.assertIn("demo/src/App.tsx", paths)
-        self.assertIn("demo/src/styles.css", paths)
+        self.assertIn("demo/src/app.css", paths)
         self.assertIn("demo/index.html", paths)
         self.assertNotIn("demo/src/pages/Home.tsx", paths)
         app = next(item["new_content"] for item in changes if item["path"] == "demo/src/App.tsx")
@@ -1109,9 +1435,67 @@ class AgentRuntimeContextRegressionTests(unittest.TestCase):
             self.assertNotIn("quality_scan", used_tools)
             self.assertIn("stack_profile", next_state["context"].extra_context)
             self.assertIn("validation_plan", next_state["context"].extra_context)
-            self.assertIn("skill_catalog", next_state["context"].extra_context)
+            self.assertIn("skill profile:", next_state["context"].extra_context)
+            self.assertIn("mcp boundary:", next_state["context"].extra_context)
+            self.assertNotIn('"matched_count"', next_state["context"].extra_context)
+            self.assertNotIn('"servers"', next_state["context"].extra_context)
             self.assertIn("Only this minimal bootstrap was automatic", next_state["context"].extra_context)
             self.assertTrue(any(data.get("tool") == "mcp_status" for event, data in emitted if event == "tool_call"))
+
+    def test_preview_blank_repair_gets_targeted_route_scout_without_large_task_keyword(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src" / "pages").mkdir(parents=True)
+            (project_dir / "package.json").write_text('{"scripts":{"build":"vite build"},"dependencies":{"vite":"latest","react":"latest"}}\n', encoding="utf-8")
+            (project_dir / "src" / "App.tsx").write_text("export default function App(){return <main/>}\n", encoding="utf-8")
+            (project_dir / "src" / "pages" / "Home.tsx").write_text("export function Home(){return <section/>}\n", encoding="utf-8")
+            req = SimpleNamespace(
+                input="Preview halaman ini blank putih. Cari penyebabnya dan perbaiki.",
+                project_root="demo",
+                build_mode="full-agent",
+                active_file="src/App.tsx",
+                open_files=["src/App.tsx", "src/pages/Home.tsx", "package.json"],
+                current_content=None,
+                selection=None,
+                preview_url=None,
+                editor_status=None,
+                asset_paths=[],
+            )
+            ctx = prepare_agent_context(req, ws_root)
+            emitted: list[tuple[str, dict]] = []
+            state = {"context": ctx, "input": req.input, "emit": lambda event, data: emitted.append((event, data))}
+
+            self.assertTrue(_should_run_readonly_scout(ctx, req.input))
+            next_state = _deep_preflight_node(state)
+
+            used_tools = [item["tool"] for item in next_state["context"].trace_local_tools_used]
+            self.assertIn("route_map", used_tools)
+            self.assertIn("dependency_graph", used_tools)
+            self.assertIn("scout route_map:", next_state["context"].extra_context)
+            self.assertIn("scout dependency_graph:", next_state["context"].extra_context)
+
+    def test_live_agent_benchmark_metrics_include_capability_overhead(self) -> None:
+        result = {
+            "changes": [{"path": "src/App.tsx", "new_content": "task priority owner status progress metric empty"}],
+            "actions": [{"type": "tool", "tool": "validation_plan"}],
+            "execution": {"ok": True},
+            "trace": {
+                "local_tools": [{"tool": "repo_overview"}, {"tool": "skill_catalog"}, {"tool": "mcp_status"}],
+                "skills": [{"skill_id": "react-vite-typescript"}, {"skill_id": "ui-polish"}],
+                "mcp_tools": [{"server": "github", "tool": "search"}],
+                "scouts": [{"tool": "route_map"}],
+            },
+        }
+        events = [{"event": "tool_call"}, {"event": "tool_output"}]
+
+        scored = _score_live_result(result, events, scenario=AGENT_BENCHMARK_SCENARIOS[0], duration_seconds=3)
+
+        metrics = scored["metrics"]
+        self.assertEqual(metrics["local_tool_count"], 3)
+        self.assertEqual(metrics["skill_count"], 2)
+        self.assertEqual(metrics["mcp_call_count"], 1)
+        self.assertEqual(metrics["scout_count"], 1)
 
     def test_no_work_recovery_uses_compact_action_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1143,7 +1527,7 @@ class AgentRuntimeContextRegressionTests(unittest.TestCase):
         self.assertIn("concrete file changes", compact)
         self.assertIn("local tool/MCP actions", compact)
 
-    def test_full_agent_no_work_first_autonomous_pass_uses_executable_fallback(self) -> None:
+    def test_full_agent_no_work_second_autonomous_pass_uses_executable_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ws_root = Path(tmp)
             project_dir = ws_root / "demo"
@@ -1158,6 +1542,46 @@ class AgentRuntimeContextRegressionTests(unittest.TestCase):
             (project_dir / "src" / "styles.css").write_text("body{margin:0}\n", encoding="utf-8")
             req = SimpleNamespace(
                 input="Bikin mini dashboard task tracker profesional untuk tim produk.",
+                project_root="demo",
+                build_mode="full-agent",
+                active_file="src/App.jsx",
+                open_files=["src/App.jsx", "src/styles.css"],
+                current_content=None,
+                selection=None,
+                preview_url=None,
+                editor_status=None,
+                asset_paths=[],
+            )
+            ctx = prepare_agent_context(req, ws_root)
+            ctx.trace_task_state = {"status": "blocked", "next_action": "Repair verifier failure: has-work-output", "blocking_checks": ["has-work-output"]}
+            state = {
+                "context": ctx,
+                "input": req.input,
+                "autonomous_iterations": 2,
+                "emit": lambda *_args: None,
+            }
+
+            result = _draft_node(state)
+
+        self.assertIn("no-work-fallback", result["log"])
+        self.assertTrue(result["changes"])
+        self.assertTrue(any(str(item.get("path") or "").endswith("src/App.jsx") for item in result["changes"]))
+
+    def test_blank_preview_no_work_first_autonomous_pass_uses_executable_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src").mkdir(parents=True)
+            (project_dir / "package.json").write_text(
+                json.dumps({"scripts": {"build": "vite build"}, "dependencies": {"vite": "latest", "react": "latest", "react-dom": "latest"}}),
+                encoding="utf-8",
+            )
+            (project_dir / "index.html").write_text('<div id="root"></div><script type="module" src="/src/main.jsx"></script>\n', encoding="utf-8")
+            (project_dir / "src" / "main.jsx").write_text("import './styles.css'; import App from './App.jsx';\n", encoding="utf-8")
+            (project_dir / "src" / "App.jsx").write_text("export default function App(){ return null; }\n", encoding="utf-8")
+            (project_dir / "src" / "styles.css").write_text("body{margin:0}\n", encoding="utf-8")
+            req = SimpleNamespace(
+                input="Preview halaman ini blank putih, perbaiki sampai tampil dan build lolos.",
                 project_root="demo",
                 build_mode="full-agent",
                 active_file="src/App.jsx",
@@ -1450,11 +1874,11 @@ class AgentPatchEditingRegressionTests(unittest.TestCase):
 
 
 class AgentVerifierRegressionTests(unittest.TestCase):
-    def _ctx(self, ws_root: Path, prompt: str = "fix app imports"):
+    def _ctx(self, ws_root: Path, prompt: str = "fix app imports", build_mode: str = "full-agent"):
         req = SimpleNamespace(
             input=prompt,
             project_root="demo",
-            build_mode="full-agent",
+            build_mode=build_mode,
             active_file="src/App.tsx",
             open_files=["src/App.tsx"],
             current_content=None,
@@ -1848,6 +2272,187 @@ class AgentVerifierRegressionTests(unittest.TestCase):
 
         verification = {item["name"]: item for item in result["context"].trace_verification}
         self.assertTrue(verification["frontend-style-runtime"]["ok"])
+
+    def test_verifier_blocks_custom_classes_without_css_definition(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src" / "pages").mkdir(parents=True)
+            (project_dir / "src" / "app.css").write_text(
+                ".templatePanel { border: 1px solid #ddd; }\n",
+                encoding="utf-8",
+            )
+            ctx = self._ctx(ws_root, prompt="add QA readiness section")
+
+            state = {
+                "context": ctx,
+                "input": "add QA readiness section",
+                "changes": [{
+                    "path": "src/pages/Dashboard.tsx",
+                    "new_content": (
+                        "export default function Dashboard() { return <section className=\"templatePanel\">"
+                        "<div className=\"qaList\"><span className=\"qaItem\">Build passes</span></div>"
+                        "</section>; }\n"
+                    ),
+                }],
+                "actions": [],
+            }
+            result = _verify_node(state)
+
+        verification = {item["name"]: item for item in result["context"].trace_verification}
+        self.assertFalse(verification["frontend-style-runtime"]["ok"])
+        self.assertIn("qaList", verification["frontend-style-runtime"]["detail"])
+        self.assertIn("qaItem", verification["frontend-style-runtime"]["detail"])
+
+    def test_verifier_blocks_custom_classes_without_css_definition_in_workspace_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src" / "pages").mkdir(parents=True)
+            (project_dir / "src" / "app.css").write_text(".templatePanel { border: 1px solid #ddd; }\n", encoding="utf-8")
+            ctx = self._ctx(ws_root, prompt="add QA readiness section", build_mode="hybrid")
+
+            state = {
+                "context": ctx,
+                "input": "add QA readiness section",
+                "changes": [{
+                    "path": "src/pages/Dashboard.tsx",
+                    "new_content": (
+                        "export default function Dashboard() { return <section className=\"templatePanel\">"
+                        "<div className=\"qaList\"><span className={true ? \"qaItem done\" : \"qaItem\"}>Build passes</span></div>"
+                        "</section>; }\n"
+                    ),
+                }],
+                "actions": [],
+            }
+            result = _verify_node(state)
+
+        verification = {item["name"]: item for item in result["context"].trace_verification}
+        self.assertFalse(verification["frontend-style-runtime"]["ok"])
+        self.assertIn("qaList", verification["frontend-style-runtime"]["detail"])
+        self.assertIn("qaItem", verification["frontend-style-runtime"]["detail"])
+
+    def test_verifier_accepts_custom_classes_defined_in_changed_css(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src" / "pages").mkdir(parents=True)
+            ctx = self._ctx(ws_root, prompt="add QA readiness section")
+
+            state = {
+                "context": ctx,
+                "input": "add QA readiness section",
+                "changes": [
+                    {
+                        "path": "src/pages/Dashboard.tsx",
+                        "new_content": (
+                            "export default function Dashboard() { return <section className=\"qaList\">"
+                            "<span className=\"qaItem\">Build passes</span></section>; }\n"
+                        ),
+                    },
+                    {
+                        "path": "src/app.css",
+                        "new_content": ".qaList { display: grid; gap: 8px; }\n.qaItem { font-weight: 700; }\n",
+                    },
+                ],
+                "actions": [],
+            }
+            result = _verify_node(state)
+
+        verification = {item["name"]: item for item in result["context"].trace_verification}
+        self.assertTrue(verification["frontend-style-runtime"]["ok"])
+
+    def test_verifier_ignores_classname_template_expression_syntax(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src" / "components").mkdir(parents=True)
+            ctx = self._ctx(ws_root, prompt="add app sidebar")
+
+            state = {
+                "context": ctx,
+                "input": "add app sidebar",
+                "changes": [
+                    {
+                        "path": "src/components/Sidebar.tsx",
+                        "new_content": (
+                            "export default function Sidebar({ modules, active }) { return <nav>"
+                            "{modules.map((mod) => <button className={`sidebarNav ${active === mod.id ? \"active\" : \"\"}`} "
+                            "aria-current={active === mod.id ? 'page' : undefined}>{mod.label}</button>)}"
+                            "</nav> }\n"
+                        ),
+                    },
+                    {
+                        "path": "src/app.css",
+                        "new_content": ".sidebarNav { display: flex; }\n.active { color: red; }\n",
+                    },
+                ],
+                "actions": [],
+            }
+            result = _verify_node(state)
+
+        verification = {item["name"]: item for item in result["context"].trace_verification}
+        self.assertTrue(verification["frontend-style-runtime"]["ok"], verification["frontend-style-runtime"]["detail"])
+
+    def test_verifier_accepts_compound_css_selector_classes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src").mkdir(parents=True)
+            ctx = self._ctx(ws_root, prompt="add error state")
+
+            state = {
+                "context": ctx,
+                "input": "add error state",
+                "changes": [
+                    {
+                        "path": "src/App.tsx",
+                        "new_content": (
+                            "export default function App() { return <div className=\"stateBox error\" role=\"alert\">"
+                            "Invalid rule</div> }\n"
+                        ),
+                    },
+                    {
+                        "path": "src/app.css",
+                        "new_content": ".stateBox { padding: 12px; }\n.stateBox.error { border-color: #a33b2f; }\n",
+                    },
+                ],
+                "actions": [],
+            }
+            result = _verify_node(state)
+
+        verification = {item["name"]: item for item in result["context"].trace_verification}
+        self.assertTrue(verification["frontend-style-runtime"]["ok"], verification["frontend-style-runtime"]["detail"])
+
+    def test_verifier_ignores_dynamic_class_prefix_tokens(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src").mkdir(parents=True)
+            ctx = self._ctx(ws_root, prompt="add severity list")
+
+            state = {
+                "context": ctx,
+                "input": "add severity list",
+                "changes": [
+                    {
+                        "path": "src/App.tsx",
+                        "new_content": (
+                            "export default function App() { const severity = 'critical'; "
+                            "return <span className={`severity-${severity} incidentTime`}>Critical</span> }\n"
+                        ),
+                    },
+                    {
+                        "path": "src/app.css",
+                        "new_content": ".severity-critical { color: #b42318; }\n.incidentTime { font-size: 12px; }\n",
+                    },
+                ],
+                "actions": [],
+            }
+            result = _verify_node(state)
+
+        verification = {item["name"]: item for item in result["context"].trace_verification}
+        self.assertTrue(verification["frontend-style-runtime"]["ok"], verification["frontend-style-runtime"]["detail"])
 
     def test_verifier_blocks_placeholder_media_in_full_agent_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2359,6 +2964,60 @@ class MemoryRetrievalRegressionTests(unittest.TestCase):
         self.assertEqual(hits.long_term[0].source, "docs/remote.md")
         self.assertIn("LONG-TERM MEMORY (supabase-hash-vector-chunks)", hits.prompt)
 
+    def test_supabase_real_embedding_memory_retrieval_uses_remote_embedding_when_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            docs_dir = project_dir / "docs"
+            docs_dir.mkdir(parents=True)
+            (docs_dir / "local.md").write_text("Local fallback chunk.", encoding="utf-8")
+            remote_rows = [
+                {
+                    "source_path": "docs/wrong.md",
+                    "title": "docs/wrong.md",
+                    "content": "Unrelated old route notes.",
+                    "chunk_index": 0,
+                    "chunk_count": 1,
+                    "content_hash": "hash-wrong",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "embedding": [0.0, 1.0, 0.0],
+                    "embedding_model": "text-embedding-3-small",
+                },
+                {
+                    "source_path": "docs/real.md",
+                    "title": "docs/real.md",
+                    "content": "Real embedding chunk about preview rollback and build outcome memory.",
+                    "chunk_index": 0,
+                    "chunk_count": 1,
+                    "content_hash": "hash-real",
+                    "updated_at": "2026-01-02T00:00:00Z",
+                    "embedding": [1.0, 0.0, 0.0],
+                    "embedding_model": "text-embedding-3-small",
+                },
+            ]
+
+            with patch("api.agent_memory.has_supabase", return_value=True), \
+                patch("api.agent_memory.get_agent_memory_chunks_table_status", return_value="ready"), \
+                patch("api.agent_memory._real_embedding_backend_ready", return_value=True), \
+                patch("api.agent_memory._embed_real_texts", return_value=[[1.0, 0.0, 0.0]]), \
+                patch("api.agent_memory._sync_supabase_doc_chunks", return_value=True), \
+                patch("api.agent_memory.list_agent_memory_chunks", return_value=remote_rows):
+                hits = retrieve_agent_memory(
+                    ws_root,
+                    project_dir=project_dir,
+                    project_root="demo",
+                    interaction_kind="command",
+                    query="preview rollback build outcome memory",
+                    active_rel="src/App.tsx",
+                    open_files=["src/App.tsx"],
+                    limit_long=2,
+                )
+
+        self.assertEqual(hits.backend, "supabase-real-embedding-chunks")
+        self.assertTrue(hits.long_term)
+        self.assertEqual(hits.long_term[0].source, "docs/real.md")
+        self.assertIn("LONG-TERM MEMORY (supabase-real-embedding-chunks)", hits.prompt)
+
     def test_project_profile_memory_is_persisted_and_retrieved(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ws_root = Path(tmp)
@@ -2384,6 +3043,22 @@ class MemoryRetrievalRegressionTests(unittest.TestCase):
                     {"path": "demo/src/app.css", "new_content": "body { margin: 0 }"},
                 ],
                 actions=[{"type": "shell", "command": "npm run build"}],
+                task_state={
+                    "goal": "Bikin UI minimalist elegant buat deploy Vercel dan Supabase",
+                    "status": "blocked",
+                    "next_action": "Finish preview polish then rerun validation.",
+                    "horizon": {
+                        "enabled": True,
+                        "status": "blocked",
+                        "current_checkpoint": "preview-polish",
+                        "checkpoints": [
+                            {"id": "context", "title": "Read project shape", "status": "done"},
+                            {"id": "preview-polish", "title": "Polish preview UI", "status": "blocked"},
+                            {"id": "validation", "title": "Validate build", "status": "pending"},
+                        ],
+                        "completion_criteria": ["Preview feels production-ready", "Build passes"],
+                    },
+                },
             )
 
             with patch("api.agent_memory.has_supabase", return_value=False):
@@ -2406,6 +3081,59 @@ class MemoryRetrievalRegressionTests(unittest.TestCase):
             self.assertIn("React", hits.prompt)
             self.assertIn("Supabase-backed hosted workflow", hits.prompt)
             self.assertIn("minimalist, elegant", hits.prompt)
+            self.assertIn("Horizon: current=preview-polish", hits.prompt)
+            self.assertIn("context=done, preview-polish=blocked, validation=pending", hits.prompt)
+
+    def test_execution_outcome_memory_is_persisted_and_retrieved(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            project_dir.mkdir(parents=True)
+            (project_dir / "package.json").write_text('{"scripts":{"build":"vite build"}}\n', encoding="utf-8")
+
+            remember_agent_run(
+                ws_root,
+                project_root="demo",
+                build_mode="full-agent",
+                interaction_kind="command",
+                user_input="Perbaiki preview blank dan validasi build",
+                spoken="Patched render path.",
+                changes=[{"path": "demo/src/App.tsx", "new_content": "export default function App(){return <main>Ready</main>}"}],
+                actions=[{"type": "shell", "command": "npm run build"}],
+                execution_outcome={
+                    "ok": True,
+                    "summary": "Complete: backend execution criteria passed.",
+                    "state": "completed",
+                    "validation_commands": ["npm run build"],
+                    "validation_ok": True,
+                    "preview_ok": True,
+                    "preview_summary": "mode=browser; h1=Ready; blocking=0",
+                    "repair_passes": 1,
+                    "rollback_count": 1,
+                    "rollback_paths": ["demo/src/App.tsx"],
+                    "final_changed_paths": ["demo/src/App.tsx", "demo/src/app.css"],
+                },
+            )
+
+            with patch("api.agent_memory.has_supabase", return_value=False):
+                hits = retrieve_agent_memory(
+                    ws_root,
+                    project_dir=project_dir,
+                    project_root="demo",
+                    interaction_kind="command",
+                    query="lanjut preview build repair outcome",
+                    active_rel="src/App.tsx",
+                    open_files=["src/App.tsx"],
+                    limit_short=4,
+                    limit_long=0,
+                )
+
+        self.assertIn("EXECUTION OUTCOME", hits.prompt)
+        self.assertIn("validation=passed", hits.prompt)
+        self.assertIn("preview=passed", hits.prompt)
+        self.assertIn("repairs=1", hits.prompt)
+        self.assertIn("rollbacks=1", hits.prompt)
+        self.assertIn("final_changed_paths=demo/src/App.tsx, demo/src/app.css", hits.prompt)
 
 
 class PreviewAuditRegressionTests(unittest.TestCase):
@@ -2965,10 +3693,69 @@ class PreviewAuditRegressionTests(unittest.TestCase):
         self.assertEqual(audit["audit_mode"], "agent-browser")
         self.assertEqual(audit["visual_summary"]["mode"], "agent-browser")
         self.assertEqual(audit["evidence_pack"]["audit_mode"], "agent-browser")
+        self.assertTrue(audit["visual_evidence"]["has_screen"])
+        self.assertTrue(audit["visual_evidence"]["has_dom_snapshot"])
+        self.assertEqual(audit["visual_evidence"]["screen_backend"], "agent-browser")
+        self.assertIn("visual_evidence", audit["evidence_pack"])
         self.assertIn("repair_brief", audit["evidence_pack"])
         flattened = [" ".join(cmd) for cmd in calls]
         self.assertTrue(any("agent-browser --session-name" in item and "open http://127.0.0.1:4173" in item for item in flattened))
         self.assertTrue(any("set viewport 390 844" in item for item in flattened))
+
+    def test_completion_report_records_visual_review_evidence(self) -> None:
+        execution = {
+            "ok": True,
+            "apply": {"ok": True, "applied": 1, "count": 1},
+            "validation": {"ok": True, "ran": 1, "failed": 0, "commands": ["npm run build"]},
+            "preview_audit": {
+                "ok": True,
+                "skipped": False,
+                "audit_mode": "agent-browser",
+                "issue_details": [],
+                "visual_evidence": {
+                    "has_screen": True,
+                    "has_screenshot": True,
+                    "screenshot_path": "/tmp/appora-preview-audit.png",
+                    "screen_backend": "agent-browser",
+                    "has_dom_snapshot": True,
+                    "desktop_viewport": {"width": 1440, "height": 900},
+                    "mobile_viewport": {"width": 390, "height": 844},
+                },
+            },
+        }
+
+        report = main_mod._execution_completion_report(execution)
+
+        criteria = {item["label"]: item for item in report["criteria"]}
+        self.assertEqual(criteria["visual-review"]["status"], "passed")
+        self.assertIn("screen=agent-browser", criteria["visual-review"]["detail"])
+        self.assertIn("screenshot=/tmp/appora-preview-audit.png", criteria["visual-review"]["detail"])
+
+    def test_completion_report_blocks_frontend_completion_without_browser_visual_evidence(self) -> None:
+        execution = {
+            "ok": True,
+            "apply": {"ok": True, "applied": 1, "count": 1},
+            "validation": {"ok": True, "ran": 1, "failed": 0, "commands": ["npm run build"]},
+            "preview_audit": {
+                "ok": True,
+                "skipped": False,
+                "audit_mode": "html",
+                "issue_details": [],
+                "visual_evidence": {
+                    "has_screen": False,
+                    "has_screenshot": False,
+                    "has_dom_snapshot": True,
+                },
+            },
+        }
+
+        report = main_mod._execution_completion_report(execution)
+
+        criteria = {item["label"]: item for item in report["criteria"]}
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["state"], "blocked")
+        self.assertEqual(criteria["visual-review"]["status"], "failed")
+        self.assertIn("visual-review", report["summary"])
 
     def test_preview_audit_prefers_agent_browser_then_falls_back_to_playwright(self) -> None:
         playwright_audit = {
@@ -4013,6 +4800,107 @@ class AgentToolsRegressionTests(unittest.TestCase):
         self.assertIn("Ready</main>", replace_preview.text)
         self.assertIn('"suggested_change"', replace_preview.text)
 
+    def test_local_tools_apply_swe_agent_and_aider_style_edits(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src").mkdir(parents=True)
+            (project_dir / "src" / "math.py").write_text(
+                "def add(a, b):\n"
+                "    return a + b\n"
+                "\n"
+                "def subtract(a, b):\n"
+                "    return a - b\n",
+                encoding="utf-8",
+            )
+            (project_dir / "src" / "App.tsx").write_text(
+                "export default function App() {\n"
+                "  return <main className=\"shell\">Old</main>\n"
+                "}\n",
+                encoding="utf-8",
+            )
+
+            line_apply = execute_local_tool(
+                ws_root,
+                project_dir,
+                tool_name="line_replace_apply",
+                arguments={
+                    "path": "demo/src/math.py",
+                    "start_line": 2,
+                    "end_line": 2,
+                    "replacement": "    return a + b + 1\n",
+                    "context": 1,
+                },
+            )
+            replace_apply = execute_local_tool(
+                ws_root,
+                project_dir,
+                tool_name="search_replace_apply",
+                arguments={
+                    "path": "demo/src/App.tsx",
+                    "search": "return <main className=\"shell\">Old</main>",
+                    "replace": "return <main className=\"shell\">Ready</main>",
+                    "context": 1,
+                },
+            )
+
+            math_text = (project_dir / "src" / "math.py").read_text(encoding="utf-8")
+            app_text = (project_dir / "src" / "App.tsx").read_text(encoding="utf-8")
+
+        self.assertTrue(line_apply.ok, line_apply.error)
+        self.assertIn("return a + b + 1", math_text)
+        self.assertIn('"applied": true', line_apply.text)
+        self.assertIn("--- demo/src/math.py", line_apply.text)
+        self.assertTrue(replace_apply.ok, replace_apply.error)
+        self.assertIn("Ready</main>", app_text)
+        self.assertIn('"strategy": "exact"', replace_apply.text)
+
+    def test_local_tools_format_lint_fixes_json_and_reports_diff(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            project_dir.mkdir(parents=True)
+            (project_dir / "package.json").write_text('{"name":"demo","scripts":{"build":"vite build"}}\n', encoding="utf-8")
+
+            result = execute_local_tool(
+                ws_root,
+                project_dir,
+                tool_name="format_lint",
+                arguments={"project_root": "demo", "mode": "fix", "files": ["package.json"], "tools": ["json"]},
+            )
+            formatted = (project_dir / "package.json").read_text(encoding="utf-8")
+
+        self.assertTrue(result.ok, result.error)
+        self.assertIn('"applied": true', result.text)
+        self.assertIn('"tool": "json"', result.text)
+        self.assertIn("--- package.json", result.text)
+        self.assertIn('{\n  "name": "demo"', formatted)
+
+    def test_task_depth_gate_blocks_generic_fallback_for_large_frontend_app(self) -> None:
+        prompt = (
+            "Buat Ops Command Center untuk tim operasi SaaS enterprise. Workspace/dashboard bukan landing. "
+            "Sidebar modules Overview, Incidents, Deployments, Customers, Automation, Reports. "
+            "Topbar search/env/health/action, KPIs, timeline, pipeline, SLA list, customer table, filters, "
+            "incident detail panel, automation form validation/success, empty state, responsive."
+        )
+        changes = [
+            {
+                "path": "src/App.tsx",
+                "new_content": (
+                    "export default function App() {\n"
+                    "  return <main><h1>Task Operations Dashboard</h1><button>Add task</button></main>\n"
+                    "}\n"
+                ),
+            },
+            {"path": "src/App.css", "new_content": "@media (max-width: 720px) { main { padding: 12px; } }\n"},
+        ]
+
+        issues = agent_runtime_mod._task_depth_gate_issues(prompt, changes)
+
+        self.assertTrue(issues)
+        self.assertIn("large app", issues[0].lower())
+        self.assertIn("incidents", issues[0].lower())
+
     def test_local_tools_run_test_suite_and_capture_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ws_root = Path(tmp)
@@ -4081,6 +4969,85 @@ class AgentToolsRegressionTests(unittest.TestCase):
         self.assertIn("git add app.py", result.text)
         self.assertIn("git commit -m", result.text)
         self.assertEqual(commit_count, "1")
+
+    def test_local_tools_database_client_runs_sqlite_migration_and_query(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            project_dir.mkdir(parents=True)
+
+            migrate = execute_local_tool(
+                ws_root,
+                project_dir,
+                tool_name="database_client",
+                arguments={
+                    "project_root": "demo",
+                    "backend": "sqlite",
+                    "database": "app.db",
+                    "mode": "migrate",
+                    "sql": "CREATE TABLE tasks(id INTEGER PRIMARY KEY, title TEXT); INSERT INTO tasks(title) VALUES ('Ship agent');",
+                },
+            )
+            query = execute_local_tool(
+                ws_root,
+                project_dir,
+                tool_name="database_client",
+                arguments={
+                    "project_root": "demo",
+                    "backend": "sqlite",
+                    "database": "app.db",
+                    "mode": "query",
+                    "sql": "SELECT title FROM tasks ORDER BY id",
+                },
+            )
+
+        self.assertTrue(migrate.ok, migrate.error)
+        self.assertIn('"writes_performed": true', migrate.text)
+        self.assertTrue(query.ok, query.error)
+        self.assertIn("Ship agent", query.text)
+        self.assertIn('"columns": [', query.text)
+
+    def test_local_tools_git_manager_can_commit_locally_and_blocks_remote_without_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            project_dir.mkdir(parents=True)
+            subprocess.run(["git", "init"], cwd=project_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=project_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=project_dir, check=True, capture_output=True, text=True)
+            (project_dir / "app.py").write_text("print('old')\n", encoding="utf-8")
+            subprocess.run(["git", "add", "app.py"], cwd=project_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=project_dir, check=True, capture_output=True, text=True)
+            (project_dir / "app.py").write_text("print('new')\n", encoding="utf-8")
+
+            commit_result = execute_local_tool(
+                ws_root,
+                project_dir,
+                tool_name="git_manager",
+                arguments={"project_root": "demo", "mode": "commit", "message": "Update app output", "paths": ["app.py"]},
+            )
+            push_result = execute_local_tool(
+                ws_root,
+                project_dir,
+                tool_name="git_manager",
+                arguments={"project_root": "demo", "mode": "push"},
+            )
+            commit_count = subprocess.run(
+                ["git", "rev-list", "--count", "HEAD"],
+                cwd=project_dir,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            status = subprocess.run(["git", "status", "--short"], cwd=project_dir, check=True, capture_output=True, text=True).stdout
+
+        self.assertTrue(commit_result.ok, commit_result.error)
+        self.assertIn('"writes_performed": true', commit_result.text)
+        self.assertIn("Update app output", commit_result.text)
+        self.assertEqual(commit_count, "2")
+        self.assertEqual(status.strip(), "")
+        self.assertFalse(push_result.ok)
+        self.assertIn("allow_remote", push_result.error or push_result.text)
 
     def test_local_tools_docs_browser_fetches_public_https_docs_with_bounded_text(self) -> None:
         class FakeResponse:
@@ -4520,6 +5487,54 @@ class HostedProfileIdRegressionTests(unittest.TestCase):
 
 
 class AgentAutoExecuteRegressionTests(unittest.TestCase):
+    def test_auto_execute_reuses_successful_shell_validation_command(self) -> None:
+        session_id = "auto-execute-reuse-shell-validation-test"
+        STATE.get("sessions", {}).pop(session_id, None)
+        session_token = CURRENT_SESSION_ID.set(session_id)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                project = root / "demo"
+                (project / "src").mkdir(parents=True)
+                (project / "package.json").write_text('{"scripts":{"build":"vite build"}}\n', encoding="utf-8")
+                STATE["sessions"][session_id] = {
+                    "workspace": str(root),
+                    "runners": {},
+                    "agent_jobs": {},
+                    "oauth_pending": {},
+                    "google_user": None,
+                }
+                shell_result = {
+                    "ok": True,
+                    "project_root": "demo",
+                    "ran": 1,
+                    "results": [{"ok": True, "command": "npm run build", "stdout": "built", "stderr": "", "returncode": 0}],
+                }
+                calls: list[list[str]] = []
+
+                def fake_run_shell(*, actions, **_kwargs):
+                    calls.append([action.command for action in actions])
+                    return shell_result
+
+                with patch("api.main._infer_validation_commands", return_value=["npm run build"]), \
+                    patch("api.main._run_harness_shell_actions_internal", side_effect=fake_run_shell), \
+                    patch("api.main._auto_execute_preview_audit", return_value=None):
+                    execution = main_mod._auto_execute_agent_result(
+                        main_mod.AgentReq(input="build it", project_root="demo", auto_execute=True),
+                        [{"path": "demo/src/App.tsx", "new_content": "export default function App() { return <main>Ready</main>; }\n"}],
+                        [{"type": "shell", "command": "npm run build", "reason": "validate"}],
+                        lambda *_args: None,
+                    )
+
+                self.assertTrue(execution["ok"])
+                self.assertEqual(calls, [["npm run build"]])
+                self.assertEqual(execution["validation"]["reused"], 1)
+                self.assertEqual(execution["validation"]["ran"], 0)
+                self.assertTrue(execution["validation"]["ok"])
+        finally:
+            CURRENT_SESSION_ID.reset(session_token)
+            STATE.get("sessions", {}).pop(session_id, None)
+
     def test_repair_success_does_not_clear_preview_failure_without_preview_rerun(self) -> None:
         parent_execution = {
             "ok": False,
@@ -6135,7 +7150,8 @@ class AgentAutoExecuteRegressionTests(unittest.TestCase):
                 self.assertEqual(result["execution"]["shell"]["ran"], 1)
                 self.assertTrue(result["execution"]["shell"]["results"][0]["ok"])
                 self.assertTrue(result["execution"]["validation"]["ok"])
-                self.assertGreaterEqual(result["execution"]["validation"]["ran"], 1)
+                self.assertEqual(result["execution"]["validation"]["ran"], 0)
+                self.assertGreaterEqual(result["execution"]["validation"]["reused"], 1)
                 self.assertTrue(result["execution"]["run_ledger"])
                 ledger_phases = [item["phase"] for item in result["execution"]["run_ledger"]]
                 self.assertIn("observe", ledger_phases)
@@ -6163,12 +7179,26 @@ class AgentAutoExecuteRegressionTests(unittest.TestCase):
                 self.assertIn("summary", validation_output)
                 self.assertIn("commands", validation_output)
                 self.assertIn("results", validation_output)
+                self.assertGreaterEqual(result["execution"]["validation"]["reused"], 1)
                 self.assertTrue(any(item.get("tool") == "run-shell" and item.get("command") == "python3 -m compileall ." for item in command_calls))
-                self.assertTrue(any(item.get("tool") == "validate" for item in command_calls))
                 self.assertTrue(any(item.get("tool") == "run-shell" and item.get("status") == "passed" for item in command_outputs))
-                self.assertTrue(any(item.get("tool") == "validate" and item.get("returncode") == 0 for item in command_outputs))
-                self.assertTrue(any(item.get("tool") in {"run-shell", "validate"} and item.get("stream") == "stdout" for item in command_chunks))
+                self.assertTrue(any(item.get("tool") == "run-shell" and item.get("stream") == "stdout" for item in command_chunks))
                 self.assertEqual((project / "src" / "App.tsx").read_text(encoding="utf-8"), "agent edit\n")
+                with patch("api.agent_memory.has_supabase", return_value=False):
+                    memory = retrieve_agent_memory(
+                        root,
+                        project_dir=project,
+                        project_root="demo",
+                        interaction_kind="command",
+                        query="patch validate compile outcome",
+                        active_rel="src/App.tsx",
+                        open_files=["src/App.tsx"],
+                        limit_short=6,
+                        limit_long=0,
+                    )
+                self.assertIn("EXECUTION OUTCOME", memory.prompt)
+                self.assertIn("validation=passed", memory.prompt)
+                self.assertIn("python3 -m compileall .", memory.prompt)
         finally:
             CURRENT_SESSION_ID.reset(session_token)
             STATE.get("sessions", {}).pop(session_id, None)
@@ -6450,7 +7480,7 @@ class AgentAutoExecuteRegressionTests(unittest.TestCase):
             CURRENT_SESSION_ID.reset(session_token)
             STATE.get("sessions", {}).pop(session_id, None)
 
-    def test_backend_verifier_repair_uses_targeted_call_not_full_graph_restart(self) -> None:
+    def test_backend_verifier_repair_uses_targeted_call_not_full_pipeline_restart(self) -> None:
         session_id = "auto-execute-targeted-verifier-repair-test"
         STATE.get("sessions", {}).pop(session_id, None)
         session_token = CURRENT_SESSION_ID.set(session_id)
@@ -6481,7 +7511,7 @@ class AgentAutoExecuteRegressionTests(unittest.TestCase):
                     },
                 }
                 targeted = SimpleNamespace(
-                    spoken="Verifier fixed without graph restart.",
+                    spoken="Verifier fixed without pipeline restart.",
                     log="targeted",
                     changes=[{"path": "demo/README.md", "new_content": "fixed\n"}],
                     actions=[],
@@ -6892,7 +7922,7 @@ class AgentAutoExecuteRegressionTests(unittest.TestCase):
                 self.assertIn("Repair replay plan", repair_req.input)
                 self.assertIn('"command": "python3 -m compileall helper.py"', repair_req.input)
                 self.assertIn("include shell actions for non-validation replay commands", repair_req.input)
-                self.assertFalse(result["execution"]["validation"]["ok"])
+                self.assertTrue(result["execution"]["validation"]["ok"])
                 self.assertEqual(len(result["execution"]["repairs"]), 1)
                 repair_execution = result["execution"]["repairs"][0]["execution"]
                 self.assertTrue(repair_execution["ok"])
@@ -6911,7 +7941,7 @@ class AgentAutoExecuteRegressionTests(unittest.TestCase):
                     item for item in result["execution"]["completion_report"]["criteria"]
                     if item["label"] == "validation"
                 ]
-                self.assertEqual(validation_criteria[0]["status"], "superseded")
+                self.assertEqual(validation_criteria[0]["status"], "passed")
                 self.assertEqual((project / "bad.py").read_text(encoding="utf-8"), "print('ok')\n")
                 self.assertEqual((project / "helper.py").read_text(encoding="utf-8"), "value = 1\n")
         finally:
@@ -7351,14 +8381,16 @@ class ProviderCatalogRegressionTests(unittest.TestCase):
     def test_nine_router_status_reports_managed_free_router(self) -> None:
         from api import oauth_runtime
 
+        isolated_settings = SimpleNamespace(nine_router_base_url="http://127.0.0.1:20128/v1", nine_router_api_key="", nine_router_api_key_set=False)
         with patch.dict(
             "os.environ",
             {
                 "APPORA_MANAGED_9ROUTER_BASE_URL": "https://router.appora.ai/v1",
                 "APPORA_MANAGED_9ROUTER_API_KEY": "managed-key",
             },
-            clear=False,
-        ), patch("api.oauth_runtime.has_provider_secret", return_value=False):
+            clear=True,
+        ), patch("api.settings.settings", isolated_settings), \
+            patch("api.oauth_runtime.has_provider_secret", return_value=False):
             token = CURRENT_PROFILE_ID.set("sb-user-123")
             try:
                 status = oauth_runtime.nine_router_status()
@@ -7380,6 +8412,7 @@ class ProviderCatalogRegressionTests(unittest.TestCase):
             calls.append((url, headers.get("Authorization", "")))
             return 200, {"choices": [{"message": {"content": "{\"spoken\":\"ok\",\"changes\":[],\"actions\":[]}"}}]}, ""
 
+        isolated_settings = SimpleNamespace(nine_router_base_url="http://127.0.0.1:20128/v1", nine_router_api_key="", nine_router_api_key_set=False)
         with patch.dict(
             "os.environ",
             {
@@ -7387,8 +8420,9 @@ class ProviderCatalogRegressionTests(unittest.TestCase):
                 "APPORA_MANAGED_9ROUTER_API_KEY": "managed-key",
                 "APPORA_FREE_DAILY_MESSAGES": "1000",
             },
-            clear=False,
-        ), patch("api.oauth_runtime.has_provider_secret", return_value=False), \
+            clear=True,
+        ), patch("api.settings.settings", isolated_settings), \
+            patch("api.oauth_runtime.has_provider_secret", return_value=False), \
             patch("api.oauth_runtime._post_json", side_effect=fake_post):
             token = CURRENT_PROFILE_ID.set("sb-user-123")
             try:
@@ -7408,6 +8442,7 @@ class ProviderCatalogRegressionTests(unittest.TestCase):
             calls.append((url, str(payload.get("model")), headers.get("Authorization", "")))
             return 200, {"choices": [{"message": {"content": "{\"spoken\":\"ok\",\"changes\":[],\"actions\":[]}"}}]}, ""
 
+        isolated_settings = SimpleNamespace(nine_router_base_url="http://127.0.0.1:20128/v1", nine_router_api_key="", nine_router_api_key_set=False)
         with patch.dict(
             "os.environ",
             {
@@ -7415,8 +8450,9 @@ class ProviderCatalogRegressionTests(unittest.TestCase):
                 "APPORA_MANAGED_9ROUTER_API_KEY": "managed-key",
                 "APPORA_FREE_DAILY_MESSAGES": "1000",
             },
-            clear=False,
-        ), patch("api.oauth_runtime.has_provider_secret", return_value=False), \
+            clear=True,
+        ), patch("api.settings.settings", isolated_settings), \
+            patch("api.oauth_runtime.has_provider_secret", return_value=False), \
             patch("api.oauth_runtime._post_json", side_effect=fake_post):
             token = CURRENT_PROFILE_ID.set("sb-user-123")
             try:
@@ -7436,6 +8472,7 @@ class ProviderCatalogRegressionTests(unittest.TestCase):
             calls.append(str(payload.get("model")))
             return 200, {"choices": [{"message": {"content": "{\"spoken\":\"ok\",\"changes\":[],\"actions\":[]}"}}]}, ""
 
+        isolated_settings = SimpleNamespace(nine_router_base_url="http://127.0.0.1:20128/v1", nine_router_api_key="", nine_router_api_key_set=False)
         with patch.dict(
             "os.environ",
             {
@@ -7444,8 +8481,9 @@ class ProviderCatalogRegressionTests(unittest.TestCase):
                 "APPORA_MANAGED_FREE_MODEL": "kr/claude-sonnet-4.5",
                 "APPORA_FREE_DAILY_MESSAGES": "3",
             },
-            clear=False,
-        ), patch("api.oauth_runtime.has_provider_secret", return_value=False), \
+            clear=True,
+        ), patch("api.settings.settings", isolated_settings), \
+            patch("api.oauth_runtime.has_provider_secret", return_value=False), \
             patch("api.oauth_runtime._post_json", side_effect=fake_post):
             token = CURRENT_PROFILE_ID.set("sb-user-123")
             try:
@@ -7514,14 +8552,16 @@ class ProviderCatalogRegressionTests(unittest.TestCase):
     def test_managed_free_router_does_not_unlock_premium_alias_without_user_key(self) -> None:
         from api import oauth_runtime
 
+        isolated_settings = SimpleNamespace(nine_router_base_url="http://127.0.0.1:20128/v1", nine_router_api_key="", nine_router_api_key_set=False)
         with patch.dict(
             "os.environ",
             {
                 "APPORA_MANAGED_9ROUTER_BASE_URL": "https://router.appora.ai/v1",
                 "APPORA_MANAGED_9ROUTER_API_KEY": "managed-key",
             },
-            clear=False,
-        ), patch("api.oauth_runtime.has_provider_secret", return_value=False):
+            clear=True,
+        ), patch("api.settings.settings", isolated_settings), \
+            patch("api.oauth_runtime.has_provider_secret", return_value=False):
             result = oauth_runtime.nine_router_generate_json(model="cx/gpt-5.4", system="system", user="user")
 
         self.assertEqual(result["text"], "")
@@ -7801,8 +8841,8 @@ class ProjectTemplateRegressionTests(unittest.TestCase):
 
 
 class AgentEvalRegressionTests(unittest.TestCase):
-    def test_offline_clara_contract_eval_passes_core_scenarios(self) -> None:
-        result = run_clara_contract_eval()
+    def test_offline_appora_contract_eval_passes_core_scenarios(self) -> None:
+        result = run_appora_contract_eval()
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(len(result["scenarios"]), 5)
@@ -7814,8 +8854,264 @@ class AgentEvalRegressionTests(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         self.assertGreaterEqual(len(result["templates"]), 5)
 
+    def test_memory_failure_recall_eval_does_not_repeat_broken_approach(self) -> None:
+        result = run_memory_failure_recall_eval()
+
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(result["remembered_failure"])
+        self.assertTrue(result["did_not_repeat_css_only"])
+
 
 class AgentBenchmarkRegressionTests(unittest.TestCase):
+    def test_aider_benchmark_adapter_builds_official_polyglot_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "aider-test"
+            config = AiderBenchmarkConfig(
+                workspace=workspace,
+                run_name="smoke",
+                model="openai/kr/claude-haiku-4.5",
+                edit_format="whole",
+                threads=1,
+                num_tests=2,
+                keywords="python",
+                openai_api_base="http://host.docker.internal:20128/v1",
+            )
+
+            setup_commands = build_setup_commands(config)
+            run_command = build_docker_run_command(config)
+            dry = run_aider_benchmark(config, command_only=True)
+
+        self.assertIn(["git", "clone", "https://github.com/Aider-AI/aider.git", str(workspace / "aider")], setup_commands)
+        self.assertIn("aider-benchmark", run_command)
+        self.assertIn("OPENAI_API_BASE=http://host.docker.internal:20128/v1", run_command)
+        self.assertIn("./benchmark/benchmark.py", run_command[-1])
+        self.assertIn("--exercises-dir polyglot-benchmark", run_command[-1])
+        self.assertIn("--num-tests 2", run_command[-1])
+        self.assertIn("--keywords python", run_command[-1])
+        self.assertEqual(dry["mode"], "aider-polyglot")
+        self.assertEqual(dry["commands"]["run"], run_command)
+        self.assertEqual(dry["commands"]["preflight"], build_docker_preflight_command(config))
+
+    def test_aider_benchmark_adapter_profiles_appora_model_for_repair_context(self) -> None:
+        config = AiderBenchmarkConfig(workspace=Path(".tmp-aider-test"), run_name="smoke")
+
+        run_command = build_docker_run_command(config)
+        joined = " ".join(run_command)
+
+        self.assertEqual(config.model, "openai/appora")
+        self.assertIn("AIDER_MODEL_SETTINGS_FILE=/aider/.appora/aider-model-settings.yml", run_command)
+        self.assertIn("AIDER_MODEL_METADATA_FILE=/aider/.appora/aider-model-metadata.json", run_command)
+        self.assertIn("PYTHONPATH=/aider/.appora", run_command)
+        self.assertIn("AIDER_MAX_CHAT_HISTORY_TOKENS=8192", run_command)
+        self.assertIn("APPORA_AIDER_MAX_TEST_ERROR_CHARS=24000", run_command)
+        self.assertIn("APPORA_AIDER_MAX_TEST_CONTRACT_CHARS=18000", run_command)
+        self.assertIn("AIDER_WEAK_MODEL=openai/appora", run_command)
+        self.assertIn("--model openai/appora", run_command[-1])
+        self.assertIn("--edit-format whole", run_command[-1])
+        self.assertIn("--tries 3", run_command[-1])
+        self.assertIn("python3 /aider/.appora/patch_benchmark.py", run_command[-1])
+        self.assertIn(".appora/aider-model-settings.yml", joined)
+
+        profile = write_appora_aider_model_profile(config)
+        settings = Path(profile["settings_path"]).read_text(encoding="utf-8")
+        sitecustomize = Path(profile["sitecustomize_path"]).read_text(encoding="utf-8")
+        benchmark_patch = Path(profile["benchmark_patch_path"]).read_text(encoding="utf-8")
+        self.assertIn("final trailing newlines", settings)
+        self.assertIn("default the end/range parameter to the start value", settings)
+        self.assertIn("check user-defined/custom definitions before builtins", settings)
+        self.assertIn("execute literal numbers/strings in stored definitions as literals", settings)
+        self.assertIn("snapshot/expand the previous definition", settings)
+        self.assertIn("models.Model.__init__ = _appora_model_init", sitecustomize)
+        self.assertIn('kwargs["auto_lint"] = False', sitecustomize)
+        self.assertIn("AIDER_MAX_CHAT_HISTORY_TOKENS", sitecustomize)
+        self.assertIn("_appora_compact_test_errors", benchmark_patch)
+        self.assertIn("_appora_public_test_contract", benchmark_patch)
+        self.assertIn("Public test contract", benchmark_patch)
+
+    def test_aider_benchmark_preflight_checks_container_router_path_before_run(self) -> None:
+        config = AiderBenchmarkConfig(workspace=Path(".tmp-aider-test"), run_name="smoke")
+        calls: list[list[str]] = []
+
+        def fake_run(command, *, cwd=None, timeout=None, env=None):
+            calls.append(command)
+            return {
+                "command": command,
+                "cwd": str(cwd) if cwd else None,
+                "returncode": 1,
+                "ok": False,
+                "stdout": "",
+                "stderr": "Connection refused",
+            }
+
+        with patch("api.aider_benchmarks._run_command", side_effect=fake_run):
+            result = run_aider_benchmark(config, run=True)
+
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(len(calls), 1)
+        self.assertIn("preflight failed", result["summary"])
+        self.assertIn("host.docker.internal", " ".join(calls[0]))
+
+    def test_start_9router_defaults_to_network_bind_for_docker_benchmarks(self) -> None:
+        script = (Path.cwd() / "scripts" / "start-9router.sh").read_text(encoding="utf-8")
+
+        self.assertIn('HOST="${NINE_ROUTER_HOST:-0.0.0.0}"', script)
+
+    def test_vite_build_disables_memory_heavy_minification(self) -> None:
+        config = (Path.cwd() / "vite.config.ts").read_text(encoding="utf-8")
+
+        self.assertIn("minify: false", config)
+
+    def test_editor_wrapper_avoids_bundling_monaco_for_memory_stable_builds(self) -> None:
+        editor = (Path.cwd() / "src" / "components" / "editor" / "MonacoEditor.tsx").read_text(encoding="utf-8")
+        package_json = (Path.cwd() / "package.json").read_text(encoding="utf-8")
+        vite_config = (Path.cwd() / "vite.config.ts").read_text(encoding="utf-8")
+
+        self.assertNotIn("@monaco-editor/react", editor)
+        self.assertNotIn("monaco-editor", editor)
+        self.assertNotIn("@monaco-editor/react", package_json)
+        self.assertNotIn("monaco-editor", package_json)
+        self.assertNotIn("@monaco-editor/react", vite_config)
+        self.assertNotIn("monaco-editor", vite_config)
+
+    def test_quick_layout_switch_does_not_persist_global_settings_or_restart_vite(self) -> None:
+        app = (Path.cwd() / "src" / "App.tsx").read_text(encoding="utf-8")
+        match = re.search(r"const quickSwitchBuildMode = \(mode: BuildMode\) => \{(?P<body>.*?)\n  \};", app, re.S)
+
+        self.assertIsNotNone(match)
+        body = match.group("body") if match else ""
+        self.assertIn("setBuildMode(mode)", body)
+        self.assertIn("setBuildModeDraft(mode)", body)
+        self.assertNotIn("updateSettings", body)
+
+    def test_aider_benchmark_stats_parser_extracts_core_metrics(self) -> None:
+        stats = _parse_aider_stats(
+            """
+            hint: these noisy benchmark logs can contain colon separators
+            unrelated_key: should_not_be_parsed
+            - dirname: 2024-07-04-14-32-08--claude
+              test_cases: 225
+              model: claude-3.5-sonnet
+              edit_format: diff
+              pass_rate_1: 57.1
+              percent_cases_well_formed: 99.2
+              syntax_errors: 1
+              total_cost: 3.6346
+            """
+        )
+
+        self.assertNotIn("hint", stats)
+        self.assertNotIn("unrelated_key", stats)
+        self.assertEqual(stats["test_cases"], 225)
+        self.assertEqual(stats["model"], "claude-3.5-sonnet")
+        self.assertEqual(stats["pass_rate_1"], 57.1)
+        self.assertEqual(stats["syntax_errors"], 1)
+
+    def test_aider_benchmark_run_fails_when_official_pass_rate_is_zero(self) -> None:
+        config = AiderBenchmarkConfig(workspace=Path(".tmp-aider-test"), run_name="smoke")
+        stdout = """
+        ────── /benchmarks/2026-06-09-16-40-01--appora-aider-smoke-router-public ───────
+        - dirname: 2026-06-09-16-40-01--appora-aider-smoke-router-public
+          test_cases: 1
+          model: openai/appora
+          edit_format: whole
+          pass_rate_1: 0.0
+          pass_rate_2: 0.0
+          pass_num_1: 0
+          pass_num_2: 0
+          percent_cases_well_formed: 100.0
+        """
+
+        with patch("api.aider_benchmarks._run_command", return_value={
+            "command": ["docker", "run"],
+            "cwd": None,
+            "returncode": 0,
+            "ok": True,
+            "stdout": stdout,
+            "stderr": "",
+        }):
+            result = run_aider_benchmark(config, run=True)
+
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["stats"]["pass_rate_1"], 0.0)
+        self.assertIn("failed official solve metrics", result["summary"])
+
+    def test_aider_benchmark_run_fails_when_multi_case_result_is_partial(self) -> None:
+        config = AiderBenchmarkConfig(workspace=Path(".tmp-aider-test"), run_name="smoke", num_tests=3)
+        stdout = """
+        ────── /benchmarks/2026-06-09-17-34-00--appora-aider-3case-nvim ───────
+        - dirname: 2026-06-09-17-34-00--appora-aider-3case-nvim
+          test_cases: 3
+          model: openai/appora
+          edit_format: whole
+          pass_rate_1: 33.3
+          pass_rate_2: 66.7
+          pass_num_1: 1
+          pass_num_2: 2
+          percent_cases_well_formed: 100.0
+        """
+
+        with patch("api.aider_benchmarks._run_command", return_value={
+            "command": ["docker", "run"],
+            "cwd": None,
+            "returncode": 0,
+            "ok": True,
+            "stdout": stdout,
+            "stderr": "",
+        }):
+            result = run_aider_benchmark(config, run=True)
+
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["stats"]["test_cases"], 3)
+        self.assertEqual(result["stats"]["pass_num_2"], 2)
+        self.assertIn("failed official solve metrics", result["summary"])
+
+    def test_aider_benchmark_env_loads_local_dotenv_key_when_shell_env_missing(self) -> None:
+        config = AiderBenchmarkConfig(openai_api_key_env="NINE_ROUTER_API_KEY")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            api_dir = root / "api"
+            api_dir.mkdir()
+            (api_dir / ".env").write_text("NINE_ROUTER_API_KEY=local-router-key\n", encoding="utf-8")
+            with patch.dict("os.environ", {}, clear=True), patch("api.aider_benchmarks.Path.cwd", return_value=root):
+                env = _benchmark_env(config)
+
+        self.assertEqual(env["OPENAI_API_KEY"], "local-router-key")
+
+    def test_failure_analysis_guides_single_assertion_not_raised_repairs(self) -> None:
+        execution = {
+            "validation": {
+                "ok": False,
+                "results": [{
+                    "ok": False,
+                    "command": "pytest",
+                    "returncode": 1,
+                    "stdout": "FAILED test_properties_without_delimiter\nE AssertionError: ValueError not raised\ninput_string = \"(;A)\"",
+                    "stderr": "",
+                }],
+            },
+            "repairs": [],
+        }
+
+        analysis = main_mod._execution_failure_analysis(execution)
+
+        self.assertIn("ValueError not raised", analysis["evidence_excerpt"])
+        self.assertIn("add the missing validation branch", analysis["suggested_next_move"])
+
+    def test_repair_state_keeps_latest_failing_validation_evidence(self) -> None:
+        parent = {
+            "ok": False,
+            "validation": {"ok": False, "results": [{"ok": False, "stdout": "20 failed, 3 passed"}]},
+        }
+        repair_execution = {
+            "ok": False,
+            "validation": {"ok": False, "results": [{"ok": False, "stdout": "1 failed, 22 passed"}]},
+        }
+
+        main_mod._merge_repair_execution_state(parent, repair_execution)
+
+        self.assertFalse(parent["ok"])
+        self.assertIn("1 failed, 22 passed", parent["validation"]["results"][0]["stdout"])
+
     def test_agent_benchmark_dry_run_lists_live_scenarios_without_calling_llm(self) -> None:
         result = run_agent_benchmark_suite(live=False)
 
@@ -7836,7 +9132,16 @@ class AgentBenchmarkRegressionTests(unittest.TestCase):
                 event_cb("tool_output", {"name": "view_file_structure", "summary": "src/App.tsx"})
             return {
                 "spoken": "Dashboard task tracker sudah dibentuk dan build lolos.",
-                "changes": [{"path": "benchmark-task-tracker-ui/src/App.tsx"}],
+                "changes": [{
+                    "path": "benchmark-task-tracker-ui/src/App.tsx",
+                    "new_content": (
+                        "export default function App() { return <main>"
+                        "<h1>Task tracker dashboard</h1>"
+                        "<p>Metric cards show task priority, owner, status, and progress.</p>"
+                        "<p>Empty state helps teams create the first task.</p>"
+                        "</main>; }"
+                    ),
+                }],
                 "actions": [{"type": "shell", "command": "npm run build"}],
                 "execution": {"ok": True, "completion_report": {"summary": "Build passed."}},
                 "trace": {"task_state": {"state": "completed"}, "verification": []},
@@ -7864,8 +9169,58 @@ class AgentBenchmarkRegressionTests(unittest.TestCase):
         self.assertGreaterEqual(scenario["score"], 80)
         self.assertEqual(scenario["metrics"]["event_count"], 3)
         self.assertTrue(scenario["metrics"]["execution_ok"])
+        self.assertEqual(scenario["metrics"]["requirement_coverage"], 1.0)
         self.assertIn("observability", scenario)
         self.assertEqual(scenario["observability"]["summary"]["tool_call_count"], 1)
+
+    def test_live_agent_benchmark_penalizes_generic_or_wrong_domain_results(self) -> None:
+        scenario = next(item for item in AGENT_BENCHMARK_SCENARIOS if item.id == "task_tracker_ui")
+        scored = _score_live_result(
+            {
+                "spoken": "Aku bikin landing laundry premium.",
+                "changes": [{
+                    "path": "src/App.tsx",
+                    "new_content": "<main><h1>Laundry premium</h1><p>Pricing and testimonial.</p></main>",
+                }],
+                "actions": [{"type": "shell", "command": "npm run build"}],
+                "execution": {"ok": True},
+                "trace": {"verification": [], "passes": 5},
+            },
+            [{"event": "tool_call"}, {"event": "command_start"}],
+            scenario=scenario,
+            duration_seconds=260,
+        )
+
+        self.assertLess(scored["score"], scenario.min_score, scored)
+        self.assertLess(scored["metrics"]["requirement_coverage"], 0.65)
+        self.assertIn("laundry", scored["metrics"]["matched_forbidden_terms"])
+        self.assertGreater(scored["metrics"]["autonomous_passes"], scenario.max_autonomous_passes)
+
+    def test_live_agent_benchmark_scores_final_project_files_for_requirement_coverage(self) -> None:
+        scenario = next(item for item in AGENT_BENCHMARK_SCENARIOS if item.id == "preview_blank_repair")
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / scenario.project_root
+            (project_dir / "src" / "pages").mkdir(parents=True)
+            (project_dir / "src" / "pages" / "Home.tsx").write_text(
+                "export default function Home(){ return <section><h1>Portfolio home preview</h1><p>Project work contact build.</p></section> }\n",
+                encoding="utf-8",
+            )
+            scored = _score_live_result(
+                {
+                    "spoken": "Fixed AppShell render.",
+                    "changes": [{"path": f"{scenario.project_root}/src/App.tsx", "new_content": "import Home from './pages/Home';\n"}],
+                    "actions": [{"type": "shell", "command": "npm run build"}],
+                    "execution": {"ok": True},
+                    "trace": {"verification": []},
+                },
+                [{"event": "tool_call"}, {"event": "command_start"}],
+                scenario=scenario,
+                duration_seconds=40,
+                project_dir=project_dir,
+            )
+
+        self.assertEqual(scored["metrics"]["missing_required_terms"], [])
+        self.assertEqual(scored["metrics"]["requirement_coverage"], 1.0)
 
     def test_live_agent_benchmark_blocks_when_nine_router_is_not_ready(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, \
@@ -7891,7 +9246,15 @@ class AgentBenchmarkRegressionTests(unittest.TestCase):
                 event_cb("command_start", {"phase": "verify", "message": "npm run build"})
             return {
                 "spoken": "Landing sudah siap.",
-                "changes": [{"path": "benchmark-nontechnical-landing/src/pages/Home.tsx"}],
+                "changes": [{
+                    "path": "benchmark-nontechnical-landing/src/pages/Home.tsx",
+                    "new_content": (
+                        "export default function Home() { return <main>"
+                        "<h1>Premium laundry booking</h1>"
+                        "<p>Clear price cards, testimonial quotes, and premium CTA.</p>"
+                        "</main>; }"
+                    ),
+                }],
                 "actions": [{"type": "shell", "command": "npm run build"}],
                 "execution": {"ok": True},
                 "trace": {"verification": []},
@@ -8282,7 +9645,8 @@ class TranscriptPurityRegressionTests(unittest.TestCase):
             if "appendAssistantLiveText(" in line and "appendAssistantLiveText:" not in line
         ]
 
-        self.assertEqual(live_append_lines, ['appendAssistantLiveText(spokenChunk, "default", nativeStream);'])
+        self.assertEqual(live_append_lines, ['appendAssistantLiveText(spokenChunk, "default", false);'])
+        self.assertIn("if (!nativeStream)", workflow_path.read_text(encoding="utf-8"))
 
     def test_workflow_has_no_hardcoded_assistant_milestones(self) -> None:
         repo_root = Path(__file__).resolve().parents[2]
