@@ -1,5 +1,8 @@
 import process from 'node:process';
-import { firefox } from '@playwright/test';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { chromium } from '@playwright/test';
 
 const url = (process.argv[2] || '').trim();
 const timeoutMs = Number(process.argv[3] || 12000);
@@ -27,6 +30,43 @@ function looksLikeTransientLoading(snapshot) {
   return wordCount <= 8 && /\b(loading|memuat|please wait|spinner)\b/.test(`${headings} ${excerpt}`);
 }
 
+function firstExisting(paths) {
+  for (const candidate of paths) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return '';
+}
+
+function findCachedChromiumExecutable() {
+  const cacheRoot = process.env.PLAYWRIGHT_BROWSERS_PATH && process.env.PLAYWRIGHT_BROWSERS_PATH !== '0'
+    ? process.env.PLAYWRIGHT_BROWSERS_PATH
+    : path.join(os.homedir(), '.cache', 'ms-playwright');
+  if (!fs.existsSync(cacheRoot)) return '';
+  const dirs = fs.readdirSync(cacheRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort()
+    .reverse();
+  for (const dirname of dirs) {
+    const base = path.join(cacheRoot, dirname);
+    if (dirname.startsWith('chromium_headless_shell-')) {
+      const executable = firstExisting([
+        path.join(base, 'chrome-headless-shell-linux64', 'chrome-headless-shell'),
+        path.join(base, 'chrome-headless-shell-linux', 'chrome-headless-shell'),
+      ]);
+      if (executable) return executable;
+    }
+    if (dirname.startsWith('chromium-')) {
+      const executable = firstExisting([
+        path.join(base, 'chrome-linux64', 'chrome'),
+        path.join(base, 'chrome-linux', 'chrome'),
+      ]);
+      if (executable) return executable;
+    }
+  }
+  return '';
+}
+
 if (!url) {
   console.log(JSON.stringify({ ok: false, error: 'Missing preview URL.' }));
   process.exit(0);
@@ -34,7 +74,11 @@ if (!url) {
 
 let browser;
 try {
-  browser = await firefox.launch({ headless: true });
+  const executablePath = findCachedChromiumExecutable();
+  browser = await chromium.launch({
+    headless: true,
+    ...(executablePath ? { executablePath } : {}),
+  });
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const consoleErrors = [];
   const pageErrors = [];

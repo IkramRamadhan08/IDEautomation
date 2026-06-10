@@ -125,7 +125,7 @@ def build_agent_observability(
     error_events = [item for item in timeline if item.get("event") == "error" or item.get("ok") is False]
     failure_points = []
     for item in failed_commands:
-        detail = item.get("stderr_preview") or item.get("summary") or item.get("command")
+        detail = item.get("stderr_preview") or item.get("stdout_preview") or item.get("summary") or item.get("command")
         failure_points.append({
             "kind": "command",
             "phase": item.get("phase"),
@@ -141,6 +141,7 @@ def build_agent_observability(
             "detail": _short_text(item.get("message"), 1000),
         })
 
+    recovered_failure_points: list[dict[str, Any]] = []
     if started_at is not None:
         finished = finished_at if finished_at is not None else time.time()
         duration_ms = max(0, int((finished - started_at) * 1000))
@@ -148,6 +149,10 @@ def build_agent_observability(
         duration_ms = None
 
     execution_ok = execution.get("ok") if isinstance(execution.get("ok"), bool) else None
+    if execution_ok is True and failure_points:
+        recovered_failure_points = list(failure_points)
+        failure_points = []
+
     ok = not failure_points
     if execution_ok is False:
         ok = False
@@ -161,6 +166,7 @@ def build_agent_observability(
         "tool_output_count": sum(1 for item in timeline if item.get("event") == "tool_output"),
         "command_count": len(commands),
         "failed_command_count": len(failed_commands),
+        "recovered_failure_count": len(recovered_failure_points),
         "changes": len(changes),
         "actions": len(actions),
         "execution_ok": execution_ok,
@@ -172,4 +178,5 @@ def build_agent_observability(
         "timeline": timeline,
         "commands": commands,
         "failure_points": failure_points,
+        "recovered_failure_points": recovered_failure_points,
     }

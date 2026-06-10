@@ -4566,6 +4566,24 @@ class PreviewAuditRegressionTests(unittest.TestCase):
             with patch.object(main_mod, "_resolve_agent_browser_binary", return_value="/usr/local/bin/agent-browser"):
                 self.assertTrue(main_mod._browser_preview_audit_ready(project_dir))
 
+    def test_playwright_preview_audit_uses_chromium_cache_without_firefox(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_root = Path(tmp) / "ms-playwright"
+            chrome = cache_root / "chromium-1223" / "chrome-linux64" / "chrome"
+            chrome.parent.mkdir(parents=True)
+            chrome.write_text("", encoding="utf-8")
+
+            firefox = cache_root / "firefox-1511" / "firefox" / "firefox"
+            self.assertFalse(firefox.exists())
+            self.assertTrue(main_mod._playwright_chromium_cache_ready(cache_root))
+
+            with patch("api.main._resolve_node_binary", return_value="/usr/bin/node"), \
+                patch("api.main._playwright_audit_script", return_value=Path(__file__)), \
+                patch("api.main._playwright_chromium_cache_ready", return_value=True), \
+                patch("api.main.ROOT", Path(tmp)):
+                (Path(tmp) / "node_modules" / "@playwright" / "test").mkdir(parents=True)
+                self.assertTrue(main_mod._playwright_preview_audit_ready(Path(tmp)))
+
     def test_agent_browser_preview_audit_collects_dom_snapshot(self) -> None:
         snapshot = {
             "title": "OpsFlow",
@@ -8062,6 +8080,74 @@ class AgentAutoExecuteRegressionTests(unittest.TestCase):
             CURRENT_SESSION_ID.reset(session_token)
             STATE.get("sessions", {}).pop(session_id, None)
 
+    def test_quick_preview_polish_repair_removes_starter_residue(self) -> None:
+        session_id = "quick-preview-starter-residue-polish-test"
+        STATE.get("sessions", {}).pop(session_id, None)
+        session_token = CURRENT_SESSION_ID.set(session_id)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                project = root / "demo"
+                (project / "src").mkdir(parents=True)
+                (project / "index.html").write_text(
+                    "<!doctype html><html><head><title>Portfolio starter</title></head><body><div id=\"root\"></div></body></html>",
+                    encoding="utf-8",
+                )
+                (project / "src" / "Home.tsx").write_text(
+                    "export default function Home() { return <p>Portfolio starter. Replace these cards with real projects, screenshots, metrics, and links.</p>; }\n",
+                    encoding="utf-8",
+                )
+                STATE["sessions"][session_id] = {
+                    "workspace": root,
+                    "runners": {},
+                    "agent_jobs": {},
+                    "oauth_pending": {},
+                    "google_user": None,
+                }
+                execution = {
+                    "ok": False,
+                    "apply": {"ok": True},
+                    "validation": {
+                        "ok": True,
+                        "commands": ["npm run build"],
+                        "results": [{"ok": True, "command": "npm run build", "stdout": "built", "stderr": ""}],
+                    },
+                    "preview_audit": {
+                        "ok": False,
+                        "skipped": False,
+                        "issue_details": [
+                            {"severity": "blocking", "category": "starter-residue", "detail": "Sisa template/starter masih terlihat: starter."},
+                            {"severity": "blocking", "category": "production-polish", "detail": "Preview still exposes starter/template residue: starter."},
+                        ],
+                        "visual_summary": {"title": "Portfolio starter", "primary_heading": "Portfolio starter"},
+                    },
+                }
+                rerun_shell = {
+                    "ok": True,
+                    "results": [{"ok": True, "command": "npm run build", "stdout": "built", "stderr": ""}],
+                }
+                clean_preview = {"ok": True, "skipped": False, "issue_details": [], "summary": "Preview clean."}
+                with (
+                    patch("api.main._run_harness_shell_actions_internal", return_value=rerun_shell),
+                    patch("api.main._auto_execute_preview_audit", return_value=clean_preview),
+                ):
+                    result = main_mod._try_quick_preview_polish_repair(
+                        main_mod.AgentReq(input="polish preview", project_root="demo", auto_execute=True),
+                        execution,
+                        lambda _event, _data: None,
+                    )
+
+                self.assertTrue(result["ok"])
+                self.assertIn("src/Home.tsx", result["changed_paths"])
+                text = (project / "src" / "Home.tsx").read_text(encoding="utf-8")
+                html = (project / "index.html").read_text(encoding="utf-8")
+                self.assertNotIn("starter", text.lower())
+                self.assertNotIn("starter", html.lower())
+                self.assertIn("Explore real projects", text)
+        finally:
+            CURRENT_SESSION_ID.reset(session_token)
+            STATE.get("sessions", {}).pop(session_id, None)
+
     def test_quick_vite_entrypoint_repair_restores_existing_main_file(self) -> None:
         session_id = "quick-vite-entrypoint-repair-test"
         STATE.get("sessions", {}).pop(session_id, None)
@@ -8338,6 +8424,54 @@ class AgentAutoExecuteRegressionTests(unittest.TestCase):
         ordered = main_mod._order_agent_shell_actions(actions)
 
         self.assertEqual([item.command for item in ordered], ["npm install", "npm run build", "npm run lint"])
+
+    def test_quick_root_route_repair_maps_preview_root_to_primary_page(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "demo"
+            (project / "src").mkdir(parents=True)
+            (project / "package.json").write_text(json.dumps({"scripts": {"build": "node -e \"process.exit(0)\""}}), encoding="utf-8")
+            (project / "src" / "App.tsx").write_text(
+                "import HomePage from './pages/Home';\n"
+                "import NotFoundPage from './pages/NotFound';\n"
+                "const routes = [\n"
+                "  { path: '/home', element: <HomePage /> },\n"
+                "];\n"
+                "export default function App(){\n"
+                "  const activeRoute = routes.find((route) => route.path === window.location.pathname);\n"
+                "  return activeRoute ? activeRoute.element : <NotFoundPage />;\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            execution = {
+                "validation": {"commands": ["npm run build"]},
+                "preview_audit": {
+                    "ok": False,
+                    "skipped": False,
+                    "issue_details": [
+                        {
+                            "severity": "blocking",
+                            "category": "routing",
+                            "detail": "Preview root is rendering a 404/not-found page instead of the primary app surface.",
+                        }
+                    ],
+                },
+            }
+            events: list[tuple[str, dict]] = []
+
+            with patch("api.main._ws", return_value=root), \
+                patch("api.main._auto_execute_preview_audit", return_value={"ok": True, "skipped": False, "issue_details": []}):
+                result = main_mod._try_quick_root_route_repair(
+                    main_mod.AgentReq(input="fix preview 404", project_root="demo", auto_execute=True),
+                    execution,
+                    lambda event, data: events.append((event, data)),
+                )
+
+            app = (project / "src" / "App.tsx").read_text(encoding="utf-8")
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["kind"], "root-route")
+            self.assertIn("{ path: '/', element: <HomePage /> }", app)
+            self.assertTrue(any(data.get("tool") == "quick-repair" for event, data in events if event == "tool_output"))
 
     def test_run_agent_impl_streams_unresolved_handoff_after_native_progress(self) -> None:
         session_id = "unresolved-handoff-stream-test"
@@ -10858,6 +10992,59 @@ class AgentObservabilityRegressionTests(unittest.TestCase):
         self.assertEqual(observability["commands"][0]["command"], "npm run build")
         self.assertFalse(observability["commands"][0]["ok"])
         self.assertIn("TS2307", observability["failure_points"][0]["detail"])
+
+    def test_observability_marks_recovered_failures_when_execution_finishes_ok(self) -> None:
+        events = [
+            {
+                "event_type": "tool_output",
+                "payload": {
+                    "kind": "agent_harness_command",
+                    "tool": "validate",
+                    "phase": "executing_validation",
+                    "command": "npm run build",
+                    "ok": False,
+                    "returncode": 127,
+                    "stdout_preview": "sh: line 1: tsc: command not found",
+                    "summary": "validation: failed `npm run build`",
+                },
+            },
+            {
+                "event_type": "tool_output",
+                "payload": {
+                    "kind": "agent_harness_command",
+                    "tool": "quick-repair",
+                    "phase": "quick_repair",
+                    "command": "npm run build",
+                    "ok": True,
+                    "returncode": 0,
+                    "stdout_preview": "vite build complete",
+                    "summary": "quick polish: passed `npm run build`",
+                },
+            },
+            {
+                "event_type": "tool_output",
+                "payload": {
+                    "kind": "agent_harness",
+                    "tool": "completion",
+                    "phase": "completion",
+                    "ok": True,
+                    "summary": "Complete: backend execution criteria passed.",
+                },
+            },
+        ]
+        result = {
+            "changes": [{"path": "src/App.tsx"}],
+            "actions": [{"type": "shell", "command": "npm run build"}],
+            "execution": {"ok": True, "completion_report": {"summary": "Build passed after repair."}},
+        }
+
+        observability = build_agent_observability(events, result=result)
+
+        self.assertTrue(observability["ok"])
+        self.assertEqual(observability["failure_points"], [])
+        self.assertEqual(observability["summary"]["failed_command_count"], 1)
+        self.assertEqual(observability["summary"]["recovered_failure_count"], 1)
+        self.assertIn("tsc: command not found", observability["recovered_failure_points"][0]["detail"])
 
     def test_run_agent_impl_attaches_observability_to_result(self) -> None:
         session_id = "observability-run-agent-test"

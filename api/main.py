@@ -996,6 +996,23 @@ def _playwright_audit_script() -> Path:
     return ROOT / "scripts" / "preview-audit.mjs"
 
 
+def _playwright_chromium_cache_ready(cache_root: Path | None = None) -> bool:
+    root = cache_root or (Path.home() / ".cache" / "ms-playwright")
+    if not root.exists():
+        return False
+    chromium_candidates = (
+        ("chromium-*", "chrome-linux64/chrome"),
+        ("chromium-*", "chrome-linux/chrome"),
+        ("chromium_headless_shell-*", "chrome-headless-shell-linux64/chrome-headless-shell"),
+        ("chromium_headless_shell-*", "chrome-headless-shell-linux/chrome-headless-shell"),
+    )
+    for pattern, relative_binary in chromium_candidates:
+        for browser_dir in root.glob(pattern):
+            if (browser_dir / relative_binary).exists():
+                return True
+    return False
+
+
 def _project_uses_playwright(project_dir: Path) -> bool:
     package_json = _read_json(project_dir / "package.json") or {}
     for bucket in ("dependencies", "devDependencies"):
@@ -1009,13 +1026,15 @@ def _project_uses_playwright(project_dir: Path) -> bool:
 
 
 def _playwright_preview_audit_ready(project_dir: Path) -> bool:
-    browser_root = ROOT / "node_modules" / "playwright"
-    firefox_binary = Path.home() / ".cache" / "ms-playwright" / "firefox-1511" / "firefox" / "firefox"
+    playwright_modules = (
+        ROOT / "node_modules" / "@playwright" / "test",
+        ROOT / "node_modules" / "playwright",
+    )
     return bool(
         _resolve_node_binary()
         and _playwright_audit_script().exists()
-        and browser_root.exists()
-        and firefox_binary.exists()
+        and any(module.exists() for module in playwright_modules)
+        and _playwright_chromium_cache_ready()
     )
 
 
@@ -6629,6 +6648,7 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
         _try_quick_ts2741_missing_required_prop_repair,
         _try_quick_ts6133_repair,
         _try_quick_ts2322_unsupported_prop_repair,
+        _try_quick_root_route_repair,
         _try_quick_preview_polish_repair,
     ):
         if bool(execution.get("ok")) and not _execution_needs_repair(execution):
@@ -8501,8 +8521,66 @@ def _quick_polish_overflow_prone_css(project_dir: Path) -> tuple[list[str], list
     return list(dict.fromkeys(changed)), notes
 
 
+def _quick_polish_starter_residue(project_dir: Path) -> tuple[list[str], list[str]]:
+    candidates: list[Path] = []
+    for path in [project_dir / "index.html"]:
+        if path.exists() and path.is_file():
+            candidates.append(path)
+    src_dir = project_dir / "src"
+    if src_dir.exists():
+        for path in src_dir.rglob("*"):
+            if path.is_file() and path.suffix.lower() in {".tsx", ".jsx", ".ts", ".js", ".css", ".html"}:
+                candidates.append(path)
+    replacements = [
+        (r"\bPortfolio starter\b", "Portfolio"),
+        (r"\bLanding \+ pricing starter\b", "Landing and pricing"),
+        (r"\btemplate starter\b", "production foundation"),
+        (r"\bstarter template\b", "production foundation"),
+        (r"\bseeded template\b", "initial project"),
+        (r"\bplaceholder\s+copy\b", "draft copy"),
+        (r"\bplaceholder\s+content\b", "draft content"),
+        (r"\bplaceholder\s+text\b", "draft text"),
+        (r"\bplaceholder\s+section\b", "draft section"),
+        (r"\bplaceholder\s+card\b", "draft card"),
+        (r"\bplaceholder\s+page\b", "draft page"),
+        (r"\bReplace these cards with real projects, screenshots, metrics, and links\.", "Explore real projects, screenshots, metrics, and links."),
+        (r"\bstarter\b", "production"),
+        (r"\bStarter\b", "Launch"),
+        (r"\btemplate\b", "project"),
+        (r"\bTemplate\b", "Project"),
+    ]
+    changed: list[str] = []
+    notes: list[str] = []
+    for path in candidates[:40]:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        if not _starter_residue_terms(text, limit=1):
+            continue
+        next_text = text
+        for pattern, replacement in replacements:
+            next_text = re.sub(pattern, replacement, next_text)
+        if next_text == text:
+            continue
+        path.write_text(next_text, encoding="utf-8")
+        changed.append(path.relative_to(project_dir).as_posix())
+    if changed:
+        notes.append("removed visible starter/template residue")
+    return list(dict.fromkeys(changed)), notes
+
+
 def _try_quick_preview_polish_repair(req: AgentReq, execution: dict[str, object], emit) -> dict[str, object] | None:
     debt = _preview_polish_debt(execution)
+    if not debt:
+        preview_audit = execution.get("preview_audit")
+        if isinstance(preview_audit, dict) and not preview_audit.get("skipped"):
+            quick_categories = {"metadata", "mobile-tap-targets", "starter-residue", "production-polish", "responsive", "source-overflow-risk"}
+            debt = [
+                item
+                for item in list(preview_audit.get("issue_details") or [])
+                if isinstance(item, dict) and str(item.get("category") or "").strip() in quick_categories
+            ][:8]
     if not debt:
         return None
     categories = {str(item.get("category") or "") for item in debt if isinstance(item, dict)}
@@ -8512,7 +8590,13 @@ def _try_quick_preview_polish_repair(req: AgentReq, execution: dict[str, object]
         for item in debt
         if isinstance(item, dict)
     )
-    if not (categories & {"metadata", "mobile-tap-targets"} or overflow_debt):
+    starter_debt = bool(categories & {"starter-residue"}) or any(
+        str(item.get("category") or "") == "production-polish"
+        and any(term in str(item.get("detail") or "").lower() for term in ("starter", "template", "placeholder", "vite"))
+        for item in debt
+        if isinstance(item, dict)
+    )
+    if not (categories & {"metadata", "mobile-tap-targets"} or overflow_debt or starter_debt):
         return None
     project_root = str(req.project_root or ".").strip().strip("/") or "."
     try:
@@ -8531,6 +8615,10 @@ def _try_quick_preview_polish_repair(req: AgentReq, execution: dict[str, object]
         notes.extend(local_notes)
     if overflow_debt:
         changed, local_notes = _quick_polish_overflow_prone_css(project_dir)
+        changed_paths.extend(changed)
+        notes.extend(local_notes)
+    if starter_debt:
+        changed, local_notes = _quick_polish_starter_residue(project_dir)
         changed_paths.extend(changed)
         notes.extend(local_notes)
     changed_paths = list(dict.fromkeys(changed_paths))
@@ -8578,6 +8666,134 @@ def _try_quick_preview_polish_repair(req: AgentReq, execution: dict[str, object]
         paths=changed_paths,
         commands=commands,
         result={"notes": notes, "preview_ok": preview_result.get("ok") if isinstance(preview_result, dict) else None},
+        results=_shell_event_results(shell.get("results")),
+    ))
+    return result
+
+
+def _preview_root_route_404_issue(execution: dict[str, object]) -> bool:
+    preview = execution.get("preview_audit")
+    if not isinstance(preview, dict) or preview.get("skipped") or preview.get("ok") is not False:
+        return False
+    for issue in list(preview.get("issue_details") or []):
+        if not isinstance(issue, dict):
+            continue
+        category = str(issue.get("category") or "").lower()
+        detail = str(issue.get("detail") or "").lower()
+        if category == "routing" and ("404" in detail or "not-found" in detail or "root" in detail):
+            return True
+    summary = str(preview.get("summary") or "").lower()
+    return "h1=404" in summary or ("root" in summary and "404" in summary)
+
+
+def _quick_root_route_primary_element(app_text: str) -> str | None:
+    route_matches = list(re.finditer(
+        r"\{\s*path:\s*['\"](?P<path>[^'\"]+)['\"]\s*,\s*element:\s*(?P<element><[^>{]+/>)\s*\}",
+        app_text,
+    ))
+    if not route_matches:
+        return None
+    preferred: list[str] = []
+    fallback: list[str] = []
+    for match in route_matches:
+        route_path = str(match.group("path") or "")
+        element = str(match.group("element") or "")
+        if route_path == "/":
+            if re.search(r"NotFound|404", element, re.IGNORECASE):
+                continue
+            return None
+        if route_path in {"*", "/*"} or re.search(r"NotFound|404", element, re.IGNORECASE):
+            continue
+        if re.search(r"Home|Dashboard|Landing|Index|Main", element, re.IGNORECASE):
+            preferred.append(element)
+        else:
+            fallback.append(element)
+    return (preferred or fallback or [None])[0]
+
+
+def _quick_repair_root_route(project_dir: Path) -> list[str]:
+    candidates = [
+        project_dir / "src" / "App.tsx",
+        project_dir / "src" / "App.jsx",
+        project_dir / "src" / "App.ts",
+        project_dir / "src" / "App.js",
+    ]
+    for path in candidates:
+        if not path.exists() or not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        primary = _quick_root_route_primary_element(text)
+        if not primary:
+            continue
+        root_route = f"{{ path: '/', element: {primary} }}"
+        next_text = re.sub(
+            r"const\s+routes\s*=\s*\[\s*",
+            lambda match: f"{match.group(0)}\n    {root_route},",
+            text,
+            count=1,
+        )
+        if next_text == text:
+            continue
+        path.write_text(next_text, encoding="utf-8")
+        return [path.relative_to(project_dir).as_posix()]
+    return []
+
+
+def _try_quick_root_route_repair(req: AgentReq, execution: dict[str, object], emit) -> dict[str, object] | None:
+    if not _preview_root_route_404_issue(execution):
+        return None
+    project_root = str(req.project_root or ".").strip().strip("/") or "."
+    try:
+        project_dir = safe_join(_ws(), project_root)
+    except Exception:
+        return None
+    changed_paths = _quick_repair_root_route(project_dir)
+    if not changed_paths:
+        return None
+
+    commands = list(dict.fromkeys(
+        str(command)
+        for command in list((execution.get("validation") or {}).get("commands") or [])
+        if str(command).strip()
+    ))
+    if not commands:
+        commands = _infer_validation_commands(project_dir)[:4]
+
+    emit("status", {"phase": "quick_repair", "message": "Backend quick repair mapped preview root route to the primary page..."})
+    shell = {"ok": True, "results": [], "ran": 0}
+    if commands:
+        _emit_command_start_events(emit, tool="quick-repair", phase="quick_repair", project_root=project_root, commands=commands, group="quick root route")
+        shell = _run_harness_shell_actions_internal(
+            ws_root_path=_ws(),
+            project_root=project_root,
+            actions=[AgentHarnessShellAction(command=command, cwd=project_root, reason="Quick root route repair validation") for command in commands],
+            emit=emit,
+            tool="quick-repair",
+            phase="quick_repair",
+            group="quick root route",
+        )
+    preview_result = _auto_execute_preview_audit(req, project_root) if bool(shell.get("ok")) else None
+    result = {
+        "ok": bool(shell.get("ok")) and (not isinstance(preview_result, dict) or bool(preview_result.get("ok"))),
+        "changed_paths": changed_paths,
+        "commands": commands,
+        "shell": shell,
+        "preview_audit": preview_result,
+        "summary": f"Quick root route repair changed {len(changed_paths)} file(s), validation ok={bool(shell.get('ok'))}.",
+        "kind": "root-route",
+    }
+    emit("tool_output", _harness_tool_output_payload(
+        "quick-repair",
+        "quick_repair",
+        project_root=project_root,
+        ok=bool(result.get("ok")),
+        summary=str(result["summary"]),
+        paths=changed_paths,
+        commands=commands,
+        result={"preview_ok": preview_result.get("ok") if isinstance(preview_result, dict) else None},
         results=_shell_event_results(shell.get("results")),
     ))
     return result
