@@ -1,0 +1,1745 @@
+@import "./styles/base.css";
+@import "./styles/layout.css";
+@import "./styles/loading.css";
+@import "./styles/workspace.css";
+@import "./styles/landing.css";
+@import "./styles/projects.css";
+@import "./styles/settings.css";
+@import "./styles/agent.css";
+
+.brandBlock {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.brandMark {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  background: linear-gradient(135deg, rgba(156, 255, 95, 0.18), rgba(97, 232, 255, 0.14));
+  border: 1px solid rgba(229, 231, 235, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.brandStack {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.brand {
+  font-size: 13.5px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+.brandSub {
+  display: block;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.topbarMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.topbarPill,
+.topbarPath,
+.agentStatusPill,
+.tag,
+.workspaceGateKicker,
+.assistStatusPill,
+.assistHintPill,
+.providerStatusChip,
+.previewStatusPill,
+.pathCrumb,
+.topbarUserBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.topbarPill,
+.topbarPath,
+.agentStatusPill,
+.tag,
+.assistStatusPill,
+.assistHintPill,
+.providerStatusChip,
+.previewStatusPill,
+.pathCrumb {
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-soft);
+}
+
+:root[data-app-theme="light"] .topbarPill,
+:root[data-app-theme="light"] .topbarPath,
+:root[data-app-theme="light"] .agentStatusPill,
+:root[data-app-theme="light"] .tag,
+:root[data-app-theme="light"] .assistStatusPill,
+:root[data-app-theme="light"] .assistHintPill,
+:root[data-app-theme="light"] .providerStatusChip,
+:root[data-app-theme="light"] .previewStatusPill,
+:root[data-app-theme="light"] .pathCrumb,
+:root[data-app-theme="light"] .topbarUserBadge,
+:root[data-app-theme="light"] .topbarModeSwitch,
+:root[data-app-theme="light"] .segmentedControl,
+:root[data-app-theme="light"] .commandBarButton,
+:root[data-app-theme="light"] .btn,
+:root[data-app-theme="light"] .topbarSelect,
+:root[data-app-theme="light"] .settingsInput,
+:root[data-app-theme="light"] .settingsSelect,
+:root[data-app-theme="light"] .textarea.promptBox {
+  background: rgba(255, 255, 255, 0.72);
+  border-color: rgba(23, 23, 23, 0.11);
+  color: var(--text);
+}
+
+.topbarPill {
+  padding: 4px 7px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.topbarPill.success,
+.previewStatusPill.live,
+.providerStatusChip.connected {
+  color: #dffbf2;
+  border-color: rgba(56, 211, 159, 0.28);
+  background: rgba(56, 211, 159, 0.12);
+}
+
+.topbarPath {
+  max-width: 210px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 4px 7px;
+  font-size: 10px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.topbarModeSwitch,
+.segmentedControl {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+}
+
+.topbarModeLabel {
+  padding: 0 6px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.topbarActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.commandBarButton {
+  width: min(390px, 30vw);
+  min-width: 260px;
+  height: 34px;
+  border: 1px solid rgba(229, 231, 235, 0.1);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+.commandBarButton span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  font-size: 12px;
+}
+
+.commandBarButton kbd {
+  border: 1px solid rgba(229, 231, 235, 0.12);
+  border-radius: 5px;
+  padding: 1px 5px;
+  color: var(--text-soft);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 10px;
+}
+
+.commandBarButton:hover {
+  color: var(--text-soft);
+  border-color: rgba(229, 231, 235, 0.18);
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.topbarPanelToggles {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.panelToggleBtn {
+  min-width: 70px;
+}
+
+.btn {
+  border: 1px solid var(--border);
+  background: rgba(246, 250, 245, 0.045);
+  color: var(--text);
+  min-height: 30px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 650;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease, opacity 140ms ease;
+  text-decoration: none;
+}
+
+.btn:hover:not(:disabled) {
+  background: rgba(246, 250, 245, 0.075);
+  border-color: var(--border-strong);
+}
+
+.btn:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.btn.primary {
+  border-color: rgba(156, 255, 95, 0.18);
+  background: #e9ffd8;
+  color: #071015;
+  box-shadow: none;
+}
+
+:root[data-app-theme="light"] .btn.primary {
+  border-color: rgba(17, 23, 23, 0.12);
+  background: #111717;
+  color: #f8faf3;
+}
+
+:root[data-app-theme="light"] .btn.primary:hover:not(:disabled) {
+  background: #24302e;
+}
+
+:root[data-app-theme="light"] .topbarPill.success,
+:root[data-app-theme="light"] .previewStatusPill.live,
+:root[data-app-theme="light"] .providerStatusChip.connected {
+  color: #0f513a;
+  border-color: rgba(15, 139, 95, 0.24);
+  background: rgba(15, 139, 95, 0.11);
+}
+
+.btn.primary:hover:not(:disabled) {
+  background: #d8ffc1;
+}
+
+.btn.subtleBtn,
+.btn.paneToggleBtn,
+.btn.modeBtn,
+.btn.iconBtn {
+  background: rgba(246, 250, 245, 0.04);
+}
+
+.btn.iconBtn {
+  min-width: 32px;
+}
+
+.btn.iconBtn,
+.btn.panelToggleBtn {
+  padding-inline: 9px;
+}
+
+.topbarModeSwitch .btn.modeBtn {
+  min-height: 28px;
+  border-radius: 6px;
+  padding-inline: 10px;
+}
+
+.topbarModeSwitch .btn.modeBtn:not(.primary) {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-soft);
+}
+
+.topbarSelectWrap {
+  position: relative;
+}
+
+.topbarSelectWrap::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: translateY(-65%) rotate(45deg);
+  pointer-events: none;
+}
+
+.topbarSelect,
+.settingsInput,
+.settingsSelect,
+.textarea.promptBox {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text);
+  padding: 12px 14px;
+  outline: none;
+  appearance: none;
+}
+
+.topbarSelect {
+  min-width: 200px;
+  max-width: 240px;
+  padding-right: 34px;
+}
+
+.topbarSelect:focus,
+.settingsInput:focus,
+.settingsSelect:focus,
+.textarea.promptBox:focus {
+  border-color: rgba(124, 140, 255, 0.58);
+  box-shadow: 0 0 0 4px rgba(124, 140, 255, 0.14);
+}
+
+.topbarUserBadge {
+  padding: 4px 8px 4px 4px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.035);
+  max-width: 190px;
+}
+
+.topbarUserAvatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(124, 140, 255, 0.22);
+  color: #f8fbff;
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.topbarUserText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.pane {
+  background: linear-gradient(180deg, rgba(10, 18, 24, 0.94), rgba(7, 14, 19, 0.96));
+  border: 1px solid rgba(209, 250, 229, 0.1);
+  border-radius: var(--radius-xl);
+  box-shadow: none;
+  min-height: 0;
+  backdrop-filter: blur(14px);
+}
+
+:root[data-app-theme="light"] .pane {
+  background: rgba(255, 255, 255, 0.82);
+  border-color: rgba(23, 23, 23, 0.1);
+  box-shadow: 0 18px 46px rgba(36, 30, 17, 0.08);
+}
+
+:root[data-app-theme="light"] .hybridEditorPane,
+:root[data-app-theme="light"] .hybridExplorerPane,
+:root[data-app-theme="light"] .hybridSidePane {
+  background: rgba(255, 255, 255, 0.72);
+}
+
+:root[data-app-theme="light"] .hybridExplorerPane {
+  border-right-color: rgba(23, 23, 23, 0.1);
+}
+
+:root[data-app-theme="light"] .codeEditorShell {
+  background: #fbfbf9;
+  border-color: rgba(23, 23, 23, 0.1);
+}
+
+:root[data-app-theme="light"] .hybridTerminalPanel {
+  background: #171717;
+  border-top-color: rgba(23, 23, 23, 0.12);
+}
+
+:root[data-app-theme="light"] .terminalTabs {
+  border-bottom-color: rgba(255, 255, 255, 0.1);
+}
+
+:root[data-app-theme="light"] .topbarUserAvatar {
+  background: #b6ff6b;
+  color: #171717;
+}
+
+.hybridLayout,
+.fullAgentLayout {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  gap: 0;
+}
+
+.hybridExplorerPane {
+  width: 232px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 0;
+}
+
+.hybridEditorPane,
+.fullAgentPreview,
+.fullAgentPreviewPane {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.hybridEditorPane,
+.hybridSidePane,
+.sidebarPane,
+.fullAgentPreviewPane {
+  border-radius: 0;
+}
+
+.hybridSidePane {
+  width: min(320px, 25vw);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sidebarPane {
+  width: min(360px, 30vw);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sidebarPane.hidden {
+  display: none;
+}
+
+.paneTitle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 11px 9px;
+  border-bottom: 1px solid rgba(229, 231, 235, 0.07);
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.paneEyebrow {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  margin-bottom: 4px;
+}
+
+.paneHeading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.paneCounter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.consoleBody,
+.sidebarBody,
+.editorWrap,
+.assistContent,
+.fullAgentComposer,
+.previewBody {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sidebarBody,
+.previewBody {
+  padding: 8px;
+  gap: 8px;
+  overflow: auto;
+}
+
+.assistContent,
+.fullAgentComposer {
+  padding: 12px;
+  gap: 10px;
+  overflow: hidden;
+  flex: 1;
+}
+
+.explorerSummaryCard,
+.assistHeroCard,
+.assistResponseCard,
+.fullAgentIntro,
+.settingsInfoCard,
+.gateFeatureCard,
+.workspaceGateCard,
+.emptyPreview,
+.emptyState,
+.previewViewport,
+.previewEmbedSmall {
+  background: linear-gradient(180deg, rgba(246, 250, 245, 0.055), rgba(246, 250, 245, 0.026));
+  border: 1px solid rgba(209, 250, 229, 0.12);
+  border-radius: 8px;
+}
+
+.explorerSummaryCard {
+  padding: 12px;
+}
+
+.explorerSummaryCard.compact {
+  padding: 9px 10px;
+}
+
+.explorerSummaryTitle {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.explorerSummaryMeta {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.explorerProjectSelectWrap {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.explorerProjectSelectWrap span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.explorerProjectSelect {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  border-radius: 7px;
+  border: 1px solid rgba(209, 250, 229, 0.12);
+  background: rgba(7, 16, 21, 0.82);
+  color: var(--text);
+  padding: 0 10px;
+  font: inherit;
+  font-size: 12px;
+  outline: 0;
+}
+
+.explorerToolbar {
+  display: flex;
+  gap: 6px;
+}
+
+.explorerToolbar .btn {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 32px;
+  padding: 0 5px;
+  gap: 4px;
+  white-space: nowrap;
+  font-size: 10px;
+}
+
+.treeExplorer {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border-radius: 7px;
+  background: rgba(3, 10, 14, 0.34);
+  border: 1px solid rgba(209, 250, 229, 0.08);
+  padding: 5px;
+}
+
+.treeRow {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  border: 0;
+  background: transparent;
+  color: var(--text-soft);
+  border-radius: 6px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.treeRow:hover {
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text);
+}
+
+.treeRow.active {
+  background: linear-gradient(135deg, rgba(156, 255, 95, 0.16), rgba(97, 232, 255, 0.13));
+  color: #f6faf5;
+  box-shadow: inset 2px 0 0 rgba(156, 255, 95, 0.7);
+}
+
+.treeChevron {
+  width: 12px;
+  color: var(--muted);
+  transition: transform 140ms ease;
+}
+
+.treeChevron.open {
+  transform: rotate(90deg);
+}
+
+.treeIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+
+.treeIcon.dir {
+  color: #9cff5f;
+}
+
+.treeLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+}
+
+.treeChildren {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.treeLoading {
+  color: var(--muted);
+  padding: 6px 0;
+  font-size: 11px;
+  opacity: 0.76;
+}
+
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 36px;
+  padding: 5px 8px 0;
+  overflow-x: auto;
+  background: rgba(255, 255, 255, 0.012);
+  border-bottom: 1px solid rgba(229, 231, 235, 0.06);
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 31px;
+  padding: 0 9px;
+  border-radius: 7px 7px 0 0;
+  color: var(--muted);
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.022);
+  border: 1px solid transparent;
+  border-bottom: 0;
+}
+
+.tab.active {
+  color: var(--text);
+  background: #071015;
+  border-color: rgba(209, 250, 229, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+
+.tabLabel {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.tag {
+  padding: 4px 8px;
+  font-size: 10px;
+}
+
+.tabClose,
+.attachedImageRemove,
+.agentOrbClose {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.tabClose:hover,
+.attachedImageRemove:hover,
+.agentOrbClose:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text);
+}
+
+.editorWrap {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  padding: 0;
+}
+
+.editorToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 1px solid rgba(229, 231, 235, 0.07);
+  border-radius: 0;
+  background: rgba(255, 255, 255, 0.022);
+}
+
+.editorToolbarMeta {
+  min-width: 0;
+}
+
+.editorTitle {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.editorHint {
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 4px;
+}
+
+.editorActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.hybridWorkbench,
+.hybridPrimarySurface,
+.codeEditorShell,
+.emptyEditor {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+}
+
+.hybridWorkbench,
+.hybridPrimarySurface {
+  display: flex;
+  flex-direction: column;
+}
+
+.codeEditorShell {
+  border: 0;
+  border-radius: 0;
+  overflow: hidden;
+  background: #1a1b26;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.codeEditorShell > * {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.nvimTopline,
+.nvimStatusline {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 30px;
+  padding: 0 12px;
+  background: #16161e;
+  border-bottom: 1px solid rgba(122, 162, 247, 0.16);
+  color: #a9b1d6;
+  font: 12px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+.nvimStatusline {
+  justify-content: space-between;
+  min-height: 26px;
+  border-top: 1px solid rgba(122, 162, 247, 0.16);
+  border-bottom: 0;
+  background: #1f2335;
+  color: #c0caf5;
+}
+
+.nvimMode {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 3px;
+  background: #9ece6a;
+  color: #11131a;
+  font-weight: 800;
+}
+
+.nvimPath {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #c0caf5;
+}
+
+.nvimLanguage {
+  margin-left: auto;
+  color: #7aa2f7;
+}
+
+.nvimEditorBody {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  background:
+    linear-gradient(90deg, rgba(22, 22, 30, 0.98), rgba(22, 22, 30, 0.98) 56px, transparent 56px),
+    #1a1b26;
+}
+
+.nvimGutter {
+  padding: 14px 12px 18px 0;
+  overflow: hidden;
+  user-select: none;
+  text-align: right;
+  color: #565f89;
+  border-right: 1px solid rgba(122, 162, 247, 0.12);
+  font: 13px/22px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+.nvimGutter span {
+  display: block;
+  height: 22px;
+}
+
+.codeTextArea {
+  width: 100%;
+  height: 100%;
+  resize: none;
+  border: 0;
+  outline: 0;
+  padding: 14px 18px 18px;
+  background: transparent;
+  color: #c0caf5;
+  font: 13px/22px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  tab-size: 2;
+  white-space: pre;
+  overflow: auto;
+  caret-color: #bb9af7;
+  scrollbar-color: #3b4261 #1a1b26;
+}
+
+.emptyEditor {
+  border: 0;
+  border-radius: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(97, 232, 255, 0.1), transparent 34%),
+    linear-gradient(180deg, rgba(246, 250, 245, 0.045), rgba(246, 250, 245, 0.02));
+}
+
+.emptyState,
+.compactEmptyState,
+.emptyPreview {
+  padding: 24px;
+  text-align: center;
+}
+
+.emptyStateTitle,
+.emptyPreviewTitle {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.emptyStateText {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.emptyStateIcon {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  margin: 0 auto 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(124, 140, 255, 0.12);
+  border: 1px solid rgba(124, 140, 255, 0.2);
+}
+
+.statusbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 10px;
+  margin-top: 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(209, 250, 229, 0.1);
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.mono {
+  font-family: "Geist Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+}
+
+.assistShell,
+.previewPane,
+.previewMiniShell,
+.sidebarPane,
+.previewDock {
+  position: relative;
+}
+
+.previewDock {
+  display: flex;
+  min-height: 0;
+}
+
+.previewDock > * {
+  flex: 1;
+  min-height: 0;
+}
+
+.assistResizeHandle {
+  width: 6px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  position: relative;
+  background: rgba(148, 163, 184, 0.06);
+  border-left: 1px solid rgba(148, 163, 184, 0.12);
+  border-right: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.assistResizeHandle::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  transition: background 140ms ease;
+}
+
+.assistResizeHandle:hover::before,
+.assistResizeHandle.active::before {
+  background: rgba(124, 140, 255, 0.18);
+}
+
+.assistStatusPill,
+.providerStatusChip,
+.previewStatusPill {
+  padding: 7px 11px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.assistContent,
+.fullAgentComposer {
+  gap: 10px;
+}
+
+.assistHeroCard,
+.fullAgentIntro {
+  padding: 12px;
+}
+
+.assistHeroEyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--brand-strong);
+}
+
+.assistHeroTitle,
+.fullAgentTitle {
+  margin-top: 6px;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: -0.03em;
+}
+
+.assistIntro,
+.fullAgentText,
+.fullAgentAssetHint,
+.settingsNote,
+.settingsSubtle,
+.assistHintText,
+.previewFooterMeta,
+.mutedReply {
+  color: var(--muted);
+  line-height: 1.45;
+  font-size: 12px;
+}
+
+.assistToolRow,
+.assistActionRow,
+.fullAgentAssetRow,
+.providerStatusLine {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.assistHintPill,
+.providerStatusChip,
+.agentStatusPill,
+.tag {
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.attachedImageChip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(124, 140, 255, 0.18);
+  background: rgba(124, 140, 255, 0.08);
+}
+
+.attachedImageName {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.agentOrbAssetChip {
+  align-items: center;
+  gap: 8px;
+  border-color: rgba(97, 232, 255, 0.18);
+  background: rgba(97, 232, 255, 0.08);
+}
+
+.attachedImageAlias {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(97, 232, 255, 0.22);
+  background: rgba(97, 232, 255, 0.12);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.attachedImageHint {
+  min-width: 0;
+  flex: 1 1 140px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.attachedImagePath {
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.textarea.promptBox {
+  min-height: 112px;
+  resize: none;
+  line-height: 1.5;
+}
+
+.fullAgentPromptBox {
+  min-height: 140px;
+}
+
+.assistRunButton,
+.fullAgentRunButton {
+  min-width: 148px;
+}
+
+.assistResponseCard {
+  padding: 12px;
+}
+
+.assistSectionTitle {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-soft);
+}
+
+.assistReply {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-soft);
+  white-space: pre-wrap;
+}
+
+.assistReply.empty {
+  color: var(--muted);
+}
+
+.previewSection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  flex: 1;
+}
+
+.previewMiniShell {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(209, 250, 229, 0.1);
+  border-radius: 8px;
+  background: rgba(5, 16, 20, 0.38);
+}
+
+.previewMiniHeader {
+  padding: 10px;
+  border-bottom: 1px solid rgba(229, 231, 235, 0.065);
+}
+
+.previewMiniBody,
+.previewBody {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  flex: 1;
+}
+
+.previewMiniBody {
+  padding: 8px;
+}
+
+.previewCanvasWrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.previewViewport,
+.previewEmbedSmall {
+  overflow: hidden;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  border-radius: 8px;
+  background: rgba(3, 12, 17, 0.62);
+}
+
+.previewViewport {
+  height: 100%;
+  min-height: 420px;
+}
+
+.previewEmbedSmall {
+  min-height: 180px;
+}
+
+.previewChrome {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  margin-bottom: 8px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(209, 250, 229, 0.1);
+}
+
+.previewDots {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.previewDots span {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.previewDots span:first-child {
+  background: #fb7185;
+}
+
+.previewDots span:nth-child(2) {
+  background: #f5c56b;
+}
+
+.previewDots span:last-child {
+  background: #38d39f;
+}
+
+.previewAddress {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.previewFrameWrap {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #071015;
+}
+
+.previewFrame {
+  display: block;
+  flex: 1;
+  min-height: 100%;
+  border-radius: 8px;
+  background: white;
+}
+
+.previewFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.previewFooterMeta {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+}
+
+.previewAddress,
+.previewFooterMeta,
+.attachedImagePath,
+.settingsSubtle.mono {
+  overflow-wrap: anywhere;
+}
+
+.previewStatusPill.idle,
+.providerStatusChip.disconnected {
+  color: var(--text-soft);
+}
+
+@media (max-width: 1180px) {
+  .hybridExplorerPane {
+    width: 190px;
+  }
+
+  .hybridSidePane,
+  .sidebarPane {
+    width: min(280px, 30vw);
+  }
+
+}
+
+@media (max-width: 1024px) {
+  .appMain {
+    padding: 0;
+  }
+
+  .hybridLayout,
+  .fullAgentLayout {
+    gap: 0;
+  }
+
+  .topbar {
+    padding: 14px;
+  }
+
+  .topbarUserBadge {
+    max-width: none;
+  }
+
+  .settingsGrid {
+    grid-template-columns: 1fr;
+    overflow: auto;
+  }
+
+  .settingsReadinessGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .commandBarButton {
+    display: none;
+  }
+}
+
+@media (max-width: 860px) {
+  body {
+    overflow: auto;
+  }
+
+  .assistResizeHandle {
+    display: none;
+  }
+
+  .shell,
+  .appMain {
+    height: auto;
+    min-height: 100vh;
+  }
+
+  .hybridLayout,
+  .fullAgentLayout {
+    flex-direction: column;
+    height: auto;
+  }
+
+  .hybridExplorerPane,
+  .hybridSidePane,
+  .sidebarPane,
+  .fullAgentPreview,
+  .fullAgentPreviewPane {
+    width: 100%;
+  }
+
+  .fullPreviewHeader {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .fullPreviewHeader .btn {
+    justify-content: center;
+    width: 100%;
+  }
+
+  .fullPreviewProject {
+    max-width: 100%;
+  }
+
+  .hybridEditorPane {
+    min-height: 520px;
+  }
+
+  .previewMiniBody,
+  .previewBody {
+    padding-bottom: 12px;
+  }
+
+  .previewEmbedSmall,
+  .previewViewport {
+    min-height: 360px;
+  }
+
+  .previewFooter {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .previewFooterMeta {
+    text-align: left;
+  }
+
+  .statusbar,
+  .editorToolbar,
+  .paneTitle {
+    flex-wrap: wrap;
+  }
+
+  .agentOrb {
+    right: max(14px, env(safe-area-inset-right));
+    bottom: max(14px, env(safe-area-inset-bottom));
+    z-index: 1000;
+    touch-action: manipulation;
+  }
+
+  .agentOrbPanel {
+    width: min(92vw, 340px);
+  }
+
+  .workspaceGateCard {
+    padding: 24px;
+  }
+
+  .workspaceGateTitle {
+    font-size: 32px;
+  }
+
+  .newProjectTemplateGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .workspaceSetupMain {
+    padding-bottom: 80px;
+  }
+
+  .savedProjectsHeader,
+  .savedProjectItem {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .savedProjectsHeaderActions,
+  .savedProjectActions {
+    justify-content: flex-start;
+  }
+
+  .savedProjectOpen {
+    width: 100%;
+  }
+
+}
+@media (max-width: 720px), (pointer: coarse) {
+  .agentOrb {
+    right: max(12px, env(safe-area-inset-right));
+    bottom: max(12px, env(safe-area-inset-bottom));
+    left: auto;
+    transform: none !important;
+  }
+
+  .agentOrb.open {
+    left: 12px;
+    right: 12px;
+    bottom: max(12px, env(safe-area-inset-bottom));
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    transform: none !important;
+    z-index: 10000;
+  }
+
+  .agentOrbBubble,
+  .agentOrbDock {
+    display: none;
+  }
+
+  .agentOrbPanel {
+    width: 100%;
+    max-height: calc(100dvh - 104px);
+    margin: 0 0 10px;
+    border-radius: 20px;
+    display: flex;
+    flex-direction: column;
+    background: #07101b;
+  }
+
+  .agentOrbHeader {
+    flex: 0 0 auto;
+    padding: 14px 14px 0;
+  }
+
+  .agentOrbContent {
+    min-height: 0;
+    overflow: auto;
+    padding: 14px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .agentOrbPrompt {
+    min-height: 72px;
+    max-height: 28dvh;
+  }
+
+  .agentOrbComposer.hasText .agentOrbPrompt {
+    min-height: 96px;
+  }
+
+  .agentOrbComposerMeta {
+    flex-wrap: wrap;
+  }
+
+  .agentOrbQuickGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .agentOrbActions {
+    position: sticky;
+    bottom: 0;
+    padding-top: 8px;
+    background: linear-gradient(180deg, rgba(7, 16, 27, 0), #07101b 34%);
+  }
+
+  .agentOrbButton {
+    width: 60px;
+    height: 60px;
+    touch-action: manipulation;
+  }
+}
+
+:root[data-app-theme="light"] .topbar,
+:root[data-app-theme="light"] .pane,
+:root[data-app-theme="light"] .missionCard,
+:root[data-app-theme="light"] .previewMiniShell,
+:root[data-app-theme="light"] .previewViewport,
+:root[data-app-theme="light"] .previewBody,
+:root[data-app-theme="light"] .sidebarBody {
+  border-color: rgba(23, 23, 23, 0.1);
+}
+
+:root[data-app-theme="light"] .hybridEditorPane,
+:root[data-app-theme="light"] .hybridExplorerPane,
+:root[data-app-theme="light"] .hybridSidePane {
+  background: rgba(255, 255, 255, 0.72);
+}
+
+:root[data-app-theme="light"] .pane,
+:root[data-app-theme="light"] .missionCard,
+:root[data-app-theme="light"] .newProjectModal {
+  background: rgba(255, 255, 255, 0.82);
+}
+
+:root[data-app-theme="light"] .workspaceSetupCard {
+  background: transparent;
+}
+
+:root[data-app-theme="light"] .codeEditorShell,
+:root[data-app-theme="light"] .emptyEditor {
+  background: #fbfbf9;
+  border-color: rgba(23, 23, 23, 0.1);
+}
+
+:root[data-app-theme="light"] .hybridTerminalPanel,
+:root[data-app-theme="light"] .terminalViewport {
+  background: #171717;
+  color: rgba(255, 255, 255, 0.88);
+}
+
+:root[data-app-theme="light"] .terminalTabs {
+  background: #171717;
+  border-bottom-color: rgba(255, 255, 255, 0.1);
+}
+
+:root[data-app-theme="light"] .terminalTab,
+:root[data-app-theme="light"] .terminalStatusText,
+:root[data-app-theme="light"] .terminalLine,
+:root[data-app-theme="light"] .terminalInputLine,
+:root[data-app-theme="light"] .terminalCommandInput {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+:root[data-app-theme="light"] .terminalCommandInput {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+:root[data-app-theme="light"] .explorerSummaryCard,
+:root[data-app-theme="light"] .emptyState,
+:root[data-app-theme="light"] .emptyPreview,
+:root[data-app-theme="light"] .settingsInfoCard,
+:root[data-app-theme="light"] .settingsSection,
+:root[data-app-theme="light"] .settingsReadinessItem,
+:root[data-app-theme="light"] .missionReviewItem,
+:root[data-app-theme="light"] .missionCompactItem,
+:root[data-app-theme="light"] .agentAuditStage,
+:root[data-app-theme="light"] .agentAuditRow,
+:root[data-app-theme="light"] .agentLiveCard,
+:root[data-app-theme="light"] .agentLiveBubble,
+:root[data-app-theme="light"] .agentOrbStep,
+:root[data-app-theme="light"] .agentOrbReply,
+:root[data-app-theme="light"] .agentOrbLog {
+  background: rgba(255, 255, 255, 0.68);
+  border-color: rgba(17, 23, 23, 0.09);
+  color: #111717;
+}
+
+:root[data-app-theme="light"] .missionStatusCard.working {
+  background: linear-gradient(180deg, rgba(97, 232, 255, 0.16), rgba(255, 255, 255, 0.64));
+}
+
+:root[data-app-theme="light"] .missionStatusCard.review {
+  background: linear-gradient(180deg, rgba(156, 255, 95, 0.2), rgba(255, 255, 255, 0.64));
+}
+
+:root[data-app-theme="light"] .agentLiveBubble.user,
+:root[data-app-theme="light"] .agentLiveBubble.assistant.working,
+:root[data-app-theme="light"] .agentLiveBubble.tool.working {
+  background: rgba(97, 232, 255, 0.16);
+  border-color: rgba(15, 131, 149, 0.18);
+}
+
+:root[data-app-theme="light"] .agentLiveCard.working {
+  background: rgba(97, 232, 255, 0.13);
+  border-color: rgba(15, 131, 149, 0.16);
+}
+
+:root[data-app-theme="light"] .agentLiveCard.success {
+  background: rgba(22, 163, 118, 0.11);
+  border-color: rgba(22, 163, 118, 0.18);
+}
+
+:root[data-app-theme="light"] .agentLiveCard.error {
+  background: rgba(220, 38, 69, 0.09);
+  border-color: rgba(220, 38, 69, 0.16);
+}
+
+:root[data-app-theme="light"] .agentLiveMono {
+  background: rgba(17, 23, 23, 0.06);
+}
+
+:root[data-app-theme="light"] .agentLiveCardOutput.error {
+  color: #b91c3c;
+}
+
+:root[data-app-theme="light"] .agentOrbPanel {
+  background:
+    radial-gradient(circle at 12% 0%, rgba(156, 255, 95, 0.2), transparent 30%),
+    radial-gradient(circle at 88% 4%, rgba(97, 232, 255, 0.18), transparent 34%),
+    rgba(255, 255, 255, 0.92);
+  border-color: rgba(17, 23, 23, 0.11);
+  color: #111717;
+}
+
+:root[data-app-theme="light"] .agentOrbBubble {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(17, 23, 23, 0.11);
+  color: rgba(17, 23, 23, 0.74);
+}
+
+:root[data-app-theme="light"] .agentOrb.appora .agentOrbBubble.playful,
+:root[data-app-theme="light"] .agentOrb.appora .agentOrbBubble.curious,
+:root[data-app-theme="light"] .agentOrbBubble.sleepy,
+:root[data-app-theme="light"] .agentOrbBubble.sleeping,
+:root[data-app-theme="light"] .agentOrbBubble.celebrate,
+:root[data-app-theme="light"] .agentOrbBubble.surprised {
+  background: rgba(255, 255, 255, 0.92);
+  color: rgba(17, 23, 23, 0.74);
+}
+
+:root[data-app-theme="light"] .agentOrbDockChip,
+:root[data-app-theme="light"] .agentOrbQuickAction,
+:root[data-app-theme="light"] .agentOrbContextChip,
+:root[data-app-theme="light"] .agentStatusPill {
+  background: rgba(255, 255, 255, 0.7);
+  border-color: rgba(17, 23, 23, 0.1);
+  color: rgba(17, 23, 23, 0.72);
+}
+
+:root[data-app-theme="light"] .agentOrbAssetChip {
+  background: rgba(15, 131, 149, 0.08);
+  border-color: rgba(15, 131, 149, 0.16);
+}
+
+:root[data-app-theme="light"] .attachedImageAlias {
+  background: rgba(15, 131, 149, 0.1);
+  border-color: rgba(15, 131, 149, 0.18);
+  color: #0f8395;
+}
+
+:root[data-app-theme="light"] .agentStatusPill.thinking {
+  color: #0f8395;
+  background: rgba(97, 232, 255, 0.18);
+  border-color: rgba(15, 131, 149, 0.18);
+}
+
+:root[data-app-theme="light"] .agentStatusPill.error {
+  color: #9f1239;
+  background: rgba(251, 113, 133, 0.12);
+  border-color: rgba(159, 18, 57, 0.16);
+}

@@ -2,7 +2,7 @@
 
 Appora is an experimental agentic web/app builder for non-coders and fast-moving builders. It combines a hosted browser IDE, Supabase-backed project persistence, BYOK model routing, and one coding agent designed to help users move from rough intent to a working web application.
 
-This repository is moving toward a serious coding-agent product, but it is not yet honestly comparable to mature agents such as Codex, Cursor, Claude Code, or Aider on large arbitrary codebases. The current system has a real tool backbone, validation loop, preview audit, memory, and guarded execution, but long-horizon reliability and benchmark performance still need hardening.
+This repository is moving toward a serious coding-agent product. Appora is now strongest at scoped code repair and web-app iteration: it can inspect context, route through multiple 9Router-backed providers, produce surgical file edits, run guarded validation, and reject common failure modes such as scaffold drift or plan-only replies. It is still not a claim of being better than mature agents such as Codex, Cursor, Claude Code, or Aider on large arbitrary codebases; long-horizon multi-step delivery and broad benchmark performance still need more evidence.
 
 The target runtime is **Vercel serverless + Supabase**. The product is not positioned as a local-only experiment or short-lived showcase; the architecture is meant for a hosted experience where users sign in, paste their own model API keys, create projects, and ask an agent to build or improve apps.
 
@@ -25,7 +25,7 @@ The intended user is someone who may not know how to code but wants to build a r
 - Separate live interaction module for agent actions only
 - Supabase-backed user settings and project files
 - BYOK provider settings per user
-- 9Router-backed model routing with BYOK support
+- 9Router-backed model routing with BYOK support and model fallback priority
 - Free-tier friendly mode for providers with strict limits
 - Agent memory and RAG-ready Supabase document chunks
 - Durable agent job ledger with `job_id`, event history, and recoverable final result
@@ -40,31 +40,36 @@ The intended user is someone who may not know how to code but wants to build a r
 
 ## Current Maturity
 
-Appora is best described as an early serious coding agent, not a finished top-tier one.
+Appora is best described as a serious early coding agent with a stronger repair loop than a generic chatbot, but not yet a finished top-tier agent across arbitrary repositories.
 
 Rough current confidence:
 
-- Tool backbone: about 75-80%
-- Agent flow/orchestration: about 65-75%
-- Frontend/web app delivery: about 65-75%
-- General coding across varied repos: about 60-70%
-- Benchmark readiness: about 60-70%
+- Tool backbone: about 80-85%
+- Agent flow/orchestration: about 75-80%
+- Scoped bugfix and repair tasks: about 80-85%
+- Frontend/web app delivery: about 70-80%
+- General coding across varied repos: about 65-75%
+- Benchmark readiness: about 65-75%
 
 What is already solid:
 
 - The runtime inspects project structure before broad work.
 - The agent can read/search/map files, apply focused edits, run bounded validation, run formatter/linter checks, query local SQLite, and inspect/commit local Git changes.
+- 9Router model selection can prioritize working provider routes and fall back when a model returns invalid JSON, SSE chunk responses, quota/rate-limit errors, or plan-only output.
+- Existing-file bugfixes are kept surgical. The verifier blocks scaffold/config/page drift and treats a one-file repair as valid coverage when the prompt is explicitly a bugfix.
 - Frontend tasks are blocked by source-quality, requirement-coverage, task-depth, interaction, business-data honesty, and preview-audit checks.
 - Browser visual evidence is part of the completion report when preview audit runs.
 - Agent runs persist state, events, memory, checkpoints, validation results, preview audit results, repairs, and completion reports.
+- Recent live repair checks passed for React state bugs, TypeScript utility bugs, Python helper bugs, and a multi-file TypeScript context task while preserving the required edit scope.
 
 What is still not solved:
 
 - Supabase/Postgres app database operations are not yet a first-class agent tool. SQLite is supported locally; Supabase/Postgres should be wired through MCP or a dedicated guarded backend client.
 - GitHub push and PR automation are intentionally gated. Local branch/commit is supported; remote push/PR requires explicit remote permission and a configured GitHub workflow.
 - Dependency/version conflict resolution is still basic. The agent can inspect and run package managers, but it is not yet a full dependency solver.
-- The model/tool loop can still underuse tools or produce shallow work if the model output is weak, although the verifier now blocks more generic fallback cases.
-- Aider benchmark support exists, but Appora does not yet claim competitive pass rates.
+- Large multi-step feature work still needs stronger repeated evidence across 3-6 file changes, dependency conflicts, and browser/runtime validation.
+- The model/tool loop can still underuse tools or produce shallow work if every available model route is weak, although the runtime now switches model candidates after repeated no-work output.
+- Aider benchmark support now reaches the official harness through Docker with real 9Router chat preflight, but Appora does not yet claim broad competitive pass rates.
 - Hosted serverless execution is bounded; this is not a persistent VM or fully isolated cloud sandbox.
 
 ## Agent Runtime
@@ -97,7 +102,33 @@ Important runtime behavior:
 - MCP tools can be discovered and executed through registered configs.
 - Verifier checks block unsafe or invalid output before files are applied.
 - Verifier repair pass gives the agent one more chance to correct bad output.
+- No-work repair loops can switch to the next 9Router model candidate instead of repeatedly asking the same weak model to comply.
 - Checkpoints are written before applying file changes, so the latest agent write can be restored.
+
+## 9Router Model Routing
+
+The intended runtime is one Appora agent routed through 9Router. `NINE_ROUTER_MODEL=appora` is treated as a local automatic-routing alias, not as a literal upstream model name. The agent runtime keeps a prioritized candidate list and can move through it when a model is unavailable, rate-limited, returns invalid JSON, streams SSE chunks through a non-stream response, or repeatedly produces no concrete work.
+
+Current default priority is tuned for the local 9Router catalog used during hardening:
+
+```text
+kr/qwen3-coder-next
+openrouter/moonshotai/kimi-k2.6:free
+gemini/gemini-3.1-flash-lite-preview
+qd/qmodel_latest
+ollama/gpt-oss:120b
+ollama/nemotron-3-ultra:cloud
+openrouter/openrouter/free
+kr/claude-haiku-4.5
+```
+
+Override the order with:
+
+```env
+APPORA_9ROUTER_MODEL_PRIORITY=kr/qwen3-coder-next,openrouter/moonshotai/kimi-k2.6:free,gemini/gemini-3.1-flash-lite-preview,qd/qmodel_latest
+```
+
+Provider catalogs change frequently. Treat this priority list as an operational default, not a universal ranking. Run a small route probe before relying on a new provider family for production demos.
 
 ## Local Agent Tools
 
@@ -149,14 +180,22 @@ Some tools are intentionally guarded. Remote Git push/PR and production database
 
 ```text
 api/                    FastAPI backend and agent runtime
+api/auth/               Auth identity, policy, and routes
+api/config/             Settings and provider configuration routes
+api/preferences/        User/project preferences models, storage, and routes
+api/projects/           Project CRUD, routes, and starter templates
+api/storage/            Supabase and hosted-secret persistence helpers
 api/tests/              Backend regression tests
-docs/                   Supabase/RAG docs and SQL
+docs/architecture/      Agent/runtime architecture notes
+docs/handoffs/          Agent handoff notes for future maintenance
+docs/reports/           Benchmark and audit reports
+docs/supabase/          Supabase schema and migration SQL
 scripts/                Utility scripts and preview audit
 src/                    React frontend
-src/agent/              Frontend agent workflow/runtime helpers
-src/components/         UI components
-src/modes/              Workspace and Full Preview layouts
-SUPABASE_SCHEMA.sql     Main Supabase schema
+src/app/                App shell, app-level styles, and feedback helpers
+src/features/           Feature-owned UI, runtimes, and workspace modes
+src/shared/             Shared API clients, Supabase client, and types
+docs/supabase/schema.sql Main Supabase schema
 vercel.json             Vercel routing/build config
 ```
 
@@ -190,7 +229,7 @@ npm run dev
 ```
 
 By default the local frontend calls the local API at `http://localhost:8787`.
-For local-first development while Railway or another hosted backend is unavailable, run:
+For local-first development while the hosted backend is unavailable, run:
 
 ```bash
 npm run dev:local
@@ -202,8 +241,8 @@ Then open `http://localhost:5173`. Do not use the Vercel-hosted UI for local bac
 
 Create a Supabase project and run:
 
-- `SUPABASE_SCHEMA.sql`
-- `docs/supabase-agent-rag.sql`
+- `docs/supabase/schema.sql`
+- `docs/supabase/agent-rag.sql`
 
 The RAG SQL creates `public.agent_memory_chunks`, used by the agent memory backend when available.
 
@@ -214,14 +253,14 @@ Useful backend readiness endpoints:
 
 If RAG status is `missing`, Supabase is connected but the agent memory table has not been created yet.
 
-`SUPABASE_SCHEMA.sql` also creates:
+`docs/supabase/schema.sql` also creates:
 
 - `public.agent_jobs`
 - `public.agent_job_events`
 
 These tables make agent runs recoverable in hosted mode. `/api/agent` returns/streams a `job_id`, and the frontend can later read job status/events through `/api/agent/jobs/{job_id}` and `/api/agent/jobs/{job_id}/events`.
 
-If your Supabase project already has the earlier Appora schema, run only `docs/supabase-agent-jobs.sql` to add the durable job ledger without touching existing project tables.
+If your Supabase project already has the earlier Appora schema, run only `docs/supabase/agent-jobs.sql` to add the durable job ledger without touching existing project tables.
 
 ## Hosted Deployment on Vercel
 
@@ -256,6 +295,8 @@ Recommended 9Router defaults:
 ```env
 NINE_ROUTER_BASE_URL=http://127.0.0.1:20128/v1
 NINE_ROUTER_MODEL=appora
+# Optional comma/newline-separated override for Appora's fallback order.
+APPORA_9ROUTER_MODEL_PRIORITY=kr/qwen3-coder-next,openrouter/moonshotai/kimi-k2.6:free,gemini/gemini-3.1-flash-lite-preview,qd/qmodel_latest
 ```
 
 Optional legacy direct-provider model defaults:
@@ -298,7 +339,7 @@ For hosted public usage, prefer per-user BYOK through Settings instead of sharin
 
 Appora is designed for bring-your-own-key usage. The current agent path is centered on 9Router, so users can paste a 9Router endpoint/key in Settings and let 9Router handle the underlying provider routes. Keys are stored per account in Supabase and encrypted using `VOICEIDE_SECRET_KEY`.
 
-For hosted public usage, prefer per-user 9Router BYOK through Settings instead of sharing one server-level key across all users. Direct provider settings may still appear in older code paths and catalog data, but the intended agent runtime is one Appora agent routed through 9Router.
+For hosted public usage, prefer per-user 9Router BYOK through Settings instead of sharing one server-level key across all users. Direct provider settings may still appear in older code paths and catalog data, but the intended agent runtime is one Appora agent routed through 9Router with route fallback and verifier-driven repair.
 
 ## Validation
 
@@ -309,6 +350,8 @@ npm run lint
 npm run build
 npm run test:agent-regression
 ```
+
+The agent regression suite covers intent boundaries, provider routing, SSE parsing, no-work model fallback, scoped existing-file repair, verifier behavior, guarded tools, preview audit, project templates, and hosted profile settings.
 
 Backend targeted tests can also be run with:
 
@@ -324,7 +367,12 @@ npm run bench:agent:aider:smoke
 npm run bench:agent:internal:live:smoke
 ```
 
-Benchmark results should be treated as evidence, not marketing copy. Appora should not be described as benchmark-competitive until repeatable pass rates prove it.
+Recent benchmark evidence from the local hardening run:
+
+- Aider Polyglot smoke, Python `zipper`, `openai/qd/qmodel_latest`, whole edit format: 1/1 passed, 14/14 public tests passed, `pass_rate_1=100.0`, no malformed responses, no syntax/indentation errors, non-zero model tokens.
+- Live internal repair suite: React state bug, TypeScript utility bug, Python retry helper bug, and a multi-file TypeScript context task all passed with scoped file changes.
+
+Benchmark and live-suite results should be treated as evidence, not marketing copy. Appora can now be shown confidently for scoped repair demos and small benchmark smoke runs, but broad claims require repeated larger-task results.
 
 ## Current Engineering Boundaries
 
@@ -336,6 +384,8 @@ Known boundaries:
 - Heavy sandbox isolation for arbitrary user workloads is not implemented as a separate container layer.
 - Browser preview and terminal behavior depend on the deployment/runtime constraints. Hosted terminal actions are request-scoped and best-effort; local/dev preview servers are disabled on Vercel.
 - Provider quality and rate limits depend on each user key and chosen model.
+- 9Router model catalogs can change without code changes. Keep `APPORA_9ROUTER_MODEL_PRIORITY` current for demos and hosted deployments.
+- Scoped bugfix reliability is stronger than broad autonomous feature delivery. Treat large feature builds as a separate validation target, not proof inherited from single-file repair tests.
 
 The product direction is to keep improving agent reliability through stronger tools, stricter verification, better project persistence, and clearer hosted UX rather than expanding into a full custom cloud IDE infrastructure.
 

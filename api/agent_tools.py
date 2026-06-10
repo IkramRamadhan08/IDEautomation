@@ -64,6 +64,133 @@ def _workspace_or_project_path(ws_root: Path, project_dir: Path, raw_path: str) 
     return clean
 
 
+def _read_components_json(project_dir: Path) -> dict[str, Any]:
+    path = project_dir / "components.json"
+    if not path.exists() or not path.is_file():
+        return {}
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8", errors="ignore")[:80_000])
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _detect_ui_stack_profile(project_dir: Path, deps: dict[str, Any] | None = None) -> dict[str, Any]:
+    deps = dict(deps or {})
+    dep_names = {str(item) for item in deps.keys()}
+    components_json = _read_components_json(project_dir)
+    aliases = components_json.get("aliases") if isinstance(components_json.get("aliases"), dict) else {}
+    ui_alias = str((aliases or {}).get("ui") or "@/components/ui")
+    utils_alias = str((aliases or {}).get("utils") or "@/lib/utils")
+    ui_dirs = [
+        project_dir / "src" / "components" / "ui",
+        project_dir / "components" / "ui",
+        project_dir / "app" / "components" / "ui",
+    ]
+    ui_component_files: list[str] = []
+    for ui_dir in ui_dirs:
+        if not ui_dir.exists() or not ui_dir.is_dir():
+            continue
+        for path in sorted(ui_dir.glob("*.tsx")) + sorted(ui_dir.glob("*.ts")):
+            if path.is_file():
+                ui_component_files.append(path.relative_to(project_dir).as_posix())
+    tailwind_config = [
+        rel for rel in [
+            "tailwind.config.js",
+            "tailwind.config.cjs",
+            "tailwind.config.mjs",
+            "tailwind.config.ts",
+            "postcss.config.js",
+            "postcss.config.cjs",
+            "postcss.config.mjs",
+            "vite.config.ts",
+            "vite.config.js",
+        ]
+        if (project_dir / rel).exists()
+    ]
+    css_files: list[str] = []
+    tailwind_css_files: list[str] = []
+    css_custom_properties = False
+    for path in _source_candidates(project_dir, max_files=300, suffixes={".css", ".scss", ".sass", ".less"}):
+        rel = path.relative_to(project_dir).as_posix()
+        css_files.append(rel)
+        try:
+            content = path.read_text(encoding="utf-8", errors="ignore")[:120_000]
+        except Exception:
+            continue
+        if re.search(r"@import\s+[\"']tailwindcss[\"']|@tailwind\s+(?:base|components|utilities)", content):
+            tailwind_css_files.append(rel)
+        if re.search(r"--[a-z0-9-]+\s*:", content, re.IGNORECASE):
+            css_custom_properties = True
+    tailwind_version = ""
+    if "tailwindcss" in dep_names:
+        version = str(deps.get("tailwindcss") or "")
+        tailwind_version = "v4" if version.startswith("^4") or version.startswith("~4") or version.startswith("4") else "v3"
+    elif "@tailwindcss/vite" in dep_names:
+        tailwind_version = "v4"
+    elif any(rel.startswith("tailwind.config.") for rel in tailwind_config):
+        tailwind_version = "v3"
+    tailwind = bool(
+        "tailwindcss" in dep_names
+        or "@tailwindcss/vite" in dep_names
+        or "tailwindcss-animate" in dep_names
+        or tailwind_css_files
+        or any(rel.startswith("tailwind.config.") for rel in tailwind_config)
+    )
+    cn_utility = False
+    for rel in [
+        "src/lib/utils.ts",
+        "src/lib/utils.tsx",
+        "lib/utils.ts",
+        "lib/utils.tsx",
+    ]:
+        path = project_dir / rel
+        if not path.exists() or not path.is_file():
+            continue
+        try:
+            content = path.read_text(encoding="utf-8", errors="ignore")[:40_000]
+        except Exception:
+            continue
+        if re.search(r"\bfunction\s+cn\b|\bconst\s+cn\b|\btwMerge\b|\bclsx\b", content):
+            cn_utility = True
+            break
+    shadcn = bool(
+        components_json
+        or ui_component_files
+        or "class-variance-authority" in dep_names
+        or "tailwind-merge" in dep_names
+        or "@radix-ui/react-slot" in dep_names
+        or any(name.startswith("@radix-ui/react-") for name in dep_names)
+    )
+    base = str(components_json.get("base") or components_json.get("registry") or "")
+    if not base and any(name.startswith("@radix-ui/react-") for name in dep_names):
+        base = "radix"
+    return {
+        "shadcn": shadcn,
+        "components_json": bool(components_json),
+        "base": base,
+        "style": str(components_json.get("style") or ""),
+        "aliases": aliases or {},
+        "ui_alias": ui_alias,
+        "utils_alias": utils_alias,
+        "ui_component_files": sorted(dict.fromkeys(ui_component_files))[:80],
+        "cn_utility": cn_utility,
+        "tailwind": tailwind,
+        "tailwind_version": tailwind_version,
+        "tailwind_config": tailwind_config,
+        "tailwind_css_files": tailwind_css_files[:40],
+        "css_files": css_files[:80],
+        "css_custom_properties": css_custom_properties,
+        "dependencies": {
+            "class_variance_authority": "class-variance-authority" in dep_names,
+            "tailwind_merge": "tailwind-merge" in dep_names,
+            "radix": any(name.startswith("@radix-ui/react-") for name in dep_names),
+            "tailwindcss": "tailwindcss" in dep_names,
+            "tailwindcss_vite": "@tailwindcss/vite" in dep_names,
+        },
+    }
+
+
 _LOCAL_TOOLS: list[LocalToolInfo] = [
     LocalToolInfo(
         name="repo_list",
@@ -1433,6 +1560,7 @@ def execute_local_tool(ws_root: Path, project_dir: Path, *, tool_name: str, argu
                 if isinstance(raw_bucket, dict):
                     deps.update(raw_bucket)
             dep_names = {str(item) for item in deps.keys()}
+            ui_stack = _detect_ui_stack_profile(proj, deps)
             css_files: list[str] = []
             module_css_files: list[str] = []
             styled_components_files: list[str] = []
@@ -1467,33 +1595,39 @@ def execute_local_tool(ws_root: Path, project_dir: Path, *, tool_name: str, argu
                         class_samples.append({"path": rel, "classes": sample[:180]})
             payload = {
                 "project_root": req_root,
-                "tailwind": (
-                    "tailwindcss" in dep_names
-                    or "@tailwindcss/vite" in dep_names
-                    or "tailwindcss-animate" in dep_names
-                    or bool(css_imports_tailwind)
-                    or (proj / "tailwind.config.js").exists()
-                    or (proj / "tailwind.config.ts").exists()
-                ),
-                "tailwind_config": [
-                    rel for rel in ["tailwind.config.js", "tailwind.config.ts", "postcss.config.js", "postcss.config.cjs"]
-                    if (proj / rel).exists()
-                ],
+                "tailwind": bool(ui_stack["tailwind"]),
+                "tailwind_version": ui_stack["tailwind_version"],
+                "tailwind_config": ui_stack["tailwind_config"],
+                "tailwind_css_files": ui_stack["tailwind_css_files"],
                 "css_files": css_files[:80],
                 "css_modules": bool(module_css_files),
                 "css_module_files": module_css_files[:40],
                 "styled_components": "styled-components" in dep_names or bool(styled_components_files),
                 "styled_components_files": styled_components_files[:40],
-                "shadcn": (proj / "components.json").exists() or "class-variance-authority" in dep_names or "tailwind-merge" in dep_names,
+                "shadcn": bool(ui_stack["shadcn"]),
+                "components_json": bool(ui_stack["components_json"]),
+                "shadcn_base": ui_stack["base"],
+                "shadcn_style": ui_stack["style"],
+                "shadcn_aliases": ui_stack["aliases"],
+                "ui_component_files": ui_stack["ui_component_files"],
+                "cn_utility": bool(ui_stack["cn_utility"]),
                 "utility_class_usage": bool(utility_class_files),
                 "utility_class_files": sorted(dict.fromkeys(utility_class_files))[:80],
                 "class_samples": class_samples[:16],
                 "css_custom_properties": css_custom_properties,
                 "token_files": sorted(dict.fromkeys(token_files))[:40],
                 "recommended_guidance": (
-                    "Tailwind/utilities are available; use existing utility conventions and avoid inventing unsupported CSS frameworks."
-                    if ("tailwindcss" in dep_names or "@tailwindcss/vite" in dep_names or css_imports_tailwind)
-                    else "Do not assume Tailwind utility classes are compiled; prefer existing CSS files/classes or add proper dependency/config deliberately."
+                    "shadcn/ui detected. Prefer existing components/ui primitives, project aliases, and cn(); use Tailwind utilities only because Tailwind setup is present."
+                    if ui_stack["shadcn"] and ui_stack["tailwind"]
+                    else (
+                        "Partial shadcn-style signals detected without complete Tailwind CSS setup; do not emit Tailwind utilities unless adding the full setup."
+                        if ui_stack["shadcn"]
+                        else (
+                            "Tailwind/utilities are available; use existing utility conventions and avoid inventing unsupported CSS frameworks."
+                            if ("tailwindcss" in dep_names or "@tailwindcss/vite" in dep_names or css_imports_tailwind)
+                            else "Do not assume Tailwind utility classes are compiled; prefer existing CSS files/classes or add proper dependency/config deliberately."
+                        )
+                    )
                 ),
             }
             text = json.dumps(payload, ensure_ascii=False, indent=2)
@@ -1626,6 +1760,13 @@ def execute_local_tool(ws_root: Path, project_dir: Path, *, tool_name: str, argu
             req_root = str(args.get("project_root") or ".").strip() or "."
             proj = _safe_project_dir(ws_root, req_root)
             stack = detect_project_stack(proj)
+            package_json = _read_package_json(proj)
+            deps: dict[str, Any] = {}
+            for bucket in ("dependencies", "devDependencies"):
+                raw_bucket = package_json.get(bucket)
+                if isinstance(raw_bucket, dict):
+                    deps.update(raw_bucket)
+            ui_stack = _detect_ui_stack_profile(proj, deps)
             payload = {
                 "project_root": req_root,
                 "languages": stack.languages,
@@ -1640,6 +1781,7 @@ def execute_local_tool(ws_root: Path, project_dir: Path, *, tool_name: str, argu
                 "has_database_schema": stack.has_database_schema,
                 "has_infra": stack.has_infra,
                 "has_preview_surface": stack.has_preview_surface,
+                "ui_stack": ui_stack,
             }
             text = json.dumps(payload, ensure_ascii=False, indent=2)
             duration_ms = int((time.perf_counter() - started) * 1000)

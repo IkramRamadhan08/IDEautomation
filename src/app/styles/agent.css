@@ -1,0 +1,583 @@
+.agentOrb {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 1000;
+}
+
+.agentOrbBubble {
+  max-width: 260px;
+  margin: 0 0 10px auto;
+  padding: 10px 12px;
+  border-radius: 16px 16px 6px 16px;
+  border: 1px solid rgba(209, 250, 229, 0.14);
+  background: rgba(8, 18, 24, 0.96);
+  box-shadow: var(--shadow-md);
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.agentOrbBubble.sleepy,
+.agentOrbBubble.sleeping {
+  color: rgba(246, 250, 245, 0.82);
+  background: rgba(8, 18, 24, 0.96);
+}
+
+.agentOrbBubble.sleeping::after {
+  content: " zzz";
+  opacity: 0.7;
+}
+
+.agentOrbBubble.playful {
+  background: rgba(9, 30, 28, 0.96);
+}
+
+.agentOrbBubble.curious {
+  background: rgba(9, 24, 34, 0.96);
+}
+
+.agentOrbBubble.celebrate {
+  background: rgba(14, 31, 27, 0.96);
+}
+
+.agentOrbBubble.surprised {
+  background: rgba(24, 21, 43, 0.96);
+}
+
+.agentOrbBubble.error {
+  background: rgba(40, 12, 18, 0.96);
+}
+
+.agentOrbDock {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  max-width: 280px;
+  margin: 0 0 10px auto;
+}
+
+.agentOrbDockChip,
+.agentOrbQuickAction,
+.agentOrbContextChip {
+  border: 1px solid rgba(209, 250, 229, 0.14);
+  background: rgba(246, 250, 245, 0.045);
+  color: var(--text-soft);
+}
+
+.agentOrbDockChip {
+  padding: 7px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+}
+
+.agentOrbPanel {
+  width: 380px;
+  margin-bottom: 14px;
+  border-radius: 22px;
+  border: 1px solid rgba(209, 250, 229, 0.14);
+  background:
+    radial-gradient(circle at 12% 0%, rgba(156, 255, 95, 0.1), transparent 30%),
+    radial-gradient(circle at 88% 4%, rgba(97, 232, 255, 0.12), transparent 34%),
+    linear-gradient(180deg, rgba(9, 19, 25, 0.98), rgba(7, 14, 20, 0.98));
+  box-shadow: var(--shadow-xl);
+  overflow: hidden;
+}
+
+.agentOrbHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 16px 0;
+}
+
+.agentOrbTitle {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.agentStatusPill.idle {
+  color: var(--text-soft);
+}
+
+.agentStatusPill.thinking {
+  color: #effffd;
+  background: rgba(97, 232, 255, 0.12);
+  border-color: rgba(97, 232, 255, 0.22);
+}
+
+.agentStatusPill.error {
+  color: #ffe2e8;
+  background: rgba(251, 113, 133, 0.12);
+  border-color: rgba(251, 113, 133, 0.22);
+}
+
+.agentOrbContent {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.agentOrbContextRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agentOrbContextChip {
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+}
+
+.agentOrbComposer {
+  display: grid;
+  gap: 6px;
+}
+
+.agentOrbComposer.disabled .agentOrbPrompt {
+  min-height: 54px;
+  opacity: 0.72;
+  cursor: not-allowed;
+}
+
+.agentOrbPrompt {
+  min-height: 76px;
+  max-height: 220px;
+  resize: none;
+  overflow: auto;
+  line-height: 1.5;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, min-height 0.18s ease;
+}
+
+.agentOrbComposer.hasText .agentOrbPrompt {
+  min-height: 104px;
+}
+
+.agentOrbComposerMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.3;
+  padding: 0 2px;
+}
+
+.agentOrbActivityPanel {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(209, 250, 229, 0.11);
+  border-radius: 14px;
+  background: rgba(246, 250, 245, 0.03);
+}
+
+.agentOrbActivityHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.agentOrbActivityPanel .agentLiveStage {
+  margin-top: 0;
+  max-height: 170px;
+  gap: 7px;
+}
+
+.agentOrbActivityPanel .agentLiveCard {
+  width: 100%;
+  padding: 9px 10px;
+  border-radius: 11px;
+}
+
+.agentOrbActivityPanel .agentLiveCardIcon {
+  width: 21px;
+  height: 21px;
+  flex-basis: 21px;
+  border-radius: 7px;
+}
+
+.agentOrbActivityPanel .agentLiveCardTitle {
+  font-size: 11.5px;
+}
+
+.agentOrbActivityPanel .agentLiveMono,
+.agentOrbActivityPanel .agentLiveCardOutput {
+  margin-top: 7px;
+}
+
+.agentOrbRunHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.agentOrbRunTitle {
+  margin-top: 4px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.agentOrbNewTaskBtn {
+  flex-shrink: 0;
+}
+
+.agentOrbActions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.agentOrbQuickGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.agentOrbQuickAction {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: center;
+  padding: 9px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+}
+
+.agentOrbQuickAction:hover,
+.agentOrbDockChip:hover {
+  border-color: rgba(97, 232, 255, 0.2);
+  background: rgba(97, 232, 255, 0.08);
+  color: var(--text);
+}
+
+.agentOrbThinking,
+.agentOrbStep {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(97, 232, 255, 0.18);
+  border-top-color: var(--brand-strong);
+  animation: spin 0.8s linear infinite;
+}
+
+.agentOrbSectionLabel {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.agentOrbSteps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agentOrbStep {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(246, 250, 245, 0.04);
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.agentOrbStepIcon {
+  font-size: 12px;
+}
+
+.agentOrbReply {
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(246, 250, 245, 0.04);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-soft);
+  white-space: pre-wrap;
+}
+
+.agentOrbLog {
+  margin: 0;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(246, 250, 245, 0.04);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+  overflow: auto;
+}
+
+.agentOrbButton {
+  width: 58px;
+  height: 58px;
+  border-radius: 18px;
+  border: 1px solid rgba(97, 232, 255, 0.22);
+  background: linear-gradient(135deg, rgba(156, 255, 95, 0.92), rgba(97, 232, 255, 0.86));
+  color: white;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 18px 44px rgba(7, 16, 21, 0.28);
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+}
+
+.agentOrb.appora .agentOrbButton {
+  border-color: rgba(97, 232, 255, 0.24);
+  background: linear-gradient(135deg, rgba(156, 255, 95, 0.95), rgba(97, 232, 255, 0.88));
+}
+
+.agentOrb.appora .agentOrbBubble.playful,
+.agentOrb.appora .agentOrbBubble.curious {
+  background: rgba(8, 31, 34, 0.96);
+}
+
+.agentOrbButton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.28), transparent 46%);
+  pointer-events: none;
+}
+
+.agentOrbBadgePulse {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #38d39f;
+  box-shadow: 0 0 0 0 rgba(56, 211, 159, 0.5);
+  animation: orbPulse 1.6s ease-out infinite;
+}
+
+.agentOrbButton.error {
+  border-color: rgba(251, 113, 133, 0.3);
+  background: radial-gradient(circle at 30% 30%, rgba(255, 198, 208, 0.98), rgba(251, 113, 133, 0.72) 40%, rgba(161, 44, 76, 0.96) 100%);
+}
+
+.agentOrbButton.thinking {
+  border-color: rgba(97, 232, 255, 0.42);
+}
+
+.agentOrbButton.curious {
+  box-shadow: 0 0 0 4px rgba(97, 232, 255, 0.09), var(--shadow-lg);
+}
+
+.agentOrbButton.celebrate {
+  box-shadow: 0 0 0 5px rgba(56, 211, 159, 0.12), var(--shadow-lg);
+}
+
+.agentOrbButton.surprised {
+  box-shadow: 0 0 0 5px rgba(167, 139, 250, 0.12), var(--shadow-lg);
+}
+
+.agentOrbButton.sleeping {
+  filter: saturate(0.82) brightness(0.92);
+}
+
+.agentOrbFace {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  z-index: 1;
+}
+
+.agentOrbPersonaMark {
+  position: absolute;
+  top: -13px;
+  right: -13px;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  background: rgba(6, 11, 20, 0.72);
+  color: white;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.agentOrb.appora .agentOrbPersonaMark {
+  background: rgba(6, 78, 59, 0.82);
+}
+
+.orbEye,
+.orbMouth,
+.orbCheek {
+  position: absolute;
+}
+
+.orbEye {
+  top: 10px;
+  width: 6px;
+  height: 10px;
+  border-radius: 999px;
+  background: #0f1a3a;
+  transition: transform 160ms ease, height 160ms ease, width 160ms ease;
+}
+
+.orbEye.left {
+  left: 8px;
+}
+
+.orbEye.right {
+  right: 8px;
+}
+
+.orbMouth {
+  left: 50%;
+  bottom: 7px;
+  width: 11px;
+  height: 5px;
+  border-bottom: 2px solid #0f1a3a;
+  border-radius: 0 0 999px 999px;
+  transform: translateX(-50%);
+}
+
+.orbCheek {
+  bottom: 10px;
+  width: 7px;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 206, 218, 0.55);
+}
+
+.orbCheek.left {
+  left: 4px;
+}
+
+.orbCheek.right {
+  right: 4px;
+}
+
+.agentOrbFace.sleepy .orbEye,
+.agentOrbFace.sleeping .orbEye {
+  height: 2px;
+  top: 13px;
+}
+
+.agentOrbFace.sleeping .orbMouth {
+  width: 8px;
+  height: 3px;
+}
+
+.agentOrbFace.playful .orbEye.left {
+  transform: rotate(-14deg);
+}
+
+.agentOrbFace.playful .orbEye.right {
+  transform: rotate(14deg);
+}
+
+.agentOrbFace.playful .orbMouth {
+  width: 14px;
+  height: 7px;
+}
+
+.agentOrbFace.curious .orbEye.left {
+  height: 8px;
+  transform: rotate(-6deg);
+}
+
+.agentOrbFace.curious .orbEye.right {
+  height: 12px;
+  transform: rotate(6deg);
+}
+
+.agentOrbFace.curious .orbMouth {
+  width: 9px;
+}
+
+.agentOrbFace.celebrate .orbEye {
+  height: 4px;
+  top: 12px;
+  transform: rotate(12deg);
+}
+
+.agentOrbFace.celebrate .orbEye.left {
+  transform: rotate(-18deg);
+}
+
+.agentOrbFace.celebrate .orbEye.right {
+  transform: rotate(18deg);
+}
+
+.agentOrbFace.celebrate .orbMouth {
+  width: 16px;
+  height: 8px;
+  bottom: 5px;
+}
+
+.agentOrbFace.surprised .orbEye {
+  width: 8px;
+  height: 8px;
+  top: 10px;
+  border-radius: 999px;
+}
+
+.agentOrbFace.surprised .orbMouth {
+  width: 8px;
+  height: 8px;
+  bottom: 6px;
+  border: 2px solid #0f1a3a;
+  border-radius: 999px;
+  border-bottom-width: 2px;
+}
+
+.agentOrbFace.working .orbEye,
+.agentOrbFace.error .orbEye {
+  width: 7px;
+}
+
+.agentOrbFace.error .orbMouth {
+  border-bottom: 0;
+  border-top: 2px solid #0f1a3a;
+  border-radius: 999px 999px 0 0;
+  bottom: 6px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes orbPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(56, 211, 159, 0.5);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(56, 211, 159, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(56, 211, 159, 0);
+  }
+}

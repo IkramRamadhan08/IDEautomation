@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import time
@@ -12,7 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import settings as settings_mod
-from .preferences import UserPreferencesRecord, get_user_preferences
+from .preferences.store import UserPreferencesRecord, get_user_preferences
 from .oauth_runtime import (
     CURRENT_PROFILE_ID,
     NINE_ROUTER_PROVIDER,
@@ -37,6 +38,17 @@ _DEFAULT_STANDARD_CONTEXT_CHARS: int = 140_000
 _SUPPORTED_AGENT_PROVIDERS = {
     NINE_ROUTER_PROVIDER,
 }
+_NINE_ROUTER_DEFAULT_PRIORITY_MODELS = [
+    "gemini/gemini-3.1-flash-lite-preview",
+    "qd/qmodel_latest",
+    "ollama/gpt-oss:120b",
+    "ollama/nemotron-3-ultra:cloud",
+    "openrouter/openrouter/free",
+    "kr/qwen3-coder-next",
+    "openrouter/moonshotai/kimi-k2.6:free",
+    "kr/claude-haiku-4.5",
+]
+_NINE_ROUTER_AUTO_PRIORITY_ALIASES = {"appora"}
 
 def _normalize_smart_route(model: str) -> str:
     return normalize_smart_route(model)
@@ -184,8 +196,11 @@ Rules:
 - Do not skip build/test/validation because of the guarded-autonomy allowlist. Return the needed project-scoped shell action or a safer equivalent; the backend harness decides whether it can run.
 - Respect the provided layout/context block. Workspace is editor-first and Full Preview is preview-first; both use the same agent. Keep the scope surgical only when the task is surgical, and preserve the existing architecture unless the user asks for broader implementation.
 - If current content is marked as coming from the editor buffer, trust it over on-disk file contents.
+- Match the detected UI stack. If shadcn/ui exists, use existing components/ui primitives, project aliases, and cn(); do not import shadcn components that are not present unless you also add their source files.
+- If Tailwind is absent, do not emit Tailwind utility classes unless the same response adds a complete Tailwind/shadcn setup. If the user explicitly asks for shadcn, request guarded project-scoped actions such as `npx shadcn@latest init -d --base radix` and component adds.
 - When the request is UI/UX/product polish, improve hierarchy, spacing, consistency, copy clarity, visual rhythm, responsiveness, and accessible states.
 - When changing product flows, think about happy path plus loading, empty, success, and error states where relevant.
+- For broad app/dashboard/workspace requests, implement the named workflows as real UI state, not decorative labels: filters must filter visible data, forms must contain inputs and submit handlers, empty/loading/error/success states must be reachable from state, and responsive layout evidence must exist in source/CSS.
 - Reuse the existing stack and patterns unless there is a clear reason not to.
 - Avoid placeholder work, toy UIs, or generic scaffolding unless the user explicitly wants that.
 - Before finalizing, self-review for broken imports, missing styles, mismatched names, and incomplete supporting edits.
@@ -527,10 +542,26 @@ def _free_tier_models_for_provider(provider: str) -> list[str]:
     return []
 
 
+def _nine_router_priority_models() -> list[str]:
+    raw = (
+        os.getenv("APPORA_9ROUTER_MODEL_PRIORITY")
+        or os.getenv("NINE_ROUTER_MODEL_PRIORITY")
+        or ""
+    )
+    if raw.strip():
+        configured = [part.strip() for part in re.split(r"[\n,]+", raw) if part.strip()]
+        return _dedupe_models(configured)
+    return list(_NINE_ROUTER_DEFAULT_PRIORITY_MODELS)
+
+
 def _candidate_models_for_provider(provider: str) -> list[str]:
     configured_model = _model_for_provider(provider)
     if provider == NINE_ROUTER_PROVIDER:
-        return [configured_model or "free-forever"]
+        clean = str(configured_model or "appora").strip() or "appora"
+        priority = _nine_router_priority_models()
+        if clean.lower() in _NINE_ROUTER_AUTO_PRIORITY_ALIASES:
+            return _dedupe_models(priority)
+        return _dedupe_models([clean, *priority])
     return []
 
 
@@ -554,7 +585,11 @@ def _is_fallback_worthy_error(message: str) -> bool:
         "timed out",
         "empty response",
         "returned an empty",
+        "no json",
+        "invalid json",
+        "valid json",
         "unavailable",
+        "no active credentials",
         "error 429",
         "error 500",
         "error 502",
@@ -647,26 +682,53 @@ def _generate_json(
     system: str,
     user: str,
     on_spoken_delta: Callable[[str], None] | None = None,
+    model_skip_count: int = 0,
 ) -> tuple[str, str, dict[str, Any]]:
     provider = NINE_ROUTER_PROVIDER
-    model = _model_for_provider(provider) or "free-forever"
+    selected_model = _model_for_provider(provider) or "appora"
+    candidate_models = _candidate_models_for_provider(provider) or [selected_model]
+    skip_count = max(0, min(int(model_skip_count or 0), max(0, len(candidate_models) - 1)))
+    if skip_count:
+        candidate_models = candidate_models[skip_count:]
     require_provider_connected(provider)
     _throttle_llm_calls(provider, _effective_min_gap_seconds())
     spoken_extractor = _StreamingSpokenExtractor(on_spoken_delta)
-    if on_spoken_delta:
-        data = _generate_json_once(provider, model, system=system, user=user, on_text_delta=spoken_extractor.feed)
-    else:
-        data = _generate_json_once(provider, model, system=system, user=user)
-    if _normalize_smart_route(model) and isinstance(data, dict):
-        data["_appora_route"] = {
-            "name": _normalize_smart_route(model),
-            "used_provider": provider,
-            "used_model": model,
-            "skipped": [],
-            "monthly_cost": "handled by 9Router",
-            "quality": "handled by 9Router",
-        }
-    return provider, model, data
+    skipped: list[str] = []
+    last_error: Exception | None = None
+    for index, model in enumerate(candidate_models):
+        try:
+            if on_spoken_delta:
+                data = _generate_json_once(provider, model, system=system, user=user, on_text_delta=spoken_extractor.feed)
+            else:
+                data = _generate_json_once(provider, model, system=system, user=user)
+        except Exception as exc:
+            last_error = exc
+            message = str(exc)
+            if index >= len(candidate_models) - 1 or not _is_fallback_worthy_error(message):
+                raise
+            skipped.append(f"{model}: {message[:180]}")
+            continue
+        if isinstance(data, dict) and (model != selected_model or skipped):
+            data["_voiceide_provider_fallback"] = {
+                "selected_provider": provider,
+                "used_provider": provider,
+                "selected_model": selected_model,
+                "used_model": model,
+                "skipped": list(skipped),
+            }
+        if _normalize_smart_route(model) and isinstance(data, dict):
+            data["_appora_route"] = {
+                "name": _normalize_smart_route(model),
+                "used_provider": provider,
+                "used_model": model,
+                "skipped": list(skipped),
+                "monthly_cost": "handled by 9Router",
+                "quality": "handled by 9Router",
+            }
+        return provider, model, data
+    if last_error:
+        raise last_error
+    raise RuntimeError("No 9Router model candidates available")
 
 
 def _provider_fallback_log(data: dict[str, Any]) -> str:
@@ -692,6 +754,7 @@ def suggest(
     workspace_root: str | Path | None = None,
     system: str | None = None,
     on_spoken_delta: Callable[[str], None] | None = None,
+    model_skip_count: int = 0,
 ) -> AgentSuggestion:
     file_tree = file_tree or []
     relevant_files = relevant_files or {}
@@ -722,6 +785,7 @@ def suggest(
         system=system or DEFAULT_SYSTEM_PATCH,
         user=user,
         on_spoken_delta=on_spoken_delta,
+        model_skip_count=model_skip_count,
     )
     changes = data.get("changes") or []
     if not isinstance(changes, list):

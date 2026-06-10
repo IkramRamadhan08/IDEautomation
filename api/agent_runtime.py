@@ -75,6 +75,7 @@ _CODEX_STYLE_WORKFLOW = """WORKFLOW BEHAVIOR:
 - For frontend work, build the actual usable app surface, not a marketing placeholder. Include responsive layout, empty/loading/error states, and accessible controls when relevant.
 - For premium product/site work, make the first viewport feel built for the domain: concrete product mock, real labels/metrics/tables/workflows, restrained palette with contrast, and enough section depth to avoid a starter-template feel.
 - For professional frontend work, avoid starter-template residue, visible framework branding, emoji-as-icon decoration, excessive inline styles, `as any`, one-note gradients, generic SaaS filler copy, and brittle fixed widths. Prefer reusable components/classes, domain-specific content, product-specific data surfaces, and mobile-first layout constraints.
+- For broad app/dashboard/workspace requests, every named workflow must be real and stateful: filters filter rendered records, add/edit forms have controlled inputs and submit handling, empty/loading/error/success states are reachable from state, and responsive evidence appears in source/CSS.
 - Do not use fake placeholder media such as placehold.co, via.placeholder.com, dummyimage, picsum, loremflickr, source.unsplash, or "placeholder image" assets in finished full-agent output. Use attached/local/generated assets, CSS product visuals, or omit media instead.
 - Do not invent real-world business data: phone/WhatsApp numbers, street addresses, emails, payment accounts, API keys, legal claims, or prices that the user did not provide. If contact data is required but missing, build the UI flow with a nonfunctional configuration state or ask for the missing value in `spoken` instead of wiring a fake live link.
 - Do not ship fake interactions: avoid bare `href="#"`, `javascript:void(0)`, alert/console-only click handlers, "coming soon" handlers, or CTAs that look live but cannot work.
@@ -180,6 +181,7 @@ _HARD_VERIFIER_CHECKS = {
     "frontend-style-runtime",
     "frontend-asset-quality",
     "referenced-asset-usage",
+    "existing-repair-scope",
     "prompt-domain-adherence",
     "prompt-requirement-coverage",
     "task-depth-gate",
@@ -975,7 +977,8 @@ _TAILWIND_UTILITY_PREFIXES = (
 )
 _TAILWIND_UTILITY_EXACT = {
     "grid", "flex", "block", "inline-block", "hidden", "relative", "absolute", "fixed",
-    "sticky", "mx-auto", "antialiased", "sr-only", "border",
+    "sticky", "mx-auto", "antialiased", "sr-only", "border", "uppercase", "lowercase",
+    "capitalize", "truncate", "italic", "not-italic", "underline", "no-underline",
 }
 _TAILWIND_VARIANTS = {"sm", "md", "lg", "xl", "2xl", "hover", "focus", "active", "dark", "disabled"}
 _STYLE_FILE_EXTS = {".css", ".scss", ".sass", ".less"}
@@ -1021,7 +1024,7 @@ def _is_tailwind_like_class_token(token: str) -> bool:
     return clean in _TAILWIND_UTILITY_EXACT or clean.startswith(_TAILWIND_UTILITY_PREFIXES)
 
 
-def _project_has_tailwind_setup(ctx: PreparedAgentContext) -> bool:
+def _project_has_tailwind_setup(ctx: PreparedAgentContext, changes: list[dict[str, Any]] | None = None) -> bool:
     package_text = ctx.relevant_files.get("package.json")
     if not package_text:
         package_path = ctx.project_dir / "package.json"
@@ -1032,6 +1035,11 @@ def _project_has_tailwind_setup(ctx: PreparedAgentContext) -> bool:
                 package_text = ""
     if re.search(r"\"(?:tailwindcss|@tailwindcss/[^\"]+)\"", str(package_text or "")):
         return True
+
+    for rel, text in _change_map_by_local_path(changes or []).items():
+        local_rel = _localize_project_rel(rel, ctx.project_root)
+        if PurePosixPath(local_rel).name == "package.json" and re.search(r"\"(?:tailwindcss|@tailwindcss/[^\"]+)\"", str(text or "")):
+            return True
 
     setup_files = [
         "tailwind.config.js",
@@ -1044,11 +1052,19 @@ def _project_has_tailwind_setup(ctx: PreparedAgentContext) -> bool:
     ]
     if any((ctx.project_dir / rel).exists() for rel in setup_files):
         return True
+    changed_setup_files = {PurePosixPath(_localize_project_rel(rel, ctx.project_root)).as_posix() for rel in _change_map_by_local_path(changes or [])}
+    if any(rel in changed_setup_files for rel in setup_files):
+        return True
 
     for rel, text in ctx.relevant_files.items():
         if PurePosixPath(rel).suffix.lower() not in {".css", ".scss", ".sass", ".less"}:
             continue
         if re.search(r"@import\s+[\"']tailwindcss[\"']|@tailwind\s+(?:base|components|utilities)", text):
+            return True
+    for rel, text in _change_map_by_local_path(changes or []).items():
+        if PurePosixPath(rel).suffix.lower() not in {".css", ".scss", ".sass", ".less"}:
+            continue
+        if re.search(r"@import\s+[\"']tailwindcss[\"']|@tailwind\s+(?:base|components|utilities)", str(text or "")):
             return True
     for rel in ("src/index.css", "src/App.css", "src/styles.css", "app/globals.css"):
         path = ctx.project_dir / rel
@@ -1061,6 +1077,139 @@ def _project_has_tailwind_setup(ctx: PreparedAgentContext) -> bool:
         if re.search(r"@import\s+[\"']tailwindcss[\"']|@tailwind\s+(?:base|components|utilities)", text):
             return True
     return False
+
+
+def _project_has_shadcn_signals(ctx: PreparedAgentContext, changes: list[dict[str, Any]] | None = None) -> bool:
+    package_text = ctx.relevant_files.get("package.json")
+    if not package_text:
+        package_path = ctx.project_dir / "package.json"
+        if package_path.exists():
+            try:
+                package_text = package_path.read_text(encoding="utf-8")[:80_000]
+            except Exception:
+                package_text = ""
+    if re.search(r"\"(?:class-variance-authority|tailwind-merge|@radix-ui/react-[^\"]+)\"", str(package_text or "")):
+        return True
+    if (ctx.project_dir / "components.json").exists():
+        return True
+    if (ctx.project_dir / "src" / "components" / "ui").is_dir() or (ctx.project_dir / "components" / "ui").is_dir():
+        return True
+    for rel, text in _change_map_by_local_path(changes or []).items():
+        local_rel = PurePosixPath(_localize_project_rel(rel, ctx.project_root)).as_posix()
+        if local_rel == "components.json" or local_rel.endswith("/components.json"):
+            return True
+        if "/components/ui/" in f"/{local_rel}":
+            return True
+        if PurePosixPath(local_rel).name == "package.json" and re.search(r"\"(?:class-variance-authority|tailwind-merge|@radix-ui/react-[^\"]+)\"", str(text or "")):
+            return True
+    return False
+
+
+def _read_components_json_aliases(ctx: PreparedAgentContext, changes: list[dict[str, Any]]) -> dict[str, str]:
+    raw = ""
+    change_map = _change_map_by_local_path(changes)
+    for rel, text in change_map.items():
+        local_rel = PurePosixPath(_localize_project_rel(rel, ctx.project_root)).as_posix()
+        if local_rel == "components.json" or local_rel.endswith("/components.json"):
+            raw = str(text or "")
+            break
+    if not raw:
+        path = ctx.project_dir / "components.json"
+        if path.exists():
+            try:
+                raw = path.read_text(encoding="utf-8")[:80_000]
+            except Exception:
+                raw = ""
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return {}
+    aliases = parsed.get("aliases") if isinstance(parsed, dict) else {}
+    return {str(key): str(value) for key, value in aliases.items()} if isinstance(aliases, dict) else {}
+
+
+def _shadcn_ui_import_modules(content: str) -> list[str]:
+    modules: list[str] = []
+    for module in re.findall(r"\bfrom\s+['\"]([^'\"]+)['\"]|import\s*\(\s*['\"]([^'\"]+)['\"]\s*\)", content):
+        raw = next((part for part in module if part), "")
+        if raw and "/components/ui/" in raw:
+            modules.append(raw)
+    return modules
+
+
+def _shadcn_component_candidates(ctx: PreparedAgentContext, module: str, aliases: dict[str, str]) -> list[str]:
+    bases: list[str] = []
+    ui_alias = aliases.get("ui") or "@/components/ui"
+    if module.startswith(ui_alias.rstrip("/") + "/"):
+        suffix = module[len(ui_alias.rstrip("/") + "/"):]
+        alias_root = ui_alias.rstrip("/")
+        if alias_root.startswith("@/"):
+            bases.append("src/" + alias_root[2:].rstrip("/") + "/" + suffix)
+            bases.append(alias_root[2:].rstrip("/") + "/" + suffix)
+        else:
+            bases.append(alias_root.rstrip("/") + "/" + suffix)
+    if "/components/ui/" in module:
+        suffix = module.rsplit("/components/ui/", 1)[1]
+        bases.extend([
+            f"src/components/ui/{suffix}",
+            f"components/ui/{suffix}",
+            f"app/components/ui/{suffix}",
+        ])
+    out: list[str] = []
+    for base in bases:
+        clean = PurePosixPath(base).as_posix().lstrip("/")
+        for candidate in [
+            clean,
+            f"{clean}.tsx",
+            f"{clean}.ts",
+            f"{clean}.jsx",
+            f"{clean}.js",
+            f"{clean}/index.tsx",
+            f"{clean}/index.ts",
+        ]:
+            if candidate not in out:
+                out.append(candidate)
+    return out
+
+
+def _local_change_paths(changes: list[dict[str, Any]], project_root: str) -> set[str]:
+    paths: set[str] = set()
+    for rel in _change_map_by_local_path(changes):
+        paths.add(PurePosixPath(_localize_project_rel(rel, project_root)).as_posix())
+    return paths
+
+
+def _shadcn_style_runtime_issues(ctx: PreparedAgentContext, changes: list[dict[str, Any]], *, has_tailwind: bool) -> list[str]:
+    if not _project_has_shadcn_signals(ctx, changes):
+        return []
+    issues: list[str] = []
+    aliases = _read_components_json_aliases(ctx, changes)
+    changed_paths = _local_change_paths(changes, ctx.project_root)
+    has_components_json = (ctx.project_dir / "components.json").exists() or any(path == "components.json" or path.endswith("/components.json") for path in changed_paths)
+    has_tailwind_css_path = has_tailwind and (
+        any((ctx.project_dir / rel).exists() for rel in ("src/styles.css", "src/index.css", "src/app.css", "app/globals.css"))
+        or any(PurePosixPath(path).suffix.lower() in _STYLE_FILE_EXTS for path in changed_paths)
+    )
+    if has_components_json and not has_tailwind_css_path:
+        issues.append("Partial shadcn setup detected: components.json/shadcn dependencies exist without a Tailwind CSS utility path. Add Tailwind CSS import/config or avoid shadcn/Tailwind output.")
+
+    for change in changes:
+        if not isinstance(change, dict):
+            continue
+        path = str(change.get("path") or "").strip()
+        suffix = PurePosixPath(path).suffix.lower()
+        if suffix not in {".ts", ".tsx", ".js", ".jsx"}:
+            continue
+        content = str(change.get("new_content") or "")
+        for module in _shadcn_ui_import_modules(content):
+            candidates = _shadcn_component_candidates(ctx, module, aliases)
+            if candidates and not any((ctx.project_dir / candidate).exists() or candidate in changed_paths for candidate in candidates):
+                issues.append(f"{path}: shadcn import {module} does not resolve to a generated components/ui file; add the component file or correct the import.")
+        if re.search(r"import\s*\{[^}]*\bAvatar\b[^}]*\}\s*from\s*['\"][^'\"]*/components/ui/avatar['\"]", content) and re.search(r"<Avatar\b[^>]*\bsize\s*=", content):
+            issues.append(f"{path}: shadcn Avatar does not support a size prop; use className with size-* and include AvatarFallback.")
+    return issues[:4]
 
 
 def _css_class_definitions(ctx: PreparedAgentContext, changes: list[dict[str, Any]]) -> set[str]:
@@ -1116,6 +1265,8 @@ def _undefined_custom_class_issues(ctx: PreparedAgentContext, changes: list[dict
                 continue
             if clean.endswith("-"):
                 continue
+            if clean[:1].isupper():
+                continue
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", clean):
                 continue
             if has_tailwind and _is_tailwind_like_class_token(clean):
@@ -1130,8 +1281,9 @@ def _undefined_custom_class_issues(ctx: PreparedAgentContext, changes: list[dict
 
 
 def _frontend_style_runtime_issues(ctx: PreparedAgentContext, changes: list[dict[str, Any]]) -> list[str]:
-    has_tailwind = _project_has_tailwind_setup(ctx)
+    has_tailwind = _project_has_tailwind_setup(ctx, changes)
     issues: list[str] = []
+    issues.extend(_shadcn_style_runtime_issues(ctx, changes, has_tailwind=has_tailwind))
     for change in changes:
         if not isinstance(change, dict):
             continue
@@ -1335,6 +1487,24 @@ def _prompt_brand_name(text: str, fallback: str) -> str:
     return fallback
 
 
+def _is_existing_repair_request(ctx: PreparedAgentContext, user_input: str) -> bool:
+    prompt_lower = str(user_input or "").lower()
+    repair_markers = (
+        "fix", "bug", "repair", "perbaiki", "benerin", "betulin", "debug",
+        "resolve", "patch", "toggle", "filter", "existing",
+    )
+    create_markers = (
+        "buat", "bikin", "create", "generate", "scaffold", "app baru",
+    )
+    existing_active_file = bool(ctx.active_rel and ctx.active_rel in ctx.all_files)
+    return (
+        existing_active_file
+        and not _blank_preview_repair_directive(user_input)
+        and any(marker in prompt_lower for marker in repair_markers)
+        and not any(marker in prompt_lower for marker in create_markers)
+    )
+
+
 def _emergency_full_agent_changes(ctx: PreparedAgentContext, user_input: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     if not (ctx.is_full_agent and ctx.intent.should_write_files):
         return [], []
@@ -1342,6 +1512,8 @@ def _emergency_full_agent_changes(ctx: PreparedAgentContext, user_input: str) ->
     project_name = PurePosixPath(ctx.project_root).name.replace("-", " ").title() or "Appora Project"
     brand = _prompt_brand_name(user_input, project_name)
     prompt_lower = str(user_input or "").lower()
+    if _is_existing_repair_request(ctx, user_input):
+        return [], []
     is_portfolio = any(token in prompt_lower for token in ("portfolio", "porto", "portofolio"))
     is_dashboard = any(token in prompt_lower for token in ("dashboard", "task", "kanban", "operations", "ops", "tracker"))
     has_agent_domain = any(token in prompt_lower for token in ("coding-agent", "coding agent", "ai agent", "appora agent", "agent ops", "agent run"))
@@ -2573,9 +2745,11 @@ def _prompt_domain_adherence_issues(user_input: str, changes: list[dict[str, Any
         domain_groups.append(("coding-agent domain", ["coding-agent", "coding agent", "agent run", "validation", "preview", "repair", "workflow", "queue"], 4))
     if any(token in prompt for token in ("queue", "antrian")):
         domain_groups.append(("queue workflow", ["queue", "queued", "antrian", "task queue"], 1))
-    if any(token in prompt for token in ("quality", "kualitas", "metrics", "metrik")):
+    product_quality_prompt = re.sub(r"\b(appora\s+)?preview\s+quality\b|\bquality\s+(gate|audit|check|checks|verifier)\b", " ", prompt)
+    if any(token in product_quality_prompt for token in ("quality", "kualitas", "metrics", "metrik")):
         domain_groups.append(("quality metrics", ["quality", "kualitas", "metric", "metrics", "score"], 1))
-    if any(token in prompt for token in ("issue", "risk", "risiko", "bug", "blocker")):
+    issue_prompt = re.sub(r"\b(mobile|layout|responsive|overflow|text|tap|viewport)\s+risk\b|\boverflow\s+risk\b", " ", prompt)
+    if any(token in issue_prompt for token in ("issue", "risk", "risiko", "blocker")):
         domain_groups.append(("issue/risk tracking", ["issue", "risk", "risiko", "blocker", "blocked"], 1))
     if any(token in prompt for token in ("status", "progress", "run")):
         domain_groups.append(("run status", ["status", "running", "progress", "run", "done", "blocked"], 1))
@@ -2596,6 +2770,103 @@ def _prompt_domain_adherence_issues(user_input: str, changes: list[dict[str, Any
             issues.append("Output drifted into a generic task operations dashboard instead of a coding-agent operations product.")
 
     return issues[:4]
+
+
+def _existing_repair_scope_issues(ctx: PreparedAgentContext, user_input: str, changes: list[dict[str, Any]]) -> list[str]:
+    if not _is_existing_repair_request(ctx, user_input):
+        return []
+    if not changes:
+        return []
+    allowed: set[str] = set()
+    if ctx.active_rel:
+        allowed.add(ctx.active_rel)
+        allowed.add(f"{ctx.project_root}/{ctx.active_rel}")
+    for rel in list(ctx.open_files or []):
+        if rel:
+            allowed.add(rel)
+            allowed.add(f"{ctx.project_root}/{rel}")
+    changed_paths = [
+        str(item.get("path") or "").strip()
+        for item in changes
+        if isinstance(item, dict) and str(item.get("path") or "").strip()
+    ]
+    unexpected = [path for path in changed_paths if path not in allowed]
+    issues: list[str] = []
+    if unexpected:
+        issues.append(f"Existing bugfix drifted outside requested files: {', '.join(unexpected[:5])}.")
+    if len(changed_paths) > max(3, len(allowed) + 1):
+        issues.append(f"Existing bugfix changed {len(changed_paths)} files; expected a surgical patch to active/open files.")
+    return issues[:3]
+
+
+def _scope_existing_repair_changes(ctx: PreparedAgentContext, user_input: str, changes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not _is_existing_repair_request(ctx, user_input):
+        return changes
+    allowed: set[str] = set()
+    if ctx.active_rel:
+        allowed.add(ctx.active_rel)
+        allowed.add(f"{ctx.project_root}/{ctx.active_rel}")
+    for rel in list(ctx.open_files or []):
+        if rel:
+            allowed.add(rel)
+            allowed.add(f"{ctx.project_root}/{rel}")
+    scoped = [
+        item
+        for item in changes
+        if isinstance(item, dict) and str(item.get("path") or "").strip() in allowed
+    ]
+    if len(scoped) != len(changes):
+        dropped = len(changes) - len(scoped)
+        ctx.trace_warnings.append({
+            "phase": "existing-repair-scope",
+            "message": f"Dropped {dropped} unrelated scaffold/config/page change(s) from existing-file bugfix output."[:240],
+        })
+    return scoped
+
+
+_COMMAND_FILE_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_@./-])([A-Za-z0-9_./-]+\.(?:py|tsx|ts|jsx|js|json|css|html|md))(?![A-Za-z0-9_./-])")
+
+
+def _scope_existing_repair_actions(ctx: PreparedAgentContext, user_input: str, actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not _is_existing_repair_request(ctx, user_input):
+        return actions
+    existing_paths: set[str] = set()
+    for rel in list(ctx.all_files or []):
+        if rel:
+            existing_paths.add(rel)
+            existing_paths.add(f"{ctx.project_root}/{rel}")
+    allowed_paths: set[str] = set()
+    if ctx.active_rel:
+        allowed_paths.add(ctx.active_rel)
+        allowed_paths.add(f"{ctx.project_root}/{ctx.active_rel}")
+    for rel in list(ctx.open_files or []):
+        if rel:
+            allowed_paths.add(rel)
+            allowed_paths.add(f"{ctx.project_root}/{rel}")
+
+    scoped: list[dict[str, Any]] = []
+    dropped = 0
+    for action in actions:
+        if not isinstance(action, dict) or str(action.get("type") or "").lower() != "shell":
+            scoped.append(action)
+            continue
+        command = str(action.get("command") or "")
+        tokens = [token.lstrip("./") for token in _COMMAND_FILE_TOKEN_RE.findall(command)]
+        unknown_tokens = [
+            token
+            for token in tokens
+            if token not in allowed_paths and token not in existing_paths
+        ]
+        if unknown_tokens:
+            dropped += 1
+            continue
+        scoped.append(action)
+    if dropped:
+        ctx.trace_warnings.append({
+            "phase": "existing-repair-scope",
+            "message": f"Dropped {dropped} shell action(s) that referenced files outside the existing repair scope."[:240],
+        })
+    return scoped
 
 
 def _prompt_requirement_coverage_issues(user_input: str, changes: list[dict[str, Any]]) -> list[str]:
@@ -2619,7 +2890,7 @@ def _prompt_requirement_coverage_issues(user_input: str, changes: list[dict[str,
         ("empty state", ["state kosong", "empty state", "empty"], ["empty", "no tasks", "no results", "belum ada", "kosong"]),
         ("loading state", ["loading", "memuat", "skeleton"], ["loading", "memuat", "skeleton", "pending"]),
         ("error state", ["error", "retry", "gagal"], ["error", "retry", "failed", "gagal"]),
-        ("responsive", ["responsive", "mobile", "responsif"], ["@media", "clamp(", "minmax(", "responsive", "mobile"]),
+        ("responsive", ["responsive", "mobile", "responsif"], ["@media", "clamp(", "minmax(", "responsive", "mobile", "flex-wrap", "width: 100%", "box-sizing", "max-width", "grid-template", "auto-fit", "auto-fill", "min-height: 100vh", "100dvh"]),
     ]
     issues: list[str] = []
     for label, prompt_terms, output_terms in requirements:
@@ -2906,7 +3177,7 @@ def _package_name_from_import(specifier: str) -> str | None:
     return spec.split("/", 1)[0]
 
 
-def _declared_package_names(ctx: PreparedAgentContext) -> set[str]:
+def _declared_package_names(ctx: PreparedAgentContext, changes: list[dict[str, Any]] | None = None) -> set[str]:
     package_text = ctx.relevant_files.get("package.json")
     if package_text is None:
         package_path = ctx.project_dir / "package.json"
@@ -2915,17 +3186,25 @@ def _declared_package_names(ctx: PreparedAgentContext) -> set[str]:
                 package_text = package_path.read_text(encoding="utf-8", errors="ignore")
             except Exception:
                 package_text = None
-    if not package_text:
-        return set()
-    try:
-        package_json = json.loads(package_text)
-    except Exception:
-        return set()
     declared: set[str] = set()
-    for key in ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies"):
-        deps = package_json.get(key)
-        if isinstance(deps, dict):
-            declared.update(str(name) for name in deps.keys())
+
+    def add_from_package_text(text: str | None) -> None:
+        if not text:
+            return
+        try:
+            package_json = json.loads(text)
+        except Exception:
+            return
+        for key in ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies"):
+            deps = package_json.get(key)
+            if isinstance(deps, dict):
+                declared.update(str(name) for name in deps.keys())
+
+    add_from_package_text(package_text)
+    for rel, text in _change_map_by_local_path(changes or []).items():
+        local_rel = _localize_project_rel(rel, ctx.project_root)
+        if PurePosixPath(local_rel).name == "package.json":
+            add_from_package_text(text)
     return declared
 
 
@@ -2950,7 +3229,7 @@ def _installed_packages_from_actions(actions: list[dict[str, Any]]) -> set[str]:
 
 
 def _missing_external_dependencies(ctx: PreparedAgentContext, changes: list[dict[str, Any]], actions: list[dict[str, Any]]) -> list[str]:
-    declared = _declared_package_names(ctx)
+    declared = _declared_package_names(ctx, changes)
     declared.update(_installed_packages_from_actions(actions))
     if not declared and not changes:
         return []
@@ -3228,6 +3507,8 @@ def _build_context_parts(ctx: PreparedAgentContext, req: Any) -> list[str]:
         "- You can request local tools with actions like {type:'tool', tool:'repo_map'|'file_window'|'line_replace_preview'|'line_replace_apply'|'search_replace_preview'|'search_replace_apply'|'symbol_search'|'style_stack'|'repo_search'|'repo_read'|'repo_overview'|'stack_profile'|'validation_plan'|'test_runner'|'format_lint'|'database_client'|'git_manager'|'docs_browser'|'skill_catalog'|'skill_read'|'package_scripts'|'dependency_graph'|'component_index'|'route_map'|'quality_scan', arguments:{...}}.",
         "- Local edit preflight tools do not write files directly; use their suggested_change as evidence for the final changes/patches you return.",
         "- Detect the repository stack first. Appora is a general coder agent for frontend, backend, CLI, API, DB, infra, and polyglot repos; do not assume React/Vite unless the files prove it.",
+        "- Use stack_profile/style_stack evidence for UI stack decisions. If shadcn/ui exists, prefer existing components/ui primitives, project aliases, and cn() patterns; do not import a shadcn component unless its source file exists or you add it.",
+        "- If Tailwind is absent, do not emit Tailwind utility classes unless your same change set adds a complete Tailwind/shadcn setup. If the user explicitly asks for shadcn, request guarded project-scoped shell actions such as npx shadcn@latest init -d --base radix and component adds instead of pretending they already ran.",
         "- Appora can start/refresh a live preview and run preview audit when the project has a preview surface; optimize visible UI accordingly only for UI/web tasks.",
         "- Never tell the non-technical user to run terminal commands when you can request a shell action instead.",
         "Auto-safe shell command families:",
@@ -4213,7 +4494,7 @@ def _deep_preflight_node(state: AgentRuntimeState) -> AgentRuntimeState:
 
 def _is_no_work_recovery(state: AgentRuntimeState) -> bool:
     ctx = state["context"]
-    if not (ctx.is_full_agent and ctx.intent.should_write_files and int(state.get("autonomous_iterations") or 0) > 0):
+    if not (ctx.intent.should_write_files and int(state.get("autonomous_iterations") or 0) > 0):
         return False
     task_state = ctx.trace_task_state if isinstance(ctx.trace_task_state, dict) else {}
     blockers = {str(item) for item in list(task_state.get("blocking_checks") or [])}
@@ -4327,18 +4608,37 @@ def _draft_node(state: AgentRuntimeState) -> AgentRuntimeState:
             "- Do not repeat the same failing shape. Prefer a minimal complete fix that clears the blocker.\n\n"
         )
         if no_work_recovery:
-            follow_up_prefix += (
-                "NO-WORK RECOVERY MODE:\n"
-                "- Your previous response produced zero changes/actions for a concrete build task.\n"
-                "- Do not explain, review, or plan. Produce file changes now.\n"
-                "- If the stack is React/Vite, return `changes` with full file contents for the app component/page, stylesheet, and index metadata when needed.\n"
-                "- At minimum update App.tsx or the routed page component plus app.css/styles.css and index.html when this is a Vite landing/app/dashboard build.\n"
-                "- Include `npm run build` as a shell action.\n\n"
-            )
+            if _is_existing_repair_request(ctx, state["input"]):
+                follow_up_prefix += (
+                    "NO-WORK RECOVERY MODE FOR EXISTING BUGFIX:\n"
+                    "- Your previous response produced zero changes/actions for a concrete bugfix task.\n"
+                    "- Do not explain, review, scaffold, redesign, or create a new app.\n"
+                    "- Patch the existing active file first. Preserve package/config/routes/styles unless the evidence proves they are required.\n"
+                    "- Return `changes` with full content only for the minimal existing file(s) needed to fix the bug.\n"
+                    "- Include the closest project validation command as a shell action when useful.\n\n"
+                )
+            else:
+                follow_up_prefix += (
+                    "NO-WORK RECOVERY MODE:\n"
+                    "- Your previous response produced zero changes/actions for a concrete build task.\n"
+                    "- Do not explain, review, or plan. Produce file changes now.\n"
+                    "- If the stack is React/Vite, return `changes` with full file contents for the app component/page, stylesheet, and index metadata when needed.\n"
+                    "- At minimum update App.tsx or the routed page component plus app.css/styles.css and index.html when this is a Vite landing/app/dashboard build.\n"
+                    "- Include `npm run build` as a shell action.\n\n"
+                )
+    elif _is_existing_repair_request(ctx, state["input"]):
+        follow_up_prefix = (
+            "EXISTING BUGFIX MODE:\n"
+            "- Return file changes now for the active/open file(s) needed to fix the reported bug.\n"
+            "- Use `changes` with full file content for the edited file; do not use `patches` for this small repair.\n"
+            "- Do not answer with analysis only, do not scaffold, and do not redesign the app.\n"
+            "- Preserve package/config/routes/styles unless the existing bug evidence proves they are required.\n\n"
+        )
 
     intent_prefix = ctx.intent.prompt_block + "\n"
     base_instruction = ctx.mode_profile.instruction_prefix + intent_prefix + ctx.asset_prompt + follow_up_prefix + state["input"]
     extra_context = _compact_no_work_context(ctx) if no_work_recovery else ctx.extra_context
+    model_skip_count = int(state.get("autonomous_iterations") or 0) if no_work_recovery else 0
     streamed_spoken_chars = 0
 
     def emit_spoken_delta(delta: str) -> None:
@@ -4360,10 +4660,12 @@ def _draft_node(state: AgentRuntimeState) -> AgentRuntimeState:
             workspace_root=ctx.project_dir,
             system=ctx.mode_profile.system_prompt,
             on_spoken_delta=emit_spoken_delta,
+            model_skip_count=model_skip_count,
         )
         spoken = sug.spoken
         log = sug.log
         changes = list(sug.changes or [])
+        changes = _scope_existing_repair_changes(ctx, state["input"], changes)
         actions = list(sug.actions or [])
     except RuntimeError as exc:
         recovered_from_runtime_error = False
@@ -4636,9 +4938,11 @@ def _refine_node(state: AgentRuntimeState) -> AgentRuntimeState:
             workspace_root=ctx.project_dir,
             system=ctx.mode_profile.system_prompt,
         )
+        merged_changes = _merge_change_sets(state.get("changes") or [], list(refined.changes or []))
+        merged_changes = _scope_existing_repair_changes(ctx, state["input"], merged_changes)
         return {
             "spoken": refined.spoken or state.get("spoken") or "",
-            "changes": _merge_change_sets(state.get("changes") or [], list(refined.changes or [])),
+            "changes": merged_changes,
             "actions": _merge_action_sets(state.get("actions") or [], list(refined.actions or [])),
             "passes": 2,
         }
@@ -4682,8 +4986,8 @@ def _verify_node(state: AgentRuntimeState) -> AgentRuntimeState:
             ctx.trace_warnings.append({"phase": "verify", "message": f"{label} {name}: {detail}"[:240]})
 
     if ctx.intent.should_write_files:
-        shell_only_full_agent = bool(ctx.is_full_agent and actions and not changes)
-        has_work_output = bool(changes or actions) and not shell_only_full_agent
+        shell_only_write_request = bool(actions and not changes)
+        has_work_output = bool(changes or actions) and not shell_only_write_request
         add(
             "has-work-output",
             has_work_output,
@@ -4691,8 +4995,8 @@ def _verify_node(state: AgentRuntimeState) -> AgentRuntimeState:
                 "Build request produced file changes or runtime actions."
                 if has_work_output
                 else (
-                    "Shell-only output is not enough for a full-agent build request; produce concrete file changes."
-                    if shell_only_full_agent
+                    "Shell-only output is not enough for a write/build request; produce concrete file changes."
+                    if shell_only_write_request
                     else "Build request produced no file changes/actions."
                 )
             ),
@@ -4817,6 +5121,17 @@ def _verify_node(state: AgentRuntimeState) -> AgentRuntimeState:
         ),
     )
 
+    existing_repair_scope_issues = _existing_repair_scope_issues(ctx, state["input"], changes)
+    add(
+        "existing-repair-scope",
+        not existing_repair_scope_issues,
+        (
+            "Existing bugfix stays scoped to active/open files."
+            if not existing_repair_scope_issues
+            else "; ".join(existing_repair_scope_issues[:2])
+        ),
+    )
+
     prompt_domain_issues = _prompt_domain_adherence_issues(state["input"], changes)
     add(
         "prompt-domain-adherence",
@@ -4927,10 +5242,16 @@ def _verify_node(state: AgentRuntimeState) -> AgentRuntimeState:
     )
 
     if ctx.is_full_agent and ctx.intent.should_write_files:
+        existing_repair = _is_existing_repair_request(ctx, state["input"])
+        coverage_ok = bool(existing_repair or len(changes) >= 2 or actions)
         add(
             "full-agent-coverage",
-            len(changes) >= 2 or bool(actions),
-            "Full-agent output touches multiple files or uses project tooling." if len(changes) >= 2 or actions else "Full-agent output may be too small for an app-level task.",
+            coverage_ok,
+            (
+                "Surgical existing bugfix is correctly scoped to active/open file changes."
+                if existing_repair
+                else "Full-agent output touches multiple files or uses project tooling." if len(changes) >= 2 or actions else "Full-agent output may be too small for an app-level task."
+            ),
         )
 
     task_state = _update_task_state_after_verify(ctx, state, checks)
@@ -5140,6 +5461,10 @@ def _verifier_repair_directives(blockers: list[str], checks: list[dict[str, Any]
         directives.append(
             "Use the exact uploaded @asset public URL/path shown in asset context. Do not import an invented src-relative copy and do not replace it with placeholder media."
         )
+    if "existing-repair-scope" in names:
+        directives.append(
+            "This is an existing-file bugfix. Remove unrelated scaffold/config/page/style changes and return only the minimal active/open file changes needed to fix the reported bug."
+        )
     if "prompt-domain-adherence" in names:
         directives.append(
             "Rewrite the visible product surface so it clearly matches the user's requested domain and workflow, not a generic dashboard/template."
@@ -5158,7 +5483,7 @@ def _verifier_repair_directives(blockers: list[str], checks: list[dict[str, Any]
         )
     if "frontend-style-runtime" in names:
         directives.append(
-            "Match the styling runtime to the project. Remove Tailwind utility classes unless Tailwind is actually configured; prefer CSS classes in existing stylesheet files."
+            "Match the styling runtime to the project. Remove Tailwind utility classes unless Tailwind is actually configured; for shadcn/ui use existing components/ui files, cn(), valid component APIs, and add/correct missing component files instead of dangling imports."
         )
     if "frontend-asset-quality" in names:
         directives.append(
@@ -5348,6 +5673,7 @@ def _finalize_node(state: AgentRuntimeState) -> AgentRuntimeState:
     normalized_actions = list(state.get("actions") or [])
     spoken = str(state.get("spoken") or "")
     log = str(state.get("log") or "")
+    existing_repair = _is_existing_repair_request(ctx, state["input"])
     intent_payload = dict(state.get("intent") or {
         "kind": ctx.intent.kind,
         "confidence": ctx.intent.confidence,
@@ -5359,7 +5685,9 @@ def _finalize_node(state: AgentRuntimeState) -> AgentRuntimeState:
     if not ctx.intent.should_write_files:
         normalized_changes = []
         normalized_actions = []
-    elif ctx.is_full_agent and not normalized_changes and not normalized_actions:
+    else:
+        normalized_changes = _scope_existing_repair_changes(ctx, state["input"], normalized_changes)
+    if ctx.intent.should_write_files and ctx.is_full_agent and not normalized_changes and not normalized_actions:
         ctx.trace_warnings.append({
             "phase": "finalize",
             "message": "Full-agent run ended without concrete work; static emergency scaffolding is disabled so the model/tool loop owns recovery.",
@@ -5381,6 +5709,7 @@ def _finalize_node(state: AgentRuntimeState) -> AgentRuntimeState:
                 "message": f"Dropped unsupported/unexecuted frontend actions: {', '.join(dropped_actions[:6])}."[:240],
             })
         normalized_actions = safe_actions
+        normalized_actions = _scope_existing_repair_actions(ctx, state["input"], normalized_actions)
     persona_tag = f"persona={ctx.mode_profile.persona_name.lower()}"
     if persona_tag not in log:
         log = f"{log} {persona_tag}".strip()
@@ -5418,7 +5747,7 @@ def _finalize_node(state: AgentRuntimeState) -> AgentRuntimeState:
             scoped_changes.append({"path": f"{ctx.project_root}/{rel}", "new_content": content})
         normalized_changes = scoped_changes
 
-    if ctx.is_full_agent and ctx.intent.should_write_files:
+    if ctx.is_full_agent and ctx.intent.should_write_files and not existing_repair:
         normalized_changes = merge_hybrid_seed(
             project_root=ctx.project_root,
             project_name=ctx.project_name,

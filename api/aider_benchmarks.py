@@ -12,10 +12,11 @@ from typing import Any
 
 AIDER_REPO_URL = "https://github.com/Aider-AI/aider.git"
 POLYGLOT_REPO_URL = "https://github.com/Aider-AI/polyglot-benchmark"
-APPORA_AIDER_MODEL_SETTINGS = """\
-- name: openai/appora
+APPORA_AIDER_DEFAULT_MODEL = "openai/openrouter/google/gemma-4-31b-it:free"
+APPORA_AIDER_MODEL_SETTINGS_TEMPLATE = """\
+- name: {model}
   edit_format: whole
-  weak_model_name: openai/appora
+  weak_model_name: {model}
   use_repo_map: false
   lazy: false
   overeager: true
@@ -24,19 +25,34 @@ APPORA_AIDER_MODEL_SETTINGS = """\
   use_temperature: false
   system_prompt_prefix: "Benchmark mode: do not ask clarification questions and do not write sentences addressed to the user. Do not emit tool calls or prose-only verification plans. Read the exercise instructions, visible tests, and failure output exactly. Preserve the requested API shape and update all matching declarations/definitions together. Treat expected-vs-actual whitespace, blank lines, final trailing newlines, capitalization, singular/plural wording, default arguments, and exception messages as hard API contracts. If expected output displays a final blank line or expected string ends with newline while actual does not, add the trailing newline. If a single-argument call returns a range, default the end/range parameter to the start value. If C++ comparison errors show vector<vector<unsigned int>> vs vector<vector<int>>, change both the declaration and implementation return/container types to unsigned int. For interpreters, DSLs, command dispatchers, and plugin registries, check user-defined/custom definitions before builtins when tests show overrides are legal; execute literal numbers/strings in stored definitions as literals, not unknown commands; when redefining a word from a previous definition, snapshot/expand the previous definition if tests expect old references to remain stable. After a test failure, diagnose the assertion contract first, then edit the source files directly. "
 """
-APPORA_AIDER_MODEL_METADATA = {
-    "openai/appora": {
-        "max_tokens": 8192,
-        "max_input_tokens": 131072,
-        "max_output_tokens": 8192,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openai",
-        "mode": "chat",
-        "supports_function_calling": False,
-        "supports_prompt_caching": False,
+
+
+def _appora_aider_model_settings(model: str) -> str:
+    return APPORA_AIDER_MODEL_SETTINGS_TEMPLATE.format(model=model)
+
+
+def _appora_aider_model_metadata(model: str) -> dict[str, dict[str, Any]]:
+    return {
+        model: {
+            "max_tokens": 8192,
+            "max_input_tokens": 131072,
+            "max_output_tokens": 8192,
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "supports_function_calling": False,
+            "supports_prompt_caching": False,
+        }
     }
-}
+
+
+def _router_model_from_aider_model(model: str) -> str:
+    if model.startswith("openai/") and len(model) > len("openai/"):
+        return model[len("openai/") :]
+    return model
+
+
 APPORA_AIDER_BENCHMARK_PATCH = """\
 from __future__ import annotations
 
@@ -155,7 +171,8 @@ try:
     def _appora_model_init(self, *args, **kwargs):
         _original_model_init(self, *args, **kwargs)
         max_history = _as_int(os.environ.get("AIDER_MAX_CHAT_HISTORY_TOKENS"), 32768)
-        if self.name == "openai/appora" and max_history > 0:
+        appora_model = os.environ.get("APPORA_AIDER_MODEL_NAME", "openai/openrouter/google/gemma-4-31b-it:free")
+        if self.name == appora_model and max_history > 0:
             self.max_chat_history_tokens = max_history
 
     models.Model.__init__ = _appora_model_init
@@ -178,7 +195,7 @@ except Exception as exc:  # pragma: no cover - surfaced in benchmark logs
 class AiderBenchmarkConfig:
     workspace: Path = Path(".tmp-aider-benchmark")
     run_name: str = "appora-aider"
-    model: str = "openai/appora"
+    model: str = APPORA_AIDER_DEFAULT_MODEL
     edit_format: str = "whole"
     threads: int = 1
     num_tests: int | None = None
@@ -227,8 +244,8 @@ def write_appora_aider_model_profile(config: AiderBenchmarkConfig) -> dict[str, 
     metadata_path = _appora_model_metadata_path(aider_dir)
     sitecustomize_path = _appora_sitecustomize_path(aider_dir)
     benchmark_patch_path = _appora_benchmark_patch_path(aider_dir)
-    settings_path.write_text(APPORA_AIDER_MODEL_SETTINGS, encoding="utf-8")
-    metadata_path.write_text(json.dumps(APPORA_AIDER_MODEL_METADATA, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    settings_path.write_text(_appora_aider_model_settings(config.model), encoding="utf-8")
+    metadata_path.write_text(json.dumps(_appora_aider_model_metadata(config.model), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     sitecustomize_path.write_text(APPORA_AIDER_SITE_CUSTOMIZE, encoding="utf-8")
     benchmark_patch_path.write_text(APPORA_AIDER_BENCHMARK_PATCH, encoding="utf-8")
     return {
@@ -317,7 +334,9 @@ def build_docker_run_command(config: AiderBenchmarkConfig) -> list[str]:
         "-e",
         "APPORA_AIDER_MAX_TEST_CONTRACT_CHARS=18000",
         "-e",
-        "AIDER_WEAK_MODEL=openai/appora",
+        f"APPORA_AIDER_MODEL_NAME={config.model}",
+        "-e",
+        f"AIDER_WEAK_MODEL={config.model}",
         "-e",
         "AIDER_CHECK_MODEL_ACCEPTS_SETTINGS=false",
         "-e",
@@ -340,14 +359,17 @@ def build_docker_preflight_command(config: AiderBenchmarkConfig) -> list[str]:
         "python3",
         "-c",
         _shell_quote(
-            "import os, urllib.request; "
+            "import json, os, urllib.request; "
             "base=os.environ.get('OPENAI_API_BASE','').rstrip('/'); "
             "key=os.environ.get('OPENAI_API_KEY',''); "
+            "model=os.environ.get('APPORA_AIDER_ROUTER_MODEL',''); "
             "assert base, 'OPENAI_API_BASE missing'; "
             "assert key, 'OPENAI_API_KEY missing'; "
-            "req=urllib.request.Request(base + '/models', headers={'Authorization':'Bearer ' + key}); "
+            "assert model, 'APPORA_AIDER_ROUTER_MODEL missing'; "
+            "payload=json.dumps({'model':model,'messages':[{'role':'user','content':'Reply with ok only.'}],'max_tokens':8}).encode(); "
+            "req=urllib.request.Request(base + '/chat/completions', data=payload, headers={'Authorization':'Bearer ' + key, 'Content-Type':'application/json'}, method='POST'); "
             "resp=urllib.request.urlopen(req, timeout=15); "
-            "print('router_preflight_status=' + str(resp.status))"
+            "print('router_chat_preflight_status=' + str(resp.status))"
         ),
     ])
     return [
@@ -359,6 +381,8 @@ def build_docker_preflight_command(config: AiderBenchmarkConfig) -> list[str]:
         "OPENAI_API_KEY",
         "-e",
         f"OPENAI_API_BASE={config.openai_api_base}",
+        "-e",
+        f"APPORA_AIDER_ROUTER_MODEL={_router_model_from_aider_model(config.model)}",
         "aider-benchmark",
         "bash",
         "-lc",
@@ -382,7 +406,21 @@ def _shell_quote(value: str) -> str:
 
 def _run_command(command: list[str], *, cwd: Path | None = None, timeout: int | None = None, env: dict[str, str] | None = None) -> dict[str, Any]:
     started_cwd = str(cwd) if cwd else None
-    proc = subprocess.run(command, cwd=cwd, env=env, text=True, capture_output=True, timeout=timeout, check=False)
+    try:
+        proc = subprocess.run(command, cwd=cwd, env=env, text=True, capture_output=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+        stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+        return {
+            "command": command,
+            "cwd": started_cwd,
+            "returncode": None,
+            "ok": False,
+            "stdout": stdout,
+            "stderr": stderr,
+            "timeout": timeout,
+            "error": f"Command timed out after {timeout} seconds.",
+        }
     return {
         "command": command,
         "cwd": started_cwd,
@@ -581,8 +619,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run or prepare the official Aider Polyglot benchmark for Appora.")
     parser.add_argument("--workspace", type=Path, default=Path(".tmp-aider-benchmark"))
     parser.add_argument("--run-name", default="appora-aider")
-    parser.add_argument("--model", default="openai/appora")
-    parser.add_argument("--edit-format", default="diff")
+    parser.add_argument("--model", default=APPORA_AIDER_DEFAULT_MODEL)
+    parser.add_argument("--edit-format", default="whole")
     parser.add_argument("--threads", type=int, default=1)
     parser.add_argument("--num-tests", type=int, default=None)
     parser.add_argument("--keywords", default=None)

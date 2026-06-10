@@ -26,11 +26,13 @@ playwright-report/
 .voiceide-users.json
 .voiceide-projects.json
 .voiceide-home/
+.tmp-*/
 .tmp-agent-live/
 .tmp-agent-bench*/
 .tmp-agent-direct-web-large*/
 .tmp-aider-benchmark/
 .tmp-aider-test/
+*.tsbuildinfo
 *.log
 
 # misc

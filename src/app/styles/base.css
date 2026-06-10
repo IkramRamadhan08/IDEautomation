@@ -1,0 +1,118 @@
+@font-face {
+  font-family: "Geist";
+  src: url("../../assets/fonts/Geist-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  src: url("../../assets/fonts/GeistMono-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: dark;
+  --bg: #071015;
+  --bg-2: #0d171b;
+  --panel: rgba(10, 18, 24, 0.86);
+  --panel-strong: rgba(8, 16, 21, 0.94);
+  --panel-soft: rgba(246, 250, 245, 0.06);
+  --surface: rgba(246, 250, 245, 0.045);
+  --surface-strong: rgba(246, 250, 245, 0.08);
+  --border: rgba(209, 250, 229, 0.12);
+  --border-strong: rgba(209, 250, 229, 0.22);
+  --text: #f6faf5;
+  --text-soft: rgba(246, 250, 245, 0.74);
+  --muted: rgba(246, 250, 245, 0.5);
+  --brand: #61e8ff;
+  --brand-strong: #9cff5f;
+  --brand-soft: rgba(97, 232, 255, 0.14);
+  --success: #65d6ad;
+  --danger: #f87171;
+  --warning: #e7bf6a;
+  --shadow-xl: 0 28px 70px rgba(0, 0, 0, 0.44);
+  --shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.34);
+  --shadow-md: 0 10px 22px rgba(0, 0, 0, 0.24);
+  --radius-2xl: 18px;
+  --radius-xl: 12px;
+  --radius-lg: 10px;
+  --radius-md: 8px;
+  --radius-sm: 6px;
+}
+
+:root[data-app-theme="light"] {
+  color-scheme: light;
+  --bg: #f6faef;
+  --bg-2: #eef9fb;
+  --panel: rgba(255, 255, 255, 0.72);
+  --panel-strong: rgba(255, 255, 255, 0.92);
+  --panel-soft: rgba(17, 23, 23, 0.045);
+  --surface: rgba(17, 23, 23, 0.045);
+  --surface-strong: rgba(17, 23, 23, 0.075);
+  --border: rgba(17, 23, 23, 0.11);
+  --border-strong: rgba(17, 23, 23, 0.2);
+  --text: #111717;
+  --text-soft: rgba(17, 23, 23, 0.72);
+  --muted: rgba(17, 23, 23, 0.54);
+  --brand: #0f8395;
+  --brand-strong: #111717;
+  --brand-soft: rgba(156, 255, 95, 0.32);
+  --success: #0f8b5f;
+  --danger: #c24155;
+  --warning: #9a6a08;
+  --shadow-xl: 0 28px 70px rgba(36, 30, 17, 0.16);
+  --shadow-lg: 0 18px 44px rgba(36, 30, 17, 0.12);
+  --shadow-md: 0 10px 22px rgba(36, 30, 17, 0.09);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  overflow: hidden;
+  color: var(--text);
+  font-family: "Geist", Inter, "SF Pro Text", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--bg);
+  font-feature-settings: "cv02", "cv03", "cv04", "ss01";
+  text-rendering: geometricPrecision;
+}
+
+a,
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.18);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}

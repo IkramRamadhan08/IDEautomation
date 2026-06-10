@@ -13,7 +13,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from .app_state import CURRENT_SESSION_ID, CURRENT_USER_ID
-from .supabase_store import get_agent_memory_chunks_table_status, get_latest_agent_job_result, has_supabase, list_agent_memory_chunks, upsert_agent_memory_chunks
+from .storage.supabase import get_agent_memory_chunks_table_status, get_latest_agent_job_result, has_supabase, list_agent_memory_chunks, upsert_agent_memory_chunks
 
 _TOKEN_RE = re.compile(r"[a-zA-Z0-9_:-]{2,}")
 _STOPWORDS = {

@@ -49,6 +49,10 @@ _BROKEN_APP_SYMPTOM_RE = re.compile(
     r"\b(blank|putih|kosong|error runtime|runtime error|crash|ngeblank|gagal render|tidak muncul|gak muncul|nggak muncul|not rendering|not showing)\b",
     re.IGNORECASE,
 )
+_DEBUG_REPAIR_RE = re.compile(
+    r"\b(debug|diagnose|troubleshoot)\b.*\b(existing|bug|broken|fails?|failing|currently|should|wrong|incorrect|only|file|helper|function|method|class)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -169,6 +173,11 @@ def classify_agent_intent(
         write_score += 1.25
         inspection_score += 0.35
         signals.append("broken app symptom change request")
+    debug_repair_request = bool(_DEBUG_REPAIR_RE.search(raw) and (active_file or open_files) and not has_question)
+    if debug_repair_request:
+        write_score += 1.35
+        inspection_score += 0.25
+        signals.append("debug repair request with active file")
     if re.search(r"\b(agentic app builder|app builder|builder agent)\b", lowered):
         write_score += 0.45
         inspection_score += 0.2
@@ -179,6 +188,7 @@ def classify_agent_intent(
         bool(_EXPLICIT_WRITE_REQUEST_RE.search(raw))
         or negative_ui_request
         or broken_app_request
+        or debug_repair_request
         or bool(_FOLLOWUP_WRITE_RE.search(raw) and has_write_object)
         or bool(continuation_can_write and (active_file or open_files or build_mode == "full-agent") and not has_question)
     )

@@ -13,7 +13,7 @@ from api.agent import AgentSuggestion
 from api.agent_memory import remember_agent_run
 from api.agent_runtime import run_agent_pipeline
 from api.app_state import CURRENT_SESSION_ID, CURRENT_USER_ID, STATE
-from api.project_templates import list_project_templates, render_project_template
+from api.projects.templates import list_project_templates, render_project_template
 
 
 @dataclass(frozen=True)

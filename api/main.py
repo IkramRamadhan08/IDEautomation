@@ -19,13 +19,13 @@ from types import SimpleNamespace
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request as URLRequest, urlopen
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from api.settings import ROOT, ENV_PATH, load_settings
-from api.supabase_store import (
+from api.storage.supabase import (
     append_agent_job_event,
     create_agent_job,
     delete_project_file as supabase_delete_project_file,
@@ -44,13 +44,19 @@ from api.supabase_store import (
 )
 from api import settings as settings_mod
 from api.app_state import CURRENT_SESSION_ID, CURRENT_USER_ID, STATE
-from api.auth_router import build_auth_router
-from api.auth_identity import CURRENT_REQUEST_USER, resolve_request_user, sanitize_user_id
+from api.assets.router import build_assets_router
+from api.auth.router import build_auth_router
+from api.auth.identity import CURRENT_REQUEST_USER, resolve_request_user, sanitize_user_id
+from api.command.router import AgentHarnessRunShellReq, build_command_router
+from api.command.schemas import AgentHarnessShellAction, CommandPolicyDecision
 from api.oauth_runtime import CURRENT_PROFILE_ID
-from api.projects_router import build_projects_router
-from api.preferences_router import build_preferences_router
-from api.preferences import get_project_preferences
-from api.settings_router import build_settings_router
+from api.projects.router import build_projects_router
+from api.preferences.router import build_preferences_router
+from api.preferences.store import get_project_preferences
+from api.config.router import build_settings_router
+from api.diagnostics.router import build_diagnostics_router
+from api.workspace.router import build_workspace_router
+from api.workspace.schemas import IdentityInfo
 from api.fs import list_tree, read_text, write_text, diff_text, safe_join
 from api.agent_mcp import discover_mcp_servers, list_mcp_tools
 from api.agent_memory import get_agent_memory_overview, remember_agent_run, sync_project_docs_to_supabase
@@ -971,32 +977,6 @@ class VoiceIDESessionMiddleware:
 app.add_middleware(VoiceIDESessionMiddleware)
 
 
-@app.get("/api/healthz")
-def healthz():
-    return {
-        "ok": True,
-        "service": "appora-api",
-        "session": CURRENT_SESSION_ID.get(),
-        "user": CURRENT_USER_ID.get(),
-    }
-
-
-@app.get("/api/auth/debug")
-def auth_debug(request: Request):
-    user = CURRENT_REQUEST_USER.get()
-    authorization = request.headers.get("Authorization") or ""
-    has_bearer = authorization.lower().startswith("bearer ") and len(authorization.split(" ", 1)[-1].strip()) > 0
-    return {
-        "ok": True,
-        "auth_source": user.auth_source if user else "none",
-        "user_id": user.user_id if user else CURRENT_USER_ID.get(),
-        "supabase_user_id": user.supabase_user_id if user else None,
-        "email_set": bool(user.email) if user else False,
-        "has_bearer": has_bearer,
-        "has_supabase_backend": has_supabase(),
-    }
-
-
 DANGEROUS_COMMAND_FRAGMENTS = ["rm -rf /", "mkfs", "dd if="]
 VALIDATION_SCRIPT_NAMES = ("lint", "build", "typecheck", "check")
 PREVIEW_AUDIT_HOSTS = {"localhost", "127.0.0.1", "::1"}
@@ -1412,6 +1392,27 @@ def _dense_app_surface_ok(*, interactive_count: int, card_like_count: int, produ
     return interactive_count >= 12 and word_count >= 100 and product_surface_count >= 2 and card_like_count >= 4
 
 
+def _filter_visual_text_overflow_nodes(nodes: list[str]) -> list[str]:
+    hidden_markers = (
+        ".sr-only",
+        "sr-only",
+        ".visually-hidden",
+        "visually-hidden",
+        "[hidden]",
+        "aria-hidden",
+    )
+    filtered: list[str] = []
+    for item in nodes:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        lowered = text.lower()
+        if any(marker in lowered for marker in hidden_markers):
+            continue
+        filtered.append(text)
+    return filtered
+
+
 def _build_quality_checks(snapshot: dict, *, project_signals: dict[str, object] | None = None) -> list[dict[str, str | bool]]:
     project_signals = project_signals or {}
     viewport_meta = bool(snapshot.get("viewport_meta"))
@@ -1423,7 +1424,7 @@ def _build_quality_checks(snapshot: dict, *, project_signals: dict[str, object] 
     mobile_overflow = bool(snapshot.get("mobile_overflow_x"))
     unlabeled_interactive = [str(item) for item in (snapshot.get("unlabeled_interactive") or []) if str(item).strip()]
     mobile_small_tap_targets = [str(item) for item in (snapshot.get("mobile_small_tap_targets") or snapshot.get("small_tap_targets") or []) if str(item).strip()]
-    mobile_text_overflow_nodes = [str(item) for item in (snapshot.get("mobile_text_overflow_nodes") or snapshot.get("text_overflow_nodes") or []) if str(item).strip()]
+    mobile_text_overflow_nodes = _filter_visual_text_overflow_nodes([str(item) for item in (snapshot.get("mobile_text_overflow_nodes") or snapshot.get("text_overflow_nodes") or []) if str(item).strip()])
     broken_images = [str(item) for item in (snapshot.get("broken_images") or []) if str(item).strip()]
     fixed_overlays = [str(item) for item in (snapshot.get("mobile_fixed_overlays") or snapshot.get("fixed_overlays") or []) if str(item).strip()]
     section_count = max(0, int(snapshot.get("section_count") or 0))
@@ -1757,8 +1758,8 @@ def _build_preview_audit_result(
     interactive_count = max(0, int(snapshot.get("interactive_count") or 0))
     unlabeled_interactive = list_field("unlabeled_interactive")
     small_tap_targets = list_field("small_tap_targets")
-    text_overflow_nodes = list_field("text_overflow_nodes")
-    mobile_text_overflow_nodes = list_field("mobile_text_overflow_nodes")
+    text_overflow_nodes = _filter_visual_text_overflow_nodes(list_field("text_overflow_nodes"))
+    mobile_text_overflow_nodes = _filter_visual_text_overflow_nodes(list_field("mobile_text_overflow_nodes"))
     broken_images = list_field("broken_images", 6)
     fixed_overlays = list_field("fixed_overlays", 4)
     mobile_fixed_overlays = list_field("mobile_fixed_overlays", 4)
@@ -2245,7 +2246,22 @@ _AGENT_BROWSER_SNAPSHOT_JS = r"""(() => {
     .map(cssPath)
     .filter(Boolean)
     .slice(0, 4);
+  const isVisuallyHidden = (node) => {
+    const style = window.getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    const className = String(node.getAttribute('class') || '').toLowerCase();
+    return (
+      style.display === 'none' ||
+      style.visibility === 'hidden' ||
+      style.opacity === '0' ||
+      node.closest('[hidden], [aria-hidden="true"]') ||
+      className.includes('sr-only') ||
+      className.includes('visually-hidden') ||
+      (style.position === 'absolute' && rect.width <= 2 && rect.height <= 2 && (style.overflow === 'hidden' || style.clip !== 'auto' || style.clipPath !== 'none'))
+    );
+  };
   const textOverflowNodes = Array.from(document.querySelectorAll('button, a, h1, h2, h3, p, span, label, input'))
+    .filter((node) => !isVisuallyHidden(node))
     .filter((node) => node.scrollWidth > node.clientWidth + 4 && node.clientWidth > 0)
     .map((node) => `${cssPath(node)} "${clean(node.textContent || node.getAttribute('value') || '').slice(0, 60)}"`)
     .filter(Boolean)
@@ -2628,14 +2644,6 @@ def _run_shell_command_streaming(command: str, cwd: Path, emit_chunk, timeout: i
         }
 
 
-class CommandPolicyDecision(BaseModel):
-    ok: bool
-    command: str
-    risk_level: Literal["safe", "approval_required", "blocked"]
-    reason: str
-    requires_approval: bool = False
-
-
 _SAFE_COMMAND_PREFIXES = (
     ("npm", "run"),
     ("npm", "test"),
@@ -2752,6 +2760,17 @@ def _is_safe_read_command(parts: list[str]) -> bool:
     return True
 
 
+def _is_project_scoped_shadcn_command(parts: list[str]) -> bool:
+    if len(parts) < 2:
+        return False
+    executable = Path(parts[0]).name
+    if executable in {"npx", "pnpm", "bunx"}:
+        return any(part == "shadcn@latest" or part == "shadcn" for part in parts[1:4])
+    if executable == "yarn":
+        return any(part == "shadcn@latest" or part == "shadcn" for part in parts[1:5])
+    return False
+
+
 def _command_policy_decision_for_parts(clean: str, parts: list[str], *, access_mode: str = "safe") -> CommandPolicyDecision:
     if not parts:
         return CommandPolicyDecision(ok=False, command=clean, risk_level="blocked", reason="Command kosong.", requires_approval=True)
@@ -2772,6 +2791,11 @@ def _command_policy_decision_for_parts(clean: str, parts: list[str], *, access_m
 
     if _is_safe_read_command(parts):
         return CommandPolicyDecision(ok=True, command=clean, risk_level="safe", reason="Command baca/inspect relatif workspace boleh auto-run.", requires_approval=False)
+
+    if _is_project_scoped_shadcn_command(parts):
+        if access_mode == "trusted":
+            return CommandPolicyDecision(ok=True, command=clean, risk_level="safe", reason="Trusted Project mode: shadcn CLI project-scoped boleh auto-run dengan trace evidence.", requires_approval=False)
+        return CommandPolicyDecision(ok=False, command=clean, risk_level="approval_required", reason="shadcn CLI guarded: safe mode harus meminta/menampilkan action project-scoped, bukan menganggap command sudah berjalan.", requires_approval=True)
 
     if access_mode == "trusted":
         if executable in {"npm", "pnpm", "yarn", "bun", "npx", "node", "python", "python3", "pip", "pip3", "go", "cargo", "mvn", "gradle", "gradlew", "composer", "bundle", "ruby", "dotnet", "terraform", "deno", "cmake", "make", "swift", "mix", "docker", "docker-compose", "kubectl", "tsx", "ts-node", "vite", "vitest", "jest", "eslint", "prettier", "playwright"}:
@@ -2928,105 +2952,6 @@ def _infer_validation_commands(project_dir: Path) -> list[str]:
     return deduped
 
 
-class TerminalRunReq(BaseModel):
-    command: str
-    cwd: str | None = None
-    reason: str | None = None
-
-
-class AgentHarnessShellAction(BaseModel):
-    command: str
-    cwd: str | None = None
-    reason: str | None = None
-
-
-class AgentHarnessRunShellReq(BaseModel):
-    project_root: str = "."
-    actions: list[AgentHarnessShellAction]
-
-
-class CommandPolicyReq(BaseModel):
-    command: str
-    cwd: str | None = None
-    reason: str | None = None
-
-
-@app.post("/api/agent/command-policy/check", response_model=CommandPolicyDecision)
-def command_policy_check(req: CommandPolicyReq):
-    return _command_policy_decision(req.command, project_root=req.cwd)
-
-
-@app.post("/api/terminal/run")
-def terminal_run(req: TerminalRunReq):
-    ws_root = _session_state().get("workspace")
-    if not ws_root:
-        raise HTTPException(400, "No workspace selected")
-
-    cwd = ws_root
-    if req.cwd:
-        cwd = safe_join(ws_root, req.cwd)
-
-    try:
-        policy = _command_policy_decision(req.command, project_root=req.cwd)
-        if not policy.ok:
-            raise HTTPException(403, {"message": policy.reason, "policy": policy.model_dump()})
-        result = _run_shell_command(req.command, cwd)
-        result["policy"] = policy.model_dump()
-        result["synced_files"] = _sync_hosted_project_text_files_after_shell(ws_root, cwd)
-        return result
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(500, str(e))
-
-
-@app.post("/api/agent/harness/run-shell")
-def agent_harness_run_shell(req: AgentHarnessRunShellReq):
-    ws_root = _session_state().get("workspace")
-    if not ws_root:
-        raise HTTPException(400, "No workspace selected")
-
-    ws_root_path = Path(ws_root)
-    project_root = str(req.project_root or ".").strip().strip("/") or "."
-    _hydrate_hosted_project(ws_root_path, project_root)
-
-    return _run_harness_shell_actions_internal(
-        ws_root_path=ws_root_path,
-        project_root=project_root,
-        actions=req.actions,
-    )
-
-
-class WorkspaceSetReq(BaseModel):
-    path: str
-
-
-class IdentityUpdateReq(BaseModel):
-    display_name: str | None = None
-    email: str | None = None
-
-
-class IdentityInfo(BaseModel):
-    user_id: str
-    display_name: str | None
-    email: str | None
-    has_profile: bool
-    managed_workspace_mode: Literal["user", "session"]
-    managed_workspace_path: str
-
-
-class WorkspaceInfo(BaseModel):
-    path: str | None
-    default: str | None
-
-
-class WorkspaceProvisionResp(BaseModel):
-    ok: bool
-    path: str
-    created: bool
-    managed: bool = True
-
-
 def _managed_workspace_root() -> Path:
     import os
 
@@ -3067,17 +2992,6 @@ def _identity_info() -> IdentityInfo:
     )
 
 
-@app.get("/api/identity", response_model=IdentityInfo)
-def get_identity():
-    return _identity_info()
-
-
-@app.put("/api/identity", response_model=IdentityInfo)
-def update_identity_profile(req: IdentityUpdateReq):
-    _upsert_current_user_profile(display_name=req.display_name, email=req.email)
-    return _identity_info()
-
-
 def _provision_managed_workspace() -> tuple[Path, bool]:
     target_dir, mode = _managed_workspace_target()
 
@@ -3103,152 +3017,6 @@ def _provision_managed_workspace() -> tuple[Path, bool]:
         encoding="utf-8",
     )
     return target_dir, created
-
-
-@app.get("/api/workspace", response_model=WorkspaceInfo)
-def get_workspace():
-    # Public-friendly behavior: workspace is session-only.
-    # Do not auto-restore from DEFAULT_WORKSPACE or any previously persisted choice.
-    p: Path | None = _session_state()["workspace"]
-    if p is None and has_supabase():
-        p, _created = _provision_managed_workspace()
-        _session_state()["workspace"] = p
-    return WorkspaceInfo(path=str(p) if p else None, default=settings_mod.settings.default_workspace)
-
-
-@app.post("/api/workspace")
-def set_workspace(req: WorkspaceSetReq):
-    if _is_serverless_runtime():
-        raise HTTPException(400, "Picking arbitrary host folders is disabled in hosted/serverless deployments.")
-    p = Path(req.path).expanduser().resolve()
-    if not p.exists() or not p.is_dir():
-        raise HTTPException(400, "Workspace path must be an existing directory")
-    # Public-friendly behavior: keep workspace selection in memory only.
-    _session_state()["workspace"] = p
-    _session_state()["hydrated_projects"] = set()
-    return {"ok": True, "path": str(p)}
-
-
-@app.post("/api/workspace/clear")
-def clear_workspace():
-    _session_state()["workspace"] = None
-    _session_state()["hydrated_projects"] = set()
-    return {"ok": True}
-
-
-@app.post("/api/workspace/provision", response_model=WorkspaceProvisionResp)
-def provision_workspace():
-    session_dir, created = _provision_managed_workspace()
-    _session_state()["workspace"] = session_dir
-    _session_state()["hydrated_projects"] = set()
-    return WorkspaceProvisionResp(ok=True, path=str(session_dir), created=created)
-
-
-@app.post("/api/workspace/pick")
-def pick_workspace():
-    """Open a native directory picker on the machine running the API service and return the chosen path.
-
-    This avoids the browser's webkitdirectory 'upload' UX and lets the user pick a real folder that
-    becomes the workspace root for all agent reads/writes.
-    """
-
-    import shutil
-    import subprocess
-
-    if _is_serverless_runtime():
-        raise HTTPException(400, "Native folder picking is only available in local desktop/dev mode.")
-
-    # Prefer zenity on Linux desktops
-    if shutil.which("zenity"):
-        try:
-            r = subprocess.run(
-                ["zenity", "--file-selection", "--directory", "--title=Pick workspace folder"],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            if r.returncode == 0:
-                p = (r.stdout or "").strip()
-                if p:
-                    return {"ok": True, "path": p}
-            return {"ok": False, "path": None}
-        except Exception:
-            pass
-
-    # Fallback: tkinter (works cross-platform if GUI available)
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-        p = filedialog.askdirectory(title="Pick workspace folder")
-        try:
-            root.destroy()
-        except Exception:
-            pass
-
-        if p:
-            return {"ok": True, "path": p}
-        return {"ok": False, "path": None}
-    except Exception:
-        return {"ok": False, "path": None}
-
-
-@app.post("/api/workspace/import-browser-folder", response_model=WorkspaceProvisionResp)
-async def import_browser_folder(files: list[UploadFile] = File(...), paths: list[str] = Form(...)):
-    if not files:
-        raise HTTPException(400, "No files uploaded")
-    if len(files) != len(paths):
-        raise HTTPException(400, "Uploaded files/path metadata mismatch")
-
-    workspace_dir, _created = _provision_managed_workspace()
-
-    root_name: str | None = None
-    target_root: Path | None = None
-    target_root_preexisting = False
-
-    for upload, rel_raw in zip(files, paths):
-        rel = PurePosixPath((rel_raw or "").strip())
-        if not rel.parts:
-            raise HTTPException(400, "Invalid uploaded path")
-        if rel.is_absolute() or any(part in {"", ".", ".."} for part in rel.parts):
-            raise HTTPException(400, "Unsafe uploaded path")
-
-        if root_name is None:
-            root_name = rel.parts[0]
-            target_root = (workspace_dir / root_name).resolve()
-            if workspace_dir != target_root and workspace_dir not in target_root.parents:
-                raise HTTPException(400, "Invalid target import root")
-            target_root_preexisting = target_root.exists()
-        elif rel.parts[0] != root_name:
-            raise HTTPException(400, "Please choose exactly one folder")
-
-        assert target_root is not None
-        inner_parts = rel.parts[1:] if len(rel.parts) > 1 else (upload.filename or rel.parts[-1],)
-        dest = target_root.joinpath(*inner_parts).resolve()
-        if target_root != dest and target_root not in dest.parents:
-            raise HTTPException(400, "Unsafe destination path")
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        content = await upload.read()
-        dest.write_bytes(content)
-        if has_supabase() and _is_text_rel_path(str(PurePosixPath(*inner_parts))):
-            try:
-                supabase_upsert_project_files(
-                    owner_id=CURRENT_USER_ID.get(),
-                    project_root=root_name,
-                    files=[{"path": str(PurePosixPath(*inner_parts)), "content": content.decode("utf-8")}],
-                )
-            except Exception:
-                pass
-
-    if target_root is None:
-        raise HTTPException(400, "No folder content received")
-
-    _session_state()["workspace"] = target_root
-    _session_state()["hydrated_projects"] = set()
-    return WorkspaceProvisionResp(ok=True, path=str(target_root), created=not target_root_preexisting, managed=True)
 
 
 # Settings endpoints
@@ -3313,7 +3081,16 @@ def _env_unset(key: str) -> None:
     _write_env_lines(lines)
 
 
+app.include_router(build_diagnostics_router())
 app.include_router(build_auth_router(session_state=_session_state, sanitize_session_id=_sanitize_session_id, sanitize_user_id=sanitize_user_id, upsert_current_user_profile=_upsert_current_user_profile))
+app.include_router(build_workspace_router(
+    session_state=_session_state,
+    identity_info=_identity_info,
+    upsert_current_user_profile=_upsert_current_user_profile,
+    provision_managed_workspace=_provision_managed_workspace,
+    is_serverless_runtime=_is_serverless_runtime,
+    is_text_rel_path=_is_text_rel_path,
+))
 app.include_router(build_projects_router(session_state=_session_state, ensure_workspace=_provision_managed_workspace))
 app.include_router(build_preferences_router())
 app.include_router(build_settings_router(session_state=_session_state, env_set=_env_set, env_unset=_env_unset, reload_settings=_reload_settings))
@@ -3333,6 +3110,9 @@ def _ws() -> Path:
         p = Path(p)
         _session_state()["workspace"] = p
     return p
+
+
+app.include_router(build_assets_router(workspace_root=_ws, hydrate_hosted_project=_hydrate_hosted_project))
 
 
 # ---- Runner (v0) ----
@@ -4139,7 +3919,7 @@ def supabase_rag_status(project_root: str = "."):
     elif not supabase_enabled:
         warning = "Setup Supabase belum lengkap di backend ini."
     elif table_status == "missing":
-        warning = "Tabel public.agent_memory_chunks belum ada. Jalankan docs/supabase-agent-rag.sql di Supabase SQL editor dulu."
+        warning = "Tabel public.agent_memory_chunks belum ada. Jalankan docs/supabase/agent-rag.sql di Supabase SQL editor dulu."
     elif table_status == "error":
         warning = "Backend belum bisa verifikasi agent_memory_chunks sekarang, jadi RAG masih fallback lokal."
 
@@ -4153,7 +3933,7 @@ def supabase_rag_status(project_root: str = "."):
         "table_status": table_status,
         "live_ready": bool(supabase_enabled and table_status == "ready"),
         "warning": warning,
-        "bootstrap_sql_path": "docs/supabase-agent-rag.sql",
+        "bootstrap_sql_path": "docs/supabase/agent-rag.sql",
         "summary": summary,
     }
 
@@ -4174,7 +3954,7 @@ def supabase_rag_sync(req: SupabaseRagSyncReq):
         **sync_result,
         "live_ready": bool(sync_result.get("supabase_configured") and sync_result.get("table_status") == "ready" and (summary or sync_result.get("synced"))),
         "summary": summary,
-        "bootstrap_sql_path": "docs/supabase-agent-rag.sql",
+        "bootstrap_sql_path": "docs/supabase/agent-rag.sql",
     }
 
 
@@ -4228,16 +4008,6 @@ class AgentWorkerRunReq(BaseModel):
     limit: int = 1
 
 
-class ImageAssetResp(BaseModel):
-    ok: bool
-    path: str
-    name: str
-    title: str | None = None
-    alias: str | None = None
-    content_type: str | None = None
-    size: int
-
-
 @app.get("/api/agent/capabilities")
 def agent_capabilities(project_root: str = ".", include_live_tools: bool = False):
     ws_root = _ws()
@@ -4261,7 +4031,7 @@ def agent_capabilities(project_root: str = ".", include_live_tools: bool = False
     memory_backend = "supabase-hash-vector-chunks" if supabase_rag_ready else "local-hash-vector-chunks"
     supabase_warning = None
     if supabase_rag_status == "missing":
-        supabase_warning = "Supabase udah dikonfigurasi, tapi tabel public.agent_memory_chunks belum dibuat. Jalankan docs/supabase-agent-rag.sql dulu."
+        supabase_warning = "Supabase udah dikonfigurasi, tapi tabel public.agent_memory_chunks belum dibuat. Jalankan docs/supabase/agent-rag.sql dulu."
     elif supabase_rag_status == "error":
         supabase_warning = "Supabase RAG belum bisa diverifikasi dari backend ini, jadi retrieval masih fallback ke chunk lokal."
     return {
@@ -4454,57 +4224,6 @@ def prd(req: PrdReq):
         raise HTTPException(400, str(exc))
     except Exception as exc:
         raise HTTPException(500, str(exc))
-
-
-def _sanitize_uploaded_filename(name: str) -> str:
-    stem = Path(name or "image").stem or "image"
-    stem = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in stem).strip("-") or "image"
-    suffix = Path(name or "").suffix.lower()
-    allowed = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"}
-    if suffix not in allowed:
-        suffix = ".png"
-    return f"{stem[:50]}{suffix}"
-
-
-def _sanitize_asset_alias(value: str | None, fallback: str = "image") -> str:
-    raw = (value or "").strip().lstrip("@")
-    alias = "".join(ch.lower() if ch.isalnum() else "-" for ch in raw).strip("-")
-    alias = re.sub(r"-{2,}", "-", alias)
-    return (alias or fallback)[:40]
-
-
-@app.post("/api/assets/image", response_model=ImageAssetResp)
-async def upload_image_asset(project_root: str = Form("."), file: UploadFile = File(...), title: str | None = Form(None)):
-    ws_root = _ws()
-    proj_root = (project_root or ".").strip() or "."
-    _hydrate_hosted_project(ws_root, proj_root)
-    project_dir = safe_join(ws_root, proj_root)
-    if not project_dir.exists() or not project_dir.is_dir():
-        raise HTTPException(400, "project_root must exist inside workspace")
-
-    content_type = (file.content_type or "").strip().lower()
-    if not content_type.startswith("image/"):
-        raise HTTPException(400, "Only image uploads are supported")
-
-    data = await file.read()
-    if not data:
-        raise HTTPException(400, "Uploaded image is empty")
-    if len(data) > 10 * 1024 * 1024:
-        raise HTTPException(400, "Image too large (max 10 MB)")
-
-    filename = _sanitize_uploaded_filename(file.filename or "image")
-    target_dir = safe_join(project_dir, "public/uploads")
-    target_dir.mkdir(parents=True, exist_ok=True)
-
-    candidate = target_dir / filename
-    if candidate.exists():
-        candidate = target_dir / f"{candidate.stem}-{int(time.time())}{candidate.suffix}"
-    candidate.write_bytes(data)
-
-    rel = str(candidate.relative_to(ws_root))
-    fallback_alias = _sanitize_asset_alias(candidate.stem, "image")
-    alias = _sanitize_asset_alias(title, fallback_alias)
-    return ImageAssetResp(ok=True, path=rel, name=candidate.name, title=title or alias, alias=alias, content_type=content_type or None, size=len(data))
 
 
 @app.get("/api/agent/jobs/{job_id}")
@@ -4777,6 +4496,57 @@ def _gate_fake_business_data_in_changes(changes: list[dict[str, object]]) -> tup
         else:
             next_changes.append(change)
     return next_changes, gated_paths
+
+
+_MISSING_CSS_CLASSES_RE = re.compile(r"custom class\(es\) lack CSS definitions:\s*([A-Za-z0-9_,\s-]+)\.", re.IGNORECASE)
+
+
+def _gate_missing_css_classes_in_changes(changes: list[dict[str, object]], failure_summary: str) -> tuple[list[dict[str, object]], list[str]]:
+    missing: list[str] = []
+    for match in _MISSING_CSS_CLASSES_RE.finditer(str(failure_summary or "")):
+        for item in str(match.group(1) or "").split(","):
+            clean = item.strip()
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", clean) and clean not in missing:
+                missing.append(clean)
+    if not missing:
+        return changes, []
+
+    css_index = -1
+    for index, change in enumerate(list(changes or [])):
+        if not isinstance(change, dict):
+            continue
+        path = str(change.get("path") or "").strip()
+        content = change.get("new_content")
+        if path and isinstance(content, str) and PurePosixPath(path).suffix.lower() in {".css", ".scss"}:
+            css_index = index
+            break
+    if css_index < 0:
+        return changes, []
+
+    next_changes = [dict(item) if isinstance(item, dict) else item for item in list(changes or [])]
+    css_change = dict(next_changes[css_index])
+    css_text = str(css_change.get("new_content") or "")
+    appended: list[str] = []
+    for class_name in missing:
+        if re.search(rf"\.{re.escape(class_name)}\b", css_text):
+            continue
+        if class_name.endswith(("title", "heading")):
+            rule = f".{class_name} {{ font-weight: 700; color: var(--text, inherit); }}"
+        elif class_name.endswith(("info", "content", "body")):
+            rule = f".{class_name} {{ min-width: 0; display: grid; gap: 0.25rem; }}"
+        elif class_name.endswith(("state", "empty-state")):
+            rule = f".{class_name} {{ color: #64748b; text-align: center; }}"
+        elif class_name.endswith(("actions", "controls")):
+            rule = f".{class_name} {{ display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }}"
+        else:
+            rule = f".{class_name} {{ min-width: 0; }}"
+        appended.append(rule)
+    if not appended:
+        return changes, []
+
+    css_change["new_content"] = css_text.rstrip() + "\n" + "\n".join(appended) + "\n"
+    next_changes[css_index] = css_change
+    return next_changes, [str(css_change.get("path") or "")]
 
 
 def _reverify_merged_verifier_output(req: AgentReq, ws_root: Path, changes: list[dict[str, object]], actions: list[dict]) -> dict:
@@ -5472,13 +5242,12 @@ def _execution_completion_report(execution: dict[str, object]) -> dict[str, obje
             has_screenshot = bool(visual_evidence.get("has_screenshot"))
             screenshot_path = str(visual_evidence.get("screenshot_path") or "").strip()
             screen_backend = str(visual_evidence.get("screen_backend") or preview_audit.get("audit_mode") or "").strip()
+            screen_capable_backend = screen_backend in {"agent-browser", "playwright", "browser"}
             visual_required = bool(
                 execution.get("apply") is not None
                 and preview_audit.get("ok") is True
-                and (
-                    "visual_evidence" in preview_audit
-                    or str(preview_audit.get("audit_mode") or "").strip() in {"agent-browser", "playwright"}
-                )
+                and "visual_evidence" in preview_audit
+                and screen_capable_backend
             )
             visual_status = "passed" if has_screen else ("failed" if visual_required else "warning")
             visual_detail = (
@@ -6167,6 +5936,32 @@ def _run_harness_shell_actions_internal(
         "ran": len(results),
         "results": results,
     }
+
+
+def agent_harness_run_shell(req: AgentHarnessRunShellReq):
+    ws_root = _session_state().get("workspace")
+    if not ws_root:
+        raise HTTPException(400, "No workspace selected")
+
+    ws_root_path = Path(ws_root)
+    project_root = str(req.project_root or ".").strip().strip("/") or "."
+    _hydrate_hosted_project(ws_root_path, project_root)
+
+    return _run_harness_shell_actions_internal(
+        ws_root_path=ws_root_path,
+        project_root=project_root,
+        actions=req.actions,
+    )
+
+
+app.include_router(build_command_router(
+    session_state=_session_state,
+    command_policy_decision=_command_policy_decision,
+    run_shell_command=_run_shell_command,
+    sync_hosted_project_text_files_after_shell=_sync_hosted_project_text_files_after_shell,
+    hydrate_hosted_project=_hydrate_hosted_project,
+    run_harness_shell_actions_internal=_run_harness_shell_actions_internal,
+))
 
 
 def _split_validation_commands_by_existing_shell_evidence(validation_commands: list[str], shell_result: dict[str, object] | None) -> tuple[list[str], list[dict]]:
@@ -6982,6 +6777,7 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
         execution["failure_analysis"] = _execution_final_failure_analysis(execution)
 
     completion_report = _execution_completion_report(execution)
+    execution["ok"] = bool(execution.get("ok")) and bool(completion_report.get("ok"))
     emit("status", {"phase": "completion", "message": str(completion_report.get("summary") or "Backend completion report ready.")})
     execution["completion_report"] = completion_report
     steps = execution.setdefault("steps", [])
@@ -9073,6 +8869,20 @@ def _run_agent_impl(req: AgentReq, event_cb=None, job_id: str | None = None):
                 if _trace_has_blocking_verifier_failures(merged_repair_trace)
                 else ""
             )
+            if not repair.get("ok") and "custom class(es) lack CSS definitions" in str(repair.get("failure_summary") or ""):
+                gated_changes, gated_paths = _gate_missing_css_classes_in_changes(merged_repair_changes, str(repair.get("failure_summary") or ""))
+                if gated_paths:
+                    gated_trace = _reverify_merged_verifier_output(req, ws_root, gated_changes, merged_repair_actions)
+                    if not _trace_has_blocking_verifier_failures(gated_trace):
+                        merged_repair_changes = gated_changes
+                        merged_repair_trace = gated_trace
+                        repair["merged_trace"] = merged_repair_trace
+                        repair["ok"] = True
+                        repair["failure_summary"] = ""
+                        repair["deterministic_css_class_gate"] = {
+                            "paths": gated_paths,
+                            "summary": "Added missing CSS class definitions during targeted verifier repair.",
+                        }
             if not repair.get("ok") and "frontend-interaction-integrity" in str(repair.get("failure_summary") or ""):
                 gated_changes, gated_paths = _gate_inert_final_buttons_in_changes(merged_repair_changes)
                 if gated_paths:

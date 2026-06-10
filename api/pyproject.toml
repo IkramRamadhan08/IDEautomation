@@ -21,12 +21,9 @@ include-package-data = true
 [tool.setuptools.package-dir]
 api = "."
 
-[tool.setuptools.package-data]
-api = ["*.mjs"]
 
 [tool.uvicorn]
 factory = false
-
 
 
 

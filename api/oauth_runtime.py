@@ -13,7 +13,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
-from api.secrets_store import get_provider_secret, has_provider_secret
+from api.storage.secrets import get_provider_secret, has_provider_secret
 
 OPENAI_PROVIDER = "openai"
 NINE_ROUTER_PROVIDER = "nine_router"
@@ -47,7 +47,7 @@ GROQ_LOGIN_HINT = "Masukkan Groq API key di Settings. Groq cocok buat user yang 
 GEMINI_LOGIN_HINT = "Masukkan Gemini API key dari Google AI Studio. Gemini cocok buat user Google yang mau mulai dari free quota/rate limit."
 TOGETHER_LOGIN_HINT = "Masukkan Together AI API key. Together cocok buat akses banyak model open-source lewat API OpenAI-compatible."
 CEREBRAS_LOGIN_HINT = "Masukkan Cerebras API key. Cerebras cocok buat model open-source cepat dengan free/dev tier limit."
-NINE_ROUTER_LOGIN_HINT = "Jalankan 9Router, buka dashboard 9Router, lalu paste endpoint /v1 dan API key. Default lokal: http://127.0.0.1:20128/v1. Kalau Appora backend hosted/Railway, endpoint harus reachable dari backend."
+NINE_ROUTER_LOGIN_HINT = "Jalankan 9Router, buka dashboard 9Router, lalu paste endpoint /v1 dan API key. Default lokal: http://127.0.0.1:20128/v1. Kalau Appora backend hosted, endpoint harus reachable dari backend."
 XAI_LOGIN_HINT = "Masukkan xAI API key. xAI cocok buat user yang ingin model Grok, biasanya paid/API-credit based."
 
 CURRENT_PROFILE_ID: ContextVar[str | None] = ContextVar("voiceide_profile_id", default=None)
@@ -598,7 +598,9 @@ def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str], *, pr
                 try:
                     data = json.loads(raw) if raw else {}
                 except Exception:
-                    data = {"error": {"message": raw[:500] or "Provider returned a non-JSON response."}}
+                    data = _chat_completion_from_sse_raw(raw)
+                    if data is None:
+                        data = {"error": {"message": raw[:500] or "Provider returned a non-JSON response."}}
                 return resp.status, data, raw
         except HTTPError as exc:
             raw = exc.read().decode("utf-8", "replace")
@@ -607,6 +609,8 @@ def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str], *, pr
             except Exception:
                 data = None
             if exc.code == 429:
+                if provider == NINE_ROUTER_PROVIDER:
+                    return exc.code, data, raw
                 wait_seconds = _extract_retry_after_seconds(exc)
                 if wait_seconds is None:
                     wait_seconds = min(20.0, 4.0 * attempt)
@@ -620,6 +624,38 @@ def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str], *, pr
                 time.sleep(min(8.0, 1.5 * attempt))
                 continue
             return 599, None, str(exc)
+
+
+def _chat_completion_from_sse_raw(raw: str) -> dict[str, Any] | None:
+    if "data:" not in str(raw or ""):
+        return None
+    chunks: list[str] = []
+    for line in str(raw or "").splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        data_text = line[5:].strip()
+        if not data_text or data_text == "[DONE]":
+            continue
+        try:
+            event = json.loads(data_text)
+        except Exception:
+            continue
+        choices = event.get("choices") if isinstance(event, dict) else []
+        first = choices[0] if isinstance(choices, list) and choices else {}
+        delta = first.get("delta") if isinstance(first, dict) else {}
+        content = ""
+        if isinstance(delta, dict):
+            content = str(delta.get("content") or "")
+        if not content:
+            message = first.get("message") if isinstance(first, dict) else {}
+            if isinstance(message, dict):
+                content = str(message.get("content") or "")
+        if content:
+            chunks.append(content)
+    if not chunks:
+        return None
+    return {"choices": [{"message": {"content": "".join(chunks)}}]}
 
 
 def _friendly_error(provider: str, status: int, data: dict[str, Any] | None, fallback: str) -> str:

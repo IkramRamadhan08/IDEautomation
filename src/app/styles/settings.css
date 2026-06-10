@@ -1,0 +1,149 @@
+.settingsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 10px;
+  overflow: hidden;
+  align-content: start;
+}
+
+.compactSettingsGrid {
+  grid-template-columns: 1fr 1fr;
+}
+
+.settingsSection {
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+  min-width: 0;
+}
+
+.compactSettingsSection {
+  padding: 10px;
+}
+
+.settingsSectionWide {
+  grid-column: 1 / -1;
+}
+
+.brainTitle {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.settingsReadinessGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.settingsReadinessItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.settingsReadinessDot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  margin-top: 5px;
+  border-radius: 999px;
+  background: var(--warning);
+  box-shadow: 0 0 0 4px rgba(231, 191, 106, 0.1);
+}
+
+.settingsReadinessDot.ok {
+  background: var(--success);
+  box-shadow: 0 0 0 4px rgba(101, 214, 173, 0.1);
+}
+
+.settingsReadinessLabel {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.settingsReadinessValue {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.settingsLabel {
+  display: inline-block;
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-soft);
+}
+
+.settingsNote {
+  margin-top: 6px;
+}
+
+.settingsRowHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.compactStatusLine {
+  gap: 6px;
+}
+
+.compactSegmentedControl {
+  margin-top: 8px;
+}
+
+.compactHint {
+  min-height: 0;
+  margin-top: 6px;
+}
+
+.minimalTopbarMeta {
+  gap: 6px;
+}
+
+.settingsInfoCard {
+  margin-top: 10px;
+  padding: 10px;
+}
+
+.settingsProfileLine {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.settingsSubtle {
+  margin-top: 8px;
+}
+
+.settingsSubtle.successText {
+  color: #2f9e44;
+}
+
+.settingsSubtle.dangerText {
+  color: #e03131;
+}
+
+.settingsActions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.settingsActions .btn {
+  min-height: 34px;
+}

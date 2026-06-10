@@ -20,7 +20,7 @@ from api.agent_observability import build_agent_observability
 from api.app_state import CURRENT_SESSION_ID, CURRENT_USER_ID, STATE
 from api.hybrid import build_hybrid_seed
 from api.oauth_runtime import NINE_ROUTER_PROVIDER, auth_snapshot, test_nine_router_route
-from api.project_templates import render_project_template
+from api.projects.templates import render_project_template
 
 
 @dataclass(frozen=True)
@@ -36,6 +36,7 @@ class AgentBenchmarkScenario:
     forbidden_terms: tuple[str, ...] = ()
     target_duration_seconds: int = 120
     max_autonomous_passes: int = 3
+    seed_files: tuple[tuple[str, str], ...] = ()
 
 
 AGENT_BENCHMARK_SCENARIOS: tuple[AgentBenchmarkScenario, ...] = (
@@ -84,6 +85,82 @@ AGENT_BENCHMARK_SCENARIOS: tuple[AgentBenchmarkScenario, ...] = (
         required_terms=("laundry", "booking", "price", "testimonial", "premium", "cta"),
         forbidden_terms=("task tracker", "dashboard", "portfolio"),
         target_duration_seconds=90,
+    ),
+    AgentBenchmarkScenario(
+        id="shadcn_dashboard_repair",
+        prompt=(
+            "Repair dashboard shadcn ini. Pakai primitives components/ui yang sudah ada, cn(), "
+            "jangan pakai prop shadcn yang tidak valid seperti Avatar size, dan validasi build."
+        ),
+        template_id="blank",
+        project_root="benchmark-shadcn-dashboard-repair",
+        active_file="src/App.tsx",
+        open_files=("src/App.tsx", "src/components/ui/button.tsx", "src/components/ui/avatar.tsx", "src/lib/utils.ts", "components.json", "package.json"),
+        min_score=82,
+        required_terms=("dashboard", "shadcn", "button", "avatar", "cn", "build"),
+        forbidden_terms=("size=\"", "laundry", "portfolio", "testimonial"),
+        target_duration_seconds=100,
+        seed_files=(
+            ("package.json", json.dumps({"scripts": {"build": "vite build"}, "dependencies": {"@tailwindcss/vite": "^4.0.0", "@radix-ui/react-avatar": "^1.1.0", "@radix-ui/react-slot": "^1.2.0", "class-variance-authority": "^0.7.1", "clsx": "^2.1.1", "lucide-react": "^0.477.0", "react": "^19.0.0", "react-dom": "^19.0.0", "tailwind-merge": "^3.0.0", "tailwindcss": "^4.0.0"}, "devDependencies": {"@vitejs/plugin-react": "^5.0.0", "typescript": "^5.0.0", "vite": "^7.0.0"}})),
+            ("components.json", json.dumps({"style": "new-york", "base": "radix", "tsx": True, "aliases": {"ui": "@/components/ui", "utils": "@/lib/utils"}})),
+            ("src/styles.css", "@import \"tailwindcss\";\n@theme inline { --color-background: var(--background); }\n"),
+            ("src/lib/utils.ts", "import { clsx, type ClassValue } from 'clsx';\nimport { twMerge } from 'tailwind-merge';\nexport function cn(...inputs: ClassValue[]) { return twMerge(clsx(inputs)); }\n"),
+            ("src/components/ui/button.tsx", "import { Slot } from '@radix-ui/react-slot';\nexport function Button({ asChild, ...props }: any) { const Comp = asChild ? Slot : 'button'; return <Comp {...props} /> }\n"),
+            ("src/components/ui/avatar.tsx", "export function Avatar(props: any) { return <span {...props} /> }\nexport function AvatarFallback(props: any) { return <span {...props} /> }\n"),
+            ("src/App.tsx", "import { Avatar, AvatarFallback } from '@/components/ui/avatar';\nimport { Button } from '@/components/ui/button';\nexport default function App(){ return <main><h1>Dashboard</h1><Avatar size=\"lg\"><AvatarFallback>AP</AvatarFallback></Avatar><Button>Save</Button></main> }\n"),
+        ),
+    ),
+    AgentBenchmarkScenario(
+        id="shadcn_blank_vite_init",
+        prompt=(
+            "User explicitly wants shadcn/ui in this blank Vite app. Initialize non-interactively "
+            "with radix base, add a button/card style dashboard, and run validation."
+        ),
+        template_id="blank",
+        project_root="benchmark-shadcn-blank-vite-init",
+        active_file="src/App.tsx",
+        open_files=("src/App.tsx", "src/app.css", "package.json"),
+        min_score=80,
+        required_terms=("shadcn", "radix", "components.json", "button", "dashboard", "build"),
+        forbidden_terms=("plain css only", "laundry", "portfolio"),
+        target_duration_seconds=130,
+    ),
+    AgentBenchmarkScenario(
+        id="plain_css_avoid_tailwind_drift",
+        prompt=(
+            "Improve this plain CSS React page. The project has no Tailwind or shadcn setup, "
+            "so keep styling in CSS classes and do not introduce utility-class drift."
+        ),
+        template_id="landing-pricing",
+        project_root="benchmark-plain-css-avoid-tailwind-drift",
+        active_file="src/pages/Home.tsx",
+        open_files=("src/pages/Home.tsx", "src/app.css", "package.json"),
+        min_score=78,
+        required_terms=("css", "class", "landing", "booking", "build"),
+        forbidden_terms=("tailwindcss", "@tailwind", "components.json", "class-variance-authority", "min-h-screen bg-", "px-6 py-"),
+        target_duration_seconds=90,
+    ),
+    AgentBenchmarkScenario(
+        id="shadcn_missing_button_import",
+        prompt=(
+            "Fix the broken '@/components/ui/button' import by adding or correcting the actual shadcn component file. "
+            "Keep the existing shadcn/Tailwind setup and validate imports/build."
+        ),
+        template_id="blank",
+        project_root="benchmark-shadcn-missing-button-import",
+        active_file="src/App.tsx",
+        open_files=("src/App.tsx", "components.json", "package.json"),
+        min_score=82,
+        required_terms=("components/ui/button", "button", "import", "shadcn", "build"),
+        forbidden_terms=("generic fallback", "laundry", "portfolio"),
+        target_duration_seconds=100,
+        seed_files=(
+            ("package.json", json.dumps({"scripts": {"build": "vite build"}, "dependencies": {"@tailwindcss/vite": "^4.0.0", "@radix-ui/react-slot": "^1.2.0", "class-variance-authority": "^0.7.1", "clsx": "^2.1.1", "react": "^19.0.0", "react-dom": "^19.0.0", "tailwind-merge": "^3.0.0", "tailwindcss": "^4.0.0"}, "devDependencies": {"@vitejs/plugin-react": "^5.0.0", "typescript": "^5.0.0", "vite": "^7.0.0"}})),
+            ("components.json", json.dumps({"style": "new-york", "base": "radix", "tsx": True, "aliases": {"ui": "@/components/ui", "utils": "@/lib/utils"}})),
+            ("src/styles.css", "@import \"tailwindcss\";\n"),
+            ("src/lib/utils.ts", "import { clsx, type ClassValue } from 'clsx';\nimport { twMerge } from 'tailwind-merge';\nexport function cn(...inputs: ClassValue[]) { return twMerge(clsx(inputs)); }\n"),
+            ("src/App.tsx", "import { Button } from '@/components/ui/button';\nexport default function App(){ return <main><Button>Save</Button></main> }\n"),
+        ),
     ),
 )
 
@@ -153,6 +230,8 @@ def _write_benchmark_project(workspace: Path, scenario: AgentBenchmarkScenario) 
             (path[len(prefix):] if path.startswith(prefix) else path): content
             for path, content in seeded.items()
         }
+    for rel_path, content in scenario.seed_files:
+        files[rel_path] = content
     project_dir.mkdir(parents=True, exist_ok=True)
     for rel_path, content in files.items():
         target = project_dir / rel_path
