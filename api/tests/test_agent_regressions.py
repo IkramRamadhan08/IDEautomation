@@ -8328,6 +8328,17 @@ class AgentAutoExecuteRegressionTests(unittest.TestCase):
             CURRENT_SESSION_ID.reset(session_token)
             STATE.get("sessions", {}).pop(session_id, None)
 
+    def test_auto_execute_orders_dependency_install_before_build_commands(self) -> None:
+        actions = [
+            main_mod.AgentHarnessShellAction(command="npm run build", cwd=None, reason="validate"),
+            main_mod.AgentHarnessShellAction(command="npm install", cwd=None, reason="install deps"),
+            main_mod.AgentHarnessShellAction(command="npm run lint", cwd=None, reason="lint"),
+        ]
+
+        ordered = main_mod._order_agent_shell_actions(actions)
+
+        self.assertEqual([item.command for item in ordered], ["npm install", "npm run build", "npm run lint"])
+
     def test_run_agent_impl_streams_unresolved_handoff_after_native_progress(self) -> None:
         session_id = "unresolved-handoff-stream-test"
         STATE.get("sessions", {}).pop(session_id, None)
@@ -10566,6 +10577,23 @@ class AgentBenchmarkRegressionTests(unittest.TestCase):
             self.assertTrue((project_dir / "components.json").exists())
             self.assertIn("@/components/ui/button", (project_dir / "src" / "App.tsx").read_text(encoding="utf-8"))
             self.assertFalse((project_dir / "src" / "components" / "ui" / "button.tsx").exists())
+
+    def test_agent_benchmark_symbol_forbidden_terms_require_literal_match(self) -> None:
+        scenario = next(item for item in AGENT_BENCHMARK_SCENARIOS if item.id == "plain_css_avoid_tailwind_drift")
+        result = {
+            "spoken": "Keep this plain CSS page compatible with projects that mention Tailwind only as something not installed.",
+            "changes": [{
+                "path": f"{scenario.project_root}/src/pages/Home.tsx",
+                "new_content": "export default function Home(){ return <main className=\"landing\"><h1>Landing booking</h1></main> }",
+            }],
+            "actions": [{"type": "shell", "command": "npm run build"}],
+            "execution": {"ok": True},
+            "trace": {"verification": []},
+        }
+
+        scored = _score_live_result(result, [], scenario=scenario, duration_seconds=1)
+
+        self.assertNotIn("@tailwind", scored["metrics"]["matched_forbidden_terms"])
 
     def test_live_agent_benchmark_invokes_runtime_and_scores_result(self) -> None:
         calls = []

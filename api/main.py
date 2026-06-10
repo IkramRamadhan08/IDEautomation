@@ -4358,6 +4358,21 @@ def _agent_shell_actions(actions: list[dict]) -> list[AgentHarnessShellAction]:
     return shell_actions
 
 
+_INSTALL_LIKE_COMMAND_RE = re.compile(r"^\s*(?:npm|pnpm|yarn|bun)\s+(?:install|i|add)(?:\s|$)")
+
+
+def _order_agent_shell_actions(actions: list[AgentHarnessShellAction]) -> list[AgentHarnessShellAction]:
+    install_like: list[AgentHarnessShellAction] = []
+    other: list[AgentHarnessShellAction] = []
+    for action in actions or []:
+        command = str(getattr(action, "command", "") or "")
+        if _INSTALL_LIKE_COMMAND_RE.search(command):
+            install_like.append(action)
+        else:
+            other.append(action)
+    return [*install_like, *other]
+
+
 def _prepare_agent_out_changes(ws_root: Path, normalized_changes: list) -> list[dict[str, object]]:
     out_changes: list[dict[str, object]] = []
     for ch in normalized_changes:
@@ -6360,7 +6375,7 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
         "ok": True,
     }
 
-    shell_actions = _agent_shell_actions(actions)
+    shell_actions = _order_agent_shell_actions(_agent_shell_actions(actions))
 
     if out_changes:
         apply_paths = [

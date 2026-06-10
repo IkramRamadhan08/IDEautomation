@@ -245,6 +245,10 @@ def _normalize_score_text(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", " ", text)
 
 
+def _raw_score_text(value: Any) -> str:
+    return str(value or "").lower()
+
+
 def _changed_text_blob(result: dict[str, Any]) -> str:
     changes = result.get("changes") if isinstance(result.get("changes"), list) else []
     parts: list[str] = [str(result.get("spoken") or ""), str(result.get("log") or "")]
@@ -257,6 +261,20 @@ def _changed_text_blob(result: dict[str, Any]) -> str:
             if isinstance(value, str):
                 parts.append(value)
     return _normalize_score_text("\n".join(parts))
+
+
+def _changed_raw_text_blob(result: dict[str, Any]) -> str:
+    changes = result.get("changes") if isinstance(result.get("changes"), list) else []
+    parts: list[str] = [str(result.get("spoken") or ""), str(result.get("log") or "")]
+    for change in changes:
+        if not isinstance(change, dict):
+            continue
+        parts.append(str(change.get("path") or ""))
+        for key in ("new_content", "content", "diff", "patch"):
+            value = change.get(key)
+            if isinstance(value, str):
+                parts.append(value)
+    return _raw_score_text("\n".join(parts))
 
 
 def _final_project_text_blob(project_dir: Path | None, scenario: AgentBenchmarkScenario | None, result: dict[str, Any]) -> str:
@@ -286,7 +304,37 @@ def _final_project_text_blob(project_dir: Path | None, scenario: AgentBenchmarkS
     return _normalize_score_text("\n".join(parts))
 
 
-def _term_present(blob: str, term: str) -> bool:
+def _final_project_raw_text_blob(project_dir: Path | None, scenario: AgentBenchmarkScenario | None, result: dict[str, Any]) -> str:
+    if project_dir is None or scenario is None or not project_dir.exists():
+        return ""
+    changes = result.get("changes") if isinstance(result.get("changes"), list) else []
+    paths: set[str] = {path for path in scenario.open_files if path}
+    for change in changes:
+        if not isinstance(change, dict):
+            continue
+        raw = str(change.get("path") or "").strip()
+        if not raw:
+            continue
+        prefix = f"{scenario.project_root.strip('/')}/"
+        rel = raw[len(prefix):] if raw.startswith(prefix) else raw
+        paths.add(rel)
+    parts: list[str] = []
+    for rel in sorted(paths):
+        if not rel or rel.endswith("package.json"):
+            continue
+        try:
+            path = project_dir / rel
+            if path.is_file() and path.stat().st_size <= 300_000:
+                parts.append(path.read_text(encoding="utf-8", errors="ignore")[:40_000])
+        except Exception:
+            continue
+    return _raw_score_text("\n".join(parts))
+
+
+def _term_present(blob: str, term: str, *, raw_blob: str = "") -> bool:
+    raw_term = str(term or "").lower()
+    if re.search(r"[^a-z0-9\s]", raw_term):
+        return raw_term in raw_blob
     normalized = _normalize_score_text(term)
     if not normalized:
         return True
@@ -330,10 +378,14 @@ def _score_live_result(
         _changed_text_blob(result),
         _final_project_text_blob(project_dir, scenario, result),
     ]).strip()
+    raw_changed_blob = " ".join([
+        _changed_raw_text_blob(result),
+        _final_project_raw_text_blob(project_dir, scenario, result),
+    ]).strip()
     required_terms = tuple(scenario.required_terms if scenario else ())
-    missing_required_terms = [term for term in required_terms if not _term_present(changed_blob, term)]
+    missing_required_terms = [term for term in required_terms if not _term_present(changed_blob, term, raw_blob=raw_changed_blob)]
     forbidden_terms = tuple(scenario.forbidden_terms if scenario else ())
-    matched_forbidden_terms = [term for term in forbidden_terms if _term_present(changed_blob, term)]
+    matched_forbidden_terms = [term for term in forbidden_terms if _term_present(changed_blob, term, raw_blob=raw_changed_blob)]
     requirement_coverage = 1.0
     if required_terms:
         requirement_coverage = (len(required_terms) - len(missing_required_terms)) / len(required_terms)
