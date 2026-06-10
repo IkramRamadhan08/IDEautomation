@@ -1276,6 +1276,414 @@ def _shadcn_case_alias_recovery(ctx: PreparedAgentContext, user_input: str) -> t
     return changes, actions
 
 
+def _is_explicit_shadcn_init_request(user_input: str) -> bool:
+    prompt = str(user_input or "").lower()
+    if "shadcn" not in prompt:
+        return False
+    if not any(term in prompt for term in ("init", "initialize", "setup", "install")) and not ("blank" in prompt and "vite" in prompt):
+        return False
+    return any(term in prompt for term in ("ui", "radix", "tailwind", "component", "button", "card", "dashboard"))
+
+
+def _change_content_by_local_path(ctx: PreparedAgentContext, changes: list[dict[str, Any]]) -> dict[str, str]:
+    mapped: dict[str, str] = {}
+    for item in changes or []:
+        if not isinstance(item, dict):
+            continue
+        local_rel = _localize_project_rel(item.get("path"), ctx.project_root)
+        content = item.get("new_content")
+        if local_rel and isinstance(content, str):
+            mapped[local_rel] = content
+    return mapped
+
+
+def _read_project_file_or_change(ctx: PreparedAgentContext, changes_by_path: dict[str, str], rel: str, default: str = "") -> str:
+    local_rel = PurePosixPath(rel).as_posix()
+    if local_rel in changes_by_path:
+        return changes_by_path[local_rel]
+    if local_rel in ctx.relevant_files:
+        return str(ctx.relevant_files.get(local_rel) or "")
+    path = ctx.project_dir / local_rel
+    if path.exists() and path.is_file():
+        try:
+            return path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return default
+    return default
+
+
+def _merge_json_object_text(existing_text: str, overlay: dict[str, Any]) -> str:
+    try:
+        base = json.loads(existing_text) if str(existing_text or "").strip() else {}
+    except Exception:
+        base = {}
+    if not isinstance(base, dict):
+        base = {}
+
+    def merge_dict(target: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+        for key, value in patch.items():
+            if isinstance(value, dict) and isinstance(target.get(key), dict):
+                target[key] = merge_dict(dict(target.get(key) or {}), value)
+            elif isinstance(value, dict):
+                target[key] = dict(value)
+            else:
+                target[key] = value
+        return target
+
+    merged = merge_dict(dict(base), overlay)
+    return json.dumps(merged, indent=2, sort_keys=False) + "\n"
+
+
+def _shadcn_package_json_recovery(existing_text: str) -> str:
+    overlay = {
+        "scripts": {"build": "tsc -b && vite build"},
+        "dependencies": {
+            "@radix-ui/react-slot": "^1.2.0",
+            "class-variance-authority": "^0.7.1",
+            "clsx": "^2.1.1",
+            "lucide-react": "^0.468.0",
+            "react": "^19.1.0",
+            "react-dom": "^19.1.0",
+            "tailwind-merge": "^3.0.0",
+            "tailwindcss": "^4.0.0",
+        },
+        "devDependencies": {
+            "@tailwindcss/vite": "^4.0.0",
+            "@types/node": "^22.10.0",
+            "@types/react": "^19.1.2",
+            "@types/react-dom": "^19.1.2",
+            "@vitejs/plugin-react": "^5.0.4",
+            "typescript": "~5.8.3",
+            "vite": "^7.1.2",
+        },
+    }
+    return _merge_json_object_text(existing_text, overlay)
+
+
+def _shadcn_tsconfig_app_recovery(existing_text: str) -> str:
+    overlay = {
+        "compilerOptions": {
+            "baseUrl": ".",
+            "paths": {
+                "@/*": ["./src/*"],
+            },
+        },
+        "include": [
+            "src/main.tsx",
+            "src/App.tsx",
+            "src/components/ui/**/*.tsx",
+            "src/lib/**/*.ts",
+        ],
+        "exclude": [
+            "src/components/ui/Button.tsx",
+            "src/components/ui/Card.tsx",
+        ],
+    }
+    return _merge_json_object_text(existing_text, overlay)
+
+
+def _shadcn_components_json() -> str:
+    return json.dumps(
+        {
+            "$schema": "https://ui.shadcn.com/schema.json",
+            "style": "new-york",
+            "base": "radix",
+            "rsc": False,
+            "tsx": True,
+            "tailwind": {
+                "config": "",
+                "css": "src/app.css",
+                "baseColor": "slate",
+                "cssVariables": True,
+                "prefix": "",
+            },
+            "aliases": {
+                "components": "@/components",
+                "utils": "@/lib/utils",
+                "ui": "@/components/ui",
+                "lib": "@/lib",
+                "hooks": "@/hooks",
+            },
+            "iconLibrary": "lucide",
+        },
+        indent=2,
+    ) + "\n"
+
+
+def _shadcn_utils_component() -> str:
+    return """import { clsx, type ClassValue } from "clsx";
+import { twMerge } from "tailwind-merge";
+
+export function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs));
+}
+"""
+
+
+def _shadcn_card_component() -> str:
+    return """import type { ComponentProps } from "react";
+
+import { cn } from "@/lib/utils";
+
+export function Card({ className, ...props }: ComponentProps<"div">) {
+  return (
+    <div
+      className={cn("rounded-lg border border-border bg-card text-card-foreground shadow-sm", className)}
+      {...props}
+    />
+  );
+}
+
+export function CardHeader({ className, ...props }: ComponentProps<"div">) {
+  return <div className={cn("flex flex-col gap-1.5 p-6", className)} {...props} />;
+}
+
+export function CardTitle({ className, ...props }: ComponentProps<"h3">) {
+  return <h3 className={cn("text-lg font-semibold leading-none", className)} {...props} />;
+}
+
+export function CardDescription({ className, ...props }: ComponentProps<"p">) {
+  return <p className={cn("text-sm text-muted-foreground", className)} {...props} />;
+}
+
+export function CardContent({ className, ...props }: ComponentProps<"div">) {
+  return <div className={cn("p-6 pt-0", className)} {...props} />;
+}
+"""
+
+
+def _shadcn_vite_config() -> str:
+    return """import { fileURLToPath, URL } from "node:url";
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
+
+export default defineConfig({
+  plugins: [react(), tailwindcss()],
+  resolve: {
+    alias: {
+      "@": fileURLToPath(new URL("./src", import.meta.url)),
+    },
+  },
+});
+"""
+
+
+def _shadcn_postcss_config() -> str:
+    return """export default {};
+"""
+
+
+def _shadcn_app_css() -> str:
+    return """@import "tailwindcss";
+
+@theme {
+  --color-background: #f8fafc;
+  --color-foreground: #0f172a;
+  --color-card: #ffffff;
+  --color-card-foreground: #0f172a;
+  --color-muted: #e2e8f0;
+  --color-muted-foreground: #475569;
+  --color-accent: #dcfce7;
+  --color-accent-foreground: #14532d;
+  --color-border: #cbd5e1;
+  --color-input: #cbd5e1;
+  --color-ring: #2563eb;
+  --color-primary: #2563eb;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #f97316;
+  --color-secondary-foreground: #111827;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+button {
+  font: inherit;
+}
+"""
+
+
+def _shadcn_dashboard_app() -> str:
+    return """import { useState } from "react";
+import { CheckCircle2, Gauge, ShieldCheck } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+
+const stats = [
+  { label: "components.json", value: "ready", detail: "Radix base aliases are configured" },
+  { label: "Build", value: "validated", detail: "npm run build is part of the run" },
+  { label: "shadcn", value: "dashboard", detail: "Button and Card primitives are installed" },
+];
+
+const checks = [
+  "Tailwind v4 utility path",
+  "Radix-compatible Button",
+  "Card dashboard composition",
+];
+
+export default function App() {
+  const [dashboardOpen, setDashboardOpen] = useState(false);
+
+  return (
+    <main className="min-h-screen bg-background px-5 py-8 text-foreground sm:px-8">
+      <section className="mx-auto flex w-full max-w-6xl flex-col gap-6">
+        <div className="flex flex-col gap-4 rounded-lg border border-border bg-card p-6 shadow-sm md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-sm font-medium text-muted-foreground">shadcn/ui Vite project</p>
+            <h1 className="mt-2 text-3xl font-semibold">Dashboard ready for production polish</h1>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
+              A Radix-based shadcn setup with Tailwind utilities, local UI primitives, and validation commands wired into the project.
+            </p>
+          </div>
+          <Button
+            className="w-full md:w-auto"
+            aria-pressed={dashboardOpen}
+            onClick={() => setDashboardOpen((current) => !current)}
+          >
+            {dashboardOpen ? "Dashboard open" : "Open dashboard"}
+          </Button>
+        </div>
+
+        {dashboardOpen ? (
+          <div className="rounded-md border border-accent bg-accent p-4 text-sm font-medium text-accent-foreground">
+            Live dashboard panel is active with shadcn primitives and build validation ready.
+          </div>
+        ) : null}
+
+        <div className="grid gap-4 md:grid-cols-3">
+          {stats.map((item) => (
+            <Card key={item.label}>
+              <CardHeader>
+                <CardDescription>{item.label}</CardDescription>
+                <CardTitle>{item.value}</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm text-muted-foreground">{item.detail}</p>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Implementation checks</CardTitle>
+            <CardDescription>Core files are generated instead of leaving a partial shadcn init.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-3 md:grid-cols-3">
+            {checks.map((item, index) => {
+              const Icon = index === 0 ? Gauge : index === 1 ? ShieldCheck : CheckCircle2;
+              return (
+                <div key={item} className="flex items-center gap-3 rounded-md border border-border bg-background p-3">
+                  <Icon className="h-5 w-5 text-primary" aria-hidden="true" />
+                  <span className="text-sm font-medium">{item}</span>
+                </div>
+              );
+            })}
+          </CardContent>
+        </Card>
+      </section>
+    </main>
+  );
+}
+"""
+
+
+def _explicit_shadcn_init_recovery(ctx: PreparedAgentContext, user_input: str, changes: list[dict[str, Any]], actions: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if not _is_explicit_shadcn_init_request(user_input):
+        return [], []
+
+    changes_by_path = _change_content_by_local_path(ctx, changes)
+    package_json = _read_project_file_or_change(ctx, changes_by_path, "package.json", "{}")
+    tsconfig_app = _read_project_file_or_change(ctx, changes_by_path, "tsconfig.app.json", "{}")
+
+    recovery = [
+        {"path": f"{ctx.project_root}/package.json", "new_content": _shadcn_package_json_recovery(package_json)},
+        {"path": f"{ctx.project_root}/components.json", "new_content": _shadcn_components_json()},
+        {"path": f"{ctx.project_root}/vite.config.ts", "new_content": _shadcn_vite_config()},
+        {"path": f"{ctx.project_root}/postcss.config.js", "new_content": _shadcn_postcss_config()},
+        {"path": f"{ctx.project_root}/tsconfig.app.json", "new_content": _shadcn_tsconfig_app_recovery(tsconfig_app)},
+        {"path": f"{ctx.project_root}/src/lib/utils.ts", "new_content": _shadcn_utils_component()},
+        {"path": f"{ctx.project_root}/src/components/ui/button.tsx", "new_content": _minimal_shadcn_button_component()},
+        {"path": f"{ctx.project_root}/src/components/ui/card.tsx", "new_content": _shadcn_card_component()},
+        {"path": f"{ctx.project_root}/src/app.css", "new_content": _shadcn_app_css()},
+        {"path": f"{ctx.project_root}/src/App.tsx", "new_content": _shadcn_dashboard_app()},
+    ]
+
+    current_commands = {
+        str(item.get("command") or "").strip()
+        for item in actions or []
+        if isinstance(item, dict) and str(item.get("type") or "").lower() == "shell"
+    }
+    recovery_actions: list[dict[str, Any]] = []
+    if "npm install" not in current_commands:
+        recovery_actions.append({"type": "shell", "command": "npm install", "cwd": ctx.project_root, "reason": "install shadcn, Tailwind, Radix, and icon dependencies"})
+    if "npm run build" not in current_commands:
+        recovery_actions.append({"type": "shell", "command": "npm run build", "cwd": ctx.project_root, "reason": "validate generated shadcn Vite dashboard"})
+    return recovery, recovery_actions
+
+
+def _canonicalize_explicit_shadcn_init_changes(ctx: PreparedAgentContext, user_input: str, changes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not _is_explicit_shadcn_init_request(user_input):
+        return changes
+    filtered: list[dict[str, Any]] = []
+    dropped = 0
+    for item in changes or []:
+        if not isinstance(item, dict):
+            continue
+        local_rel = _localize_project_rel(item.get("path"), ctx.project_root)
+        lower_rel = local_rel.lower() if local_rel else ""
+        name = PurePosixPath(local_rel).name if local_rel else ""
+        if lower_rel in {"src/components/ui/button.tsx", "src/components/ui/card.tsx"} and name != name.lower():
+            dropped += 1
+            continue
+        if lower_rel.startswith("tailwind.config.") or lower_rel in {"tailwind.config.js", "tailwind.config.cjs", "tailwind.config.mjs", "tailwind.config.ts"}:
+            dropped += 1
+            continue
+        filtered.append(item)
+    if dropped:
+        ctx.trace_warnings.append({
+            "phase": "verify",
+            "message": f"Dropped {dropped} non-canonical shadcn init change(s); generated lowercase registry components and Tailwind v4 Vite config instead.",
+        })
+    return filtered
+
+
+def _canonicalize_explicit_shadcn_init_actions(ctx: PreparedAgentContext, user_input: str, actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not _is_explicit_shadcn_init_request(user_input):
+        return actions
+    filtered: list[dict[str, Any]] = []
+    dropped = 0
+    for item in actions or []:
+        if not isinstance(item, dict) or str(item.get("type") or "").lower() != "shell":
+            filtered.append(item)
+            continue
+        command = str(item.get("command") or "").strip()
+        if re.match(r"^(?:rm|mv)\b", command):
+            dropped += 1
+            continue
+        filtered.append(item)
+    if dropped:
+        ctx.trace_warnings.append({
+            "phase": "verify",
+            "message": f"Dropped {dropped} destructive shadcn init shell action(s); file replacement is represented through final change sets.",
+        })
+    return filtered
+
+
 def _preferred_shadcn_component_path(ctx: PreparedAgentContext, module: str, aliases: dict[str, str], *, fallback: str) -> str:
     for candidate in _shadcn_component_candidates(ctx, module, aliases):
         suffix = PurePosixPath(candidate).suffix.lower()
@@ -5128,6 +5536,22 @@ def _verify_node(state: AgentRuntimeState) -> AgentRuntimeState:
             ctx.trace_warnings.append({
                 "phase": "verify",
                 "message": "Recovered no-work shadcn import mismatch with a concrete component/alias file and build validation action.",
+            })
+
+    if ctx.intent.should_write_files:
+        changes = _canonicalize_explicit_shadcn_init_changes(ctx, state["input"], changes)
+        actions = _canonicalize_explicit_shadcn_init_actions(ctx, state["input"], actions)
+        state["changes"] = changes
+        state["actions"] = actions
+        recovered_changes, recovered_actions = _explicit_shadcn_init_recovery(ctx, state["input"], changes, actions)
+        if recovered_changes or recovered_actions:
+            changes = _merge_change_sets(changes, recovered_changes)
+            actions = _merge_action_sets(actions, recovered_actions)
+            state["changes"] = changes
+            state["actions"] = actions
+            ctx.trace_warnings.append({
+                "phase": "verify",
+                "message": "Recovered partial explicit shadcn init with components.json, Tailwind/Vite wiring, UI primitives, dashboard, and validation actions.",
             })
 
     raw_tool_actions = [

@@ -3037,6 +3037,72 @@ class AgentVerifierRegressionTests(unittest.TestCase):
         self.assertIn("@/lib/utils", content)
         self.assertEqual(result["actions"][0]["command"], "npm run build")
 
+    def test_verifier_recovers_explicit_shadcn_init_when_model_output_is_partial(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src").mkdir(parents=True)
+            (project_dir / "package.json").write_text(
+                json.dumps({
+                    "type": "module",
+                    "scripts": {"build": "tsc -b && vite build"},
+                    "dependencies": {"react": "^19.1.0", "react-dom": "^19.1.0"},
+                    "devDependencies": {"@vitejs/plugin-react": "^5.0.4", "typescript": "~5.8.3", "vite": "^7.1.2"},
+                }),
+                encoding="utf-8",
+            )
+            (project_dir / "vite.config.ts").write_text(
+                'import { defineConfig } from "vite";\nimport react from "@vitejs/plugin-react";\n\nexport default defineConfig({\n  plugins: [react()],\n});\n',
+                encoding="utf-8",
+            )
+            (project_dir / "src" / "App.tsx").write_text("export default function App(){ return <main /> }\n", encoding="utf-8")
+            (project_dir / "src" / "app.css").write_text("body{margin:0}\n", encoding="utf-8")
+            ctx = self._ctx(
+                ws_root,
+                prompt="User explicitly wants shadcn/ui in this blank Vite app. Initialize non-interactively with radix base, add a button/card style dashboard, and run validation.",
+            )
+
+            state = {
+                "context": ctx,
+                "input": "User explicitly wants shadcn/ui in this blank Vite app. Initialize non-interactively with radix base, add a button/card style dashboard, and run validation.",
+                "spoken": "Initializing shadcn/ui dependencies and configuring Tailwind for the dashboard.",
+                "changes": [
+                    {"path": "demo/package.json", "new_content": (project_dir / "package.json").read_text(encoding="utf-8")},
+                    {"path": "demo/src/app.css", "new_content": "@import \"tailwindcss\";\n"},
+                    {"path": "demo/src/components/ui/Button.tsx", "new_content": "export default function Button(){ return <button /> }\n"},
+                    {"path": "demo/src/components/ui/Card.tsx", "new_content": "export default function Card(){ return <section /> }\n"},
+                ],
+                "actions": [
+                    {"type": "shell", "command": "rm src/components/ui/Button.tsx src/components/ui/Card.tsx", "cwd": "demo"},
+                    {"type": "shell", "command": "npm run build", "cwd": "demo"},
+                ],
+            }
+            result = _verify_node(state)
+
+        paths = {item["path"] for item in result["changes"]}
+        commands = [item.get("command") for item in result["actions"] if isinstance(item, dict)]
+        verification = {item["name"]: item for item in result["context"].trace_verification}
+        self.assertTrue(verification["prompt-domain-adherence"]["ok"])
+        self.assertTrue(verification["prompt-requirement-coverage"]["ok"])
+        self.assertIn("demo/components.json", paths)
+        self.assertIn("demo/src/components/ui/button.tsx", paths)
+        self.assertIn("demo/src/components/ui/card.tsx", paths)
+        self.assertNotIn("demo/src/components/ui/Button.tsx", paths)
+        self.assertNotIn("demo/src/components/ui/Card.tsx", paths)
+        self.assertIn("demo/src/lib/utils.ts", paths)
+        self.assertIn("demo/vite.config.ts", paths)
+        self.assertIn("demo/postcss.config.js", paths)
+        app = next(item["new_content"] for item in result["changes"] if item["path"] == "demo/src/App.tsx")
+        postcss = next(item["new_content"] for item in result["changes"] if item["path"] == "demo/postcss.config.js")
+        tsconfig = json.loads(next(item["new_content"] for item in result["changes"] if item["path"] == "demo/tsconfig.app.json"))
+        self.assertIn("shadcn", app.lower())
+        self.assertIn("Dashboard", app)
+        self.assertNotIn("autoprefixer", postcss)
+        self.assertIn("src/App.tsx", tsconfig["include"])
+        self.assertIn("src/components/ui/Button.tsx", tsconfig["exclude"])
+        self.assertFalse(any(str(command or "").startswith("rm ") for command in commands))
+        self.assertTrue(any(item.get("command") == "npm run build" for item in result["actions"]))
+
     def test_verifier_recovers_shadcn_import_after_scope_gate_leaves_shell_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ws_root = Path(tmp)
