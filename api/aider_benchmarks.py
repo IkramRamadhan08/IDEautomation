@@ -184,6 +184,8 @@ class AiderBenchmarkConfig:
     num_tests: int | None = None
     tries: int = 3
     keywords: str | None = None
+    languages: str | None = None
+    new_run: bool = False
     openai_api_base: str = "http://host.docker.internal:20128/v1"
     openai_api_key_env: str = "NINE_ROUTER_API_KEY"
     max_chat_history_tokens: int = 8192
@@ -256,6 +258,10 @@ def _benchmark_args(config: AiderBenchmarkConfig) -> list[str]:
         args.extend(["--num-tests", str(config.num_tests)])
     if config.keywords:
         args.extend(["--keywords", config.keywords])
+    if config.languages:
+        args.extend(["--languages", config.languages])
+    if config.new_run:
+        args.append("--new")
     return args
 
 
@@ -534,10 +540,16 @@ def run_aider_benchmark(
 
         run_execution = _run_command(build_docker_run_command(config), timeout=timeout, env=env)
         executions.append(run_execution)
-        stdout_stats = _parse_aider_stats(str(run_execution.get("stdout") or ""))
+        run_stdout = str(run_execution.get("stdout") or "")
+        stdout_stats = _parse_aider_stats(run_stdout)
         if stdout_stats:
             result["stats"] = stdout_stats
         official_success = _aider_stats_indicate_success(stdout_stats)
+        if "Prior runs of" in run_stdout and "use --new or name one explicitly" in run_stdout:
+            result["ok"] = False
+            result["executions"] = executions
+            result["summary"] = "Aider benchmark existing run name was reused; pass --new or a unique --run-name."
+            return result
         if not run_execution["ok"]:
             result["ok"] = False
             result["executions"] = executions
@@ -574,6 +586,8 @@ def main() -> int:
     parser.add_argument("--threads", type=int, default=1)
     parser.add_argument("--num-tests", type=int, default=None)
     parser.add_argument("--keywords", default=None)
+    parser.add_argument("--languages", default=None)
+    parser.add_argument("--new", action="store_true", dest="new_run")
     parser.add_argument("--openai-api-base", default="http://host.docker.internal:20128/v1")
     parser.add_argument("--openai-api-key-env", default="NINE_ROUTER_API_KEY")
     parser.add_argument("--max-chat-history-tokens", type=int, default=32768)
@@ -593,6 +607,8 @@ def main() -> int:
         threads=max(1, args.threads),
         num_tests=args.num_tests,
         keywords=args.keywords,
+        languages=args.languages,
+        new_run=args.new_run,
         openai_api_base=args.openai_api_base,
         openai_api_key_env=args.openai_api_key_env,
         max_chat_history_tokens=args.max_chat_history_tokens,

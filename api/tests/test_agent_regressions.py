@@ -373,6 +373,49 @@ class AgentIntentRegressionTests(unittest.TestCase):
 
 
 class AgentRuntimeContextRegressionTests(unittest.TestCase):
+    def test_tooling_node_promotes_applied_tool_changes_into_runtime_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src").mkdir(parents=True)
+            (project_dir / "src" / "App.tsx").write_text("export default function App(){ return <main>Old</main> }\n", encoding="utf-8")
+
+            req = SimpleNamespace(
+                input="replace old with ready",
+                project_root="demo",
+                build_mode="full-agent",
+                active_file="src/App.tsx",
+                open_files=["src/App.tsx"],
+                current_content=None,
+                selection=None,
+                preview_url=None,
+                editor_status=None,
+                auto_execute=False,
+                asset_paths=[],
+            )
+            ctx = prepare_agent_context(req, ws_root)
+            state = {
+                "input": "replace old with ready",
+                "context": ctx,
+                "actions": [
+                    {
+                        "type": "tool",
+                        "tool": "search_replace_apply",
+                        "arguments": {
+                            "path": "demo/src/App.tsx",
+                            "search": "Old",
+                            "replace": "Ready",
+                        },
+                    }
+                ],
+                "tool_iterations": 0,
+            }
+
+            result = agent_runtime_mod._execute_tooling_node(state)
+
+        self.assertIn("changes", result)
+        self.assertIn("Ready", result["changes"][0]["new_content"])
+
     def test_agent_driver_runs_pipeline_without_legacy_static_graph(self) -> None:
         self.assertFalse(hasattr(agent_runtime_mod, "_AGENT_GRAPH"))
         self.assertIsInstance(AgentDriver(max_steps=12), AgentDriver)
@@ -5007,6 +5050,28 @@ class AgentToolsRegressionTests(unittest.TestCase):
         self.assertIn("Ship agent", query.text)
         self.assertIn('"columns": [', query.text)
 
+    def test_database_client_blocks_write_sql_in_query_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            project_dir.mkdir(parents=True)
+
+            result = execute_local_tool(
+                ws_root,
+                project_dir,
+                tool_name="database_client",
+                arguments={
+                    "project_root": "demo",
+                    "backend": "sqlite",
+                    "database": "app.db",
+                    "mode": "query",
+                    "sql": "DROP TABLE users",
+                },
+            )
+
+        self.assertFalse(result.ok)
+        self.assertIn("read-only", result.error)
+
     def test_local_tools_git_manager_can_commit_locally_and_blocks_remote_without_flag(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ws_root = Path(tmp)
@@ -5048,6 +5113,23 @@ class AgentToolsRegressionTests(unittest.TestCase):
         self.assertEqual(status.strip(), "")
         self.assertFalse(push_result.ok)
         self.assertIn("allow_remote", push_result.error or push_result.text)
+
+    def test_git_manager_pr_plan_requires_remote_permission(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            project_dir.mkdir(parents=True)
+            subprocess.run(["git", "init"], cwd=project_dir, check=True, capture_output=True, text=True)
+
+            result = execute_local_tool(
+                ws_root,
+                project_dir,
+                tool_name="git_manager",
+                arguments={"project_root": "demo", "mode": "pr_plan"},
+            )
+
+        self.assertFalse(result.ok)
+        self.assertIn("allow_remote", result.error)
 
     def test_local_tools_docs_browser_fetches_public_https_docs_with_bounded_text(self) -> None:
         class FakeResponse:
@@ -8892,6 +8974,22 @@ class AgentBenchmarkRegressionTests(unittest.TestCase):
         self.assertEqual(dry["commands"]["run"], run_command)
         self.assertEqual(dry["commands"]["preflight"], build_docker_preflight_command(config))
 
+    def test_aider_benchmark_adapter_supports_varied_language_runs(self) -> None:
+        config = AiderBenchmarkConfig(
+            workspace=Path(".tmp-aider-test"),
+            run_name="varied",
+            num_tests=6,
+            keywords="word-search,robot-simulator,tree-building",
+            languages="javascript,go,python",
+            new_run=True,
+        )
+
+        run_command = build_docker_run_command(config)
+
+        self.assertIn("--keywords word-search,robot-simulator,tree-building", run_command[-1])
+        self.assertIn("--languages javascript,go,python", run_command[-1])
+        self.assertIn("--new", run_command[-1])
+
     def test_aider_benchmark_adapter_profiles_appora_model_for_repair_context(self) -> None:
         config = AiderBenchmarkConfig(workspace=Path(".tmp-aider-test"), run_name="smoke")
 
@@ -9064,6 +9162,33 @@ class AgentBenchmarkRegressionTests(unittest.TestCase):
         self.assertEqual(result["stats"]["test_cases"], 3)
         self.assertEqual(result["stats"]["pass_num_2"], 2)
         self.assertIn("failed official solve metrics", result["summary"])
+
+    def test_aider_benchmark_run_fails_when_harness_reuses_existing_run_name(self) -> None:
+        config = AiderBenchmarkConfig(workspace=Path(".tmp-aider-test"), run_name="smoke", num_tests=3)
+        calls = [
+            {
+                "command": ["docker", "run"],
+                "cwd": None,
+                "returncode": 0,
+                "ok": True,
+                "stdout": "router_preflight_status=200\n",
+                "stderr": "",
+            },
+            {
+                "command": ["docker", "run"],
+                "cwd": None,
+                "returncode": 0,
+                "ok": True,
+                "stdout": "Prior runs of smoke exist, use --new or name one explicitly\n/benchmarks/2026-06-09--smoke\n",
+                "stderr": "",
+            },
+        ]
+
+        with patch("api.aider_benchmarks._run_command", side_effect=calls):
+            result = run_aider_benchmark(config, run=True)
+
+        self.assertFalse(result["ok"], result)
+        self.assertIn("existing run name", result["summary"])
 
     def test_aider_benchmark_env_loads_local_dotenv_key_when_shell_env_missing(self) -> None:
         config = AiderBenchmarkConfig(openai_api_key_env="NINE_ROUTER_API_KEY")
