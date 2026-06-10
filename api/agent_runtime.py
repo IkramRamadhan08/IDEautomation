@@ -1212,6 +1212,118 @@ def _shadcn_style_runtime_issues(ctx: PreparedAgentContext, changes: list[dict[s
     return issues[:4]
 
 
+def _shadcn_case_alias_recovery(ctx: PreparedAgentContext, user_input: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if not _project_has_shadcn_signals(ctx, []):
+        return [], []
+    text_sources: list[str] = [str(user_input or "")]
+    for rel in [ctx.active_rel, *list(ctx.open_files or [])]:
+        local_rel = _localize_project_rel(rel, ctx.project_root)
+        if not local_rel:
+            continue
+        if local_rel in ctx.relevant_files:
+            text_sources.append(str(ctx.relevant_files.get(local_rel) or ""))
+            continue
+        path = ctx.project_dir / local_rel
+        if path.exists() and path.is_file() and path.suffix.lower() in {".ts", ".tsx", ".js", ".jsx"}:
+            try:
+                text_sources.append(path.read_text(encoding="utf-8", errors="ignore")[:80_000])
+            except Exception:
+                pass
+    modules: list[str] = []
+    for text in text_sources:
+        for module in _shadcn_ui_import_modules(text):
+            if module not in modules:
+                modules.append(module)
+    if not modules:
+        return [], []
+
+    aliases = _read_components_json_aliases(ctx, [])
+    changes: list[dict[str, Any]] = []
+    for module in modules:
+        for candidate in _shadcn_component_candidates(ctx, module, aliases):
+            candidate_path = ctx.project_dir / candidate
+            if candidate_path.exists():
+                break
+            if candidate_path.suffix.lower() not in {".ts", ".tsx", ".js", ".jsx"}:
+                continue
+            parent = candidate_path.parent
+            if not parent.exists() or not parent.is_dir():
+                continue
+            target_lower = candidate_path.name.lower()
+            existing = next((path for path in parent.iterdir() if path.is_file() and path.name.lower() == target_lower and path.name != candidate_path.name), None)
+            if not existing:
+                continue
+            import_name = f"./{existing.stem}"
+            content = (
+                "// shadcn/ui compatibility alias for lowercase registry imports.\n"
+                f"export {{ default as {existing.stem} }} from \"{import_name}\";\n"
+                f"export * from \"{import_name}\";\n"
+            )
+            changes.append({"path": f"{ctx.project_root}/{candidate}", "new_content": content})
+            break
+        else:
+            clean_module = module.rstrip("/")
+            if clean_module.endswith("/button"):
+                candidate = _preferred_shadcn_component_path(ctx, module, aliases, fallback="src/components/ui/button.tsx")
+                if candidate:
+                    changes.append({
+                        "path": f"{ctx.project_root}/{candidate}",
+                        "new_content": _minimal_shadcn_button_component(),
+                    })
+    if not changes:
+        return [], []
+    actions = [{"type": "shell", "command": "npm run build", "cwd": ctx.project_root, "reason": "validate shadcn import case-alias repair"}]
+    return changes, actions
+
+
+def _preferred_shadcn_component_path(ctx: PreparedAgentContext, module: str, aliases: dict[str, str], *, fallback: str) -> str:
+    for candidate in _shadcn_component_candidates(ctx, module, aliases):
+        suffix = PurePosixPath(candidate).suffix.lower()
+        if suffix in {".tsx", ".ts", ".jsx", ".js"}:
+            return PurePosixPath(candidate).as_posix()
+    return fallback
+
+
+def _minimal_shadcn_button_component() -> str:
+    return """import { Slot } from "@radix-ui/react-slot";
+import type { ComponentPropsWithoutRef } from "react";
+
+import { cn } from "@/lib/utils";
+
+type ButtonProps = ComponentPropsWithoutRef<"button"> & {
+  asChild?: boolean;
+  variant?: "default" | "secondary" | "ghost";
+};
+
+const variants: Record<NonNullable<ButtonProps["variant"]>, string> = {
+  default: "bg-primary text-primary-foreground hover:bg-primary/90",
+  secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
+  ghost: "hover:bg-accent hover:text-accent-foreground",
+};
+
+export function Button({
+  className,
+  variant = "default",
+  asChild = false,
+  type = "button",
+  ...props
+}: ButtonProps) {
+  const Comp = asChild ? Slot : "button";
+  return (
+    <Comp
+      className={cn(
+        "inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
+        variants[variant],
+        className,
+      )}
+      {...(!asChild ? { type } : {})}
+      {...props}
+    />
+  );
+}
+"""
+
+
 def _css_class_definitions(ctx: PreparedAgentContext, changes: list[dict[str, Any]]) -> set[str]:
     css_texts: list[str] = []
     for rel, text in ctx.relevant_files.items():
@@ -1487,11 +1599,25 @@ def _prompt_brand_name(text: str, fallback: str) -> str:
     return fallback
 
 
+def _original_user_request_text(user_input: str) -> str:
+    raw = str(user_input or "")
+    match = re.search(
+        r"Original user request:\s*(?P<request>.*?)(?:\n\s*(?:Failure analysis|Preview polish debt|Preview state-readiness debt|Current file context|Repair replay plan|Execution evidence):|\Z)",
+        raw,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return raw
+    request = str(match.group("request") or "").strip()
+    return request or raw
+
+
 def _is_existing_repair_request(ctx: PreparedAgentContext, user_input: str) -> bool:
-    prompt_lower = str(user_input or "").lower()
+    request_text = _original_user_request_text(user_input)
+    prompt_lower = request_text.lower()
     repair_markers = (
         "fix", "bug", "repair", "perbaiki", "benerin", "betulin", "debug",
-        "resolve", "patch", "toggle", "filter", "existing",
+        "resolve", "patch", "toggle", "filter", "existing", "broken", "missing import",
     )
     create_markers = (
         "buat", "bikin", "create", "generate", "scaffold", "app baru",
@@ -1499,7 +1625,7 @@ def _is_existing_repair_request(ctx: PreparedAgentContext, user_input: str) -> b
     existing_active_file = bool(ctx.active_rel and ctx.active_rel in ctx.all_files)
     return (
         existing_active_file
-        and not _blank_preview_repair_directive(user_input)
+        and not _blank_preview_repair_directive(request_text)
         and any(marker in prompt_lower for marker in repair_markers)
         and not any(marker in prompt_lower for marker in create_markers)
     )
@@ -2777,14 +2903,7 @@ def _existing_repair_scope_issues(ctx: PreparedAgentContext, user_input: str, ch
         return []
     if not changes:
         return []
-    allowed: set[str] = set()
-    if ctx.active_rel:
-        allowed.add(ctx.active_rel)
-        allowed.add(f"{ctx.project_root}/{ctx.active_rel}")
-    for rel in list(ctx.open_files or []):
-        if rel:
-            allowed.add(rel)
-            allowed.add(f"{ctx.project_root}/{rel}")
+    allowed: set[str] = set(_existing_repair_allowed_paths(ctx, user_input))
     changed_paths = [
         str(item.get("path") or "").strip()
         for item in changes
@@ -2799,9 +2918,7 @@ def _existing_repair_scope_issues(ctx: PreparedAgentContext, user_input: str, ch
     return issues[:3]
 
 
-def _scope_existing_repair_changes(ctx: PreparedAgentContext, user_input: str, changes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    if not _is_existing_repair_request(ctx, user_input):
-        return changes
+def _existing_repair_allowed_paths(ctx: PreparedAgentContext, user_input: str) -> set[str]:
     allowed: set[str] = set()
     if ctx.active_rel:
         allowed.add(ctx.active_rel)
@@ -2810,11 +2927,50 @@ def _scope_existing_repair_changes(ctx: PreparedAgentContext, user_input: str, c
         if rel:
             allowed.add(rel)
             allowed.add(f"{ctx.project_root}/{rel}")
-    scoped = [
-        item
-        for item in changes
-        if isinstance(item, dict) and str(item.get("path") or "").strip() in allowed
-    ]
+
+    if _project_has_shadcn_signals(ctx, []):
+        aliases = _read_components_json_aliases(ctx, [])
+        sources = [str(user_input or "")]
+        for rel in [ctx.active_rel, *list(ctx.open_files or [])]:
+            local_rel = _localize_project_rel(rel, ctx.project_root)
+            if local_rel and local_rel in ctx.relevant_files:
+                sources.append(str(ctx.relevant_files.get(local_rel) or ""))
+        for source in sources:
+            for module in _shadcn_ui_import_modules(source):
+                for candidate in _shadcn_component_candidates(ctx, module, aliases):
+                    if PurePosixPath(candidate).suffix.lower() not in {".ts", ".tsx", ".js", ".jsx"}:
+                        continue
+                    allowed.add(candidate)
+                    allowed.add(f"{ctx.project_root}/{candidate}")
+    return allowed
+
+
+def _scope_existing_repair_changes(ctx: PreparedAgentContext, user_input: str, changes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not _is_existing_repair_request(ctx, user_input):
+        return changes
+    allowed: set[str] = set(_existing_repair_allowed_paths(ctx, user_input))
+    allowed_by_lower = {path.lower(): path for path in allowed}
+    scoped: list[dict[str, Any]] = []
+    for item in changes:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("path") or "").strip()
+        if not path:
+            continue
+        if path in allowed:
+            scoped.append(item)
+            continue
+        canonical = allowed_by_lower.get(path.lower())
+        if canonical:
+            scoped_item = {**item, "path": canonical}
+            if canonical.lower().endswith("/components/ui/button.tsx") and isinstance(scoped_item.get("new_content"), str):
+                scoped_item["new_content"] = re.sub(
+                    r"\bexport\s+default\s+function\s+Button\b",
+                    "export function Button",
+                    str(scoped_item.get("new_content") or ""),
+                    count=1,
+                )
+            scoped.append(scoped_item)
     if len(scoped) != len(changes):
         dropped = len(changes) - len(scoped)
         ctx.trace_warnings.append({
@@ -4962,6 +5118,18 @@ def _verify_node(state: AgentRuntimeState) -> AgentRuntimeState:
     if _should_promote_readonly_output_to_command(ctx, user_input=state["input"], changes=changes, actions=actions):
         _promote_intent_for_concrete_work(ctx, state["input"])
 
+    if ctx.intent.should_write_files and not changes:
+        recovered_changes, recovered_actions = _shadcn_case_alias_recovery(ctx, state["input"])
+        if recovered_changes or recovered_actions:
+            changes = recovered_changes
+            actions = _merge_action_sets(actions, recovered_actions)
+            state["changes"] = changes
+            state["actions"] = actions
+            ctx.trace_warnings.append({
+                "phase": "verify",
+                "message": "Recovered no-work shadcn import mismatch with a concrete component/alias file and build validation action.",
+            })
+
     raw_tool_actions = [
         item for item in actions if isinstance(item, dict) and str(item.get("type") or "").lower() in {"tool", "mcp"}
     ]
@@ -5256,7 +5424,7 @@ def _verify_node(state: AgentRuntimeState) -> AgentRuntimeState:
 
     task_state = _update_task_state_after_verify(ctx, state, checks)
     ctx.trace_verification = checks
-    return {"context": ctx, "task_state": task_state, "actions": actions}
+    return {"context": ctx, "task_state": task_state, "changes": changes, "actions": actions}
 
 
 def _strict_agentic_retry_node(state: AgentRuntimeState) -> AgentRuntimeState:

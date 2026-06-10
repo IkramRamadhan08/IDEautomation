@@ -6163,6 +6163,37 @@ def _project_has_preview_surface(project_dir: Path, out_changes: list[dict[str, 
     return False
 
 
+def _is_surgical_shadcn_import_repair(req: AgentReq, out_changes: list[dict[str, object]]) -> bool:
+    prompt = str(req.input or "").lower()
+    if "import" not in prompt or "build" not in prompt:
+        return False
+    if "shadcn" not in prompt and "components/ui" not in prompt:
+        return False
+    if any(term in prompt for term in ("preview", "blank", "redesign", "landing", "dashboard baru", "bikin", "buat")):
+        return False
+    paths = [
+        str(change.get("path") or "").strip()
+        for change in list(out_changes or [])
+        if isinstance(change, dict)
+    ]
+    if not paths:
+        return False
+    allowed_suffixes = (
+        "components.json",
+        "package.json",
+        "vite.config.ts",
+        "vite.config.js",
+        "vite.config.mts",
+        "vite.config.mjs",
+    )
+    for path in paths:
+        local = path.split("/", 1)[1] if "/" in path and not path.startswith("src/") else path
+        if "/components/ui/" in path or local in allowed_suffixes or local.startswith("src/lib/"):
+            continue
+        return False
+    return True
+
+
 def _run_backend_repair_pass(req: AgentReq, execution: dict[str, object], emit, *, repair_index: int) -> dict[str, object]:
     project_root = str(req.project_root or ".").strip().strip("/") or "."
     failure_analysis = _execution_failure_analysis(execution)
@@ -6522,7 +6553,8 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
         preview_project_dir = safe_join(_ws(), project_root)
     except Exception:
         preview_project_dir = _ws()
-    if (out_changes or shell_actions) and (str(getattr(req, "preview_url", None) or "").strip() or _project_has_preview_surface(preview_project_dir, out_changes)):
+    preview_gate_required = not _is_surgical_shadcn_import_repair(req, out_changes)
+    if preview_gate_required and (out_changes or shell_actions) and (str(getattr(req, "preview_url", None) or "").strip() or _project_has_preview_surface(preview_project_dir, out_changes)):
         emit("status", {"phase": "executing_preview_audit", "message": "Backend harness auditing live preview..."})
         preview_result = _auto_execute_preview_audit(req, project_root)
         if isinstance(preview_result, dict):
@@ -6577,6 +6609,7 @@ def _auto_execute_agent_result(req: AgentReq, out_changes: list[dict[str, object
         _try_quick_vite_entrypoint_repair,
         _try_quick_missing_h1_repair,
         _try_quick_missing_package_repair,
+        _try_quick_vite_alias_repair,
         _try_quick_ts2304_react_hook_repair,
         _try_quick_ts2741_missing_required_prop_repair,
         _try_quick_ts6133_repair,
@@ -7104,6 +7137,7 @@ def _run_backend_verifier_repair_pass(
 
 _TS6133_RE = re.compile(r"(?P<path>[^\s:(]+\.tsx?)\((?P<line>\d+),(?P<col>\d+)\):\s+error TS6133:\s+'(?P<name>[A-Za-z_$][\w$]*)'\s+is declared but its value is never read\.")
 _TS2304_CANNOT_FIND_NAME_RE = re.compile(r"(?P<path>[^\s:(]+\.tsx?)\((?P<line>\d+),(?P<col>\d+)\):\s+error TS2304:\s+Cannot find name ['\"](?P<name>[A-Za-z_$][\w$]*)['\"]\.")
+_VITE_UNRESOLVED_AT_ALIAS_RE = re.compile(r"Rollup failed to resolve import\s+['\"]@/", re.IGNORECASE)
 _TS2322_LOCATION_RE = re.compile(r"(?P<path>[^\s:(]+\.tsx?)\((?P<line>\d+),(?P<col>\d+)\):\s+error TS2322:")
 _TS_PROP_NOT_EXIST_RE = re.compile(r"Property ['\"](?P<prop>[A-Za-z_$][\w$]*)['\"] does not exist on type")
 _TS2741_MISSING_REQUIRED_PROP_RE = re.compile(r"(?P<path>[^\s:(]+\.tsx?)\((?P<line>\d+),(?P<col>\d+)\):\s+error TS2741:\s+Property ['\"](?P<prop>[A-Za-z_$][\w$]*)['\"] is missing in type")
@@ -8035,6 +8069,109 @@ def _try_quick_ts2304_react_hook_repair(req: AgentReq, execution: dict[str, obje
         "commands": commands,
         "shell": shell,
         "summary": f"Quick TS2304 hook repair changed {len(changed_paths)} file(s), validation ok={bool(shell.get('ok'))}, rolled_back={len(rolled_back)}.",
+    }
+    emit("tool_output", _harness_tool_output_payload(
+        "quick-repair",
+        "quick_repair",
+        project_root=project_root,
+        ok=bool(shell.get("ok")),
+        summary=str(result["summary"]),
+        paths=changed_paths,
+        commands=commands,
+        results=_shell_event_results(shell.get("results")),
+    ))
+    return result
+
+
+def _vite_unresolved_at_alias_from_execution(execution: dict[str, object]) -> bool:
+    for section in ("shell", "validation", "replay"):
+        block = execution.get(section)
+        if not isinstance(block, dict):
+            continue
+        for result in list(block.get("results") or []):
+            if not isinstance(result, dict) or result.get("ok") is not False:
+                continue
+            text = "\n".join(str(result.get(key) or "") for key in ("stdout", "stderr", "output", "message"))
+            if _VITE_UNRESOLVED_AT_ALIAS_RE.search(text):
+                return True
+    return False
+
+
+def _add_vite_src_alias(project_dir: Path) -> list[str]:
+    config_path = next(
+        (project_dir / name for name in ("vite.config.ts", "vite.config.mts", "vite.config.js", "vite.config.mjs") if (project_dir / name).exists()),
+        None,
+    )
+    if config_path is None:
+        return []
+    try:
+        source = config_path.read_text(encoding="utf-8")
+    except Exception:
+        return []
+    if re.search(r"alias\s*:\s*\{[^}]*['\"]@['\"]", source, re.DOTALL):
+        return []
+    next_source = source
+    if "node:url" not in next_source:
+        next_source = 'import { fileURLToPath, URL } from "node:url";\n' + next_source
+    alias_block = 'resolve: {\n    alias: {\n      "@": fileURLToPath(new URL("./src", import.meta.url)),\n    },\n  },'
+    replaced = False
+    match = re.search(r"export\s+default\s+defineConfig\s*\(\s*\{", next_source)
+    if match:
+        insert_at = match.end()
+        next_source = next_source[:insert_at] + "\n  " + alias_block + next_source[insert_at:]
+        replaced = True
+    if not replaced:
+        match = re.search(r"defineConfig\s*\(\s*\{", next_source)
+        if match:
+            insert_at = match.end()
+            next_source = next_source[:insert_at] + "\n  " + alias_block + next_source[insert_at:]
+            replaced = True
+    if not replaced or next_source == source:
+        return []
+    config_path.write_text(next_source, encoding="utf-8")
+    return [config_path.relative_to(project_dir).as_posix()]
+
+
+def _try_quick_vite_alias_repair(req: AgentReq, execution: dict[str, object], emit) -> dict[str, object] | None:
+    if not _vite_unresolved_at_alias_from_execution(execution):
+        return None
+    project_root = str(req.project_root or ".").strip().strip("/") or "."
+    try:
+        project_dir = safe_join(_ws(), project_root)
+    except Exception:
+        return None
+    changed_paths = _add_vite_src_alias(project_dir)
+    if not changed_paths:
+        return None
+
+    commands = list(dict.fromkeys(
+        str(command)
+        for command in list((execution.get("validation") or {}).get("commands") or [])
+        if str(command).strip()
+    ))
+    if not commands:
+        commands = _infer_validation_commands(project_dir)[:4]
+    if not commands:
+        return {"ok": False, "changed_paths": changed_paths, "summary": "Quick Vite alias repair edited config but found no validation command."}
+
+    emit("status", {"phase": "quick_repair", "message": "Backend quick repair added Vite @ -> src alias before LLM repair..."})
+    _emit_command_start_events(emit, tool="quick-repair", phase="quick_repair", project_root=project_root, commands=commands, group="quick repair")
+    shell = _run_harness_shell_actions_internal(
+        ws_root_path=_ws(),
+        project_root=project_root,
+        actions=[AgentHarnessShellAction(command=command, cwd=project_root, reason="Quick Vite @ alias repair validation") for command in commands],
+        emit=emit,
+        tool="quick-repair",
+        phase="quick_repair",
+        group="quick repair",
+    )
+    result = {
+        "ok": bool(shell.get("ok")),
+        "kind": "vite-src-alias",
+        "changed_paths": changed_paths,
+        "commands": commands,
+        "shell": shell,
+        "summary": f"Quick Vite alias repair changed {len(changed_paths)} file(s), validation ok={bool(shell.get('ok'))}.",
     }
     emit("tool_output", _harness_tool_output_payload(
         "quick-repair",

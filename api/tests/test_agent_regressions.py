@@ -1427,6 +1427,62 @@ class AgentRuntimeContextRegressionTests(unittest.TestCase):
         self.assertEqual(changes, [])
         self.assertEqual(actions, [])
 
+    def test_no_work_fallback_does_not_rewrite_wrapped_shadcn_import_repair_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src" / "components" / "ui").mkdir(parents=True)
+            (project_dir / "package.json").write_text(
+                json.dumps({
+                    "scripts": {"build": "vite build"},
+                    "dependencies": {
+                        "@radix-ui/react-slot": "^1.2.0",
+                        "class-variance-authority": "^0.7.1",
+                        "clsx": "^2.1.1",
+                        "react": "^19.0.0",
+                        "react-dom": "^19.0.0",
+                        "tailwind-merge": "^3.0.0",
+                        "tailwindcss": "^4.0.0",
+                        "vite": "^7.0.0",
+                    },
+                }),
+                encoding="utf-8",
+            )
+            (project_dir / "components.json").write_text(
+                json.dumps({"aliases": {"ui": "@/components/ui", "utils": "@/lib/utils"}, "base": "radix"}),
+                encoding="utf-8",
+            )
+            (project_dir / "src" / "App.tsx").write_text(
+                "import { Button } from '@/components/ui/button';\nexport default function App(){ return <Button>Save</Button> }\n",
+                encoding="utf-8",
+            )
+            req = SimpleNamespace(
+                input="Fix the broken '@/components/ui/button' import by adding or correcting the actual shadcn component file.",
+                project_root="demo",
+                build_mode="full-agent",
+                active_file="src/App.tsx",
+                open_files=["src/App.tsx", "components.json", "package.json"],
+                current_content=None,
+                selection=None,
+                preview_url=None,
+                editor_status=None,
+                asset_paths=[],
+            )
+            ctx = prepare_agent_context(req, ws_root)
+            wrapped_repair_prompt = (
+                "BACKEND AUTO-EXECUTE REPAIR PASS 1:\n"
+                "The previous backend execution produced failing preview evidence. If the preview is blank or not rendering, repair it.\n\n"
+                "Original user request:\n"
+                "Fix the broken '@/components/ui/button' import by adding or correcting the actual shadcn component file. "
+                "Keep the existing shadcn/Tailwind setup and validate imports/build.\n\n"
+                "Failure analysis:\npreview still failing"
+            )
+
+            changes, actions = agent_runtime_mod._emergency_full_agent_changes(ctx, wrapped_repair_prompt)
+
+        self.assertEqual(changes, [])
+        self.assertEqual(actions, [])
+
     def test_existing_bugfix_draft_prompt_demands_immediate_patch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ws_root = Path(tmp)
@@ -1688,6 +1744,42 @@ class AgentRuntimeContextRegressionTests(unittest.TestCase):
             scoped = agent_runtime_mod._scope_existing_repair_changes(ctx, req.input, changes)
 
         self.assertEqual([item["path"] for item in scoped], ["demo/src/App.tsx"])
+
+    def test_existing_shadcn_import_repair_scope_allows_and_normalizes_component_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src" / "components" / "ui").mkdir(parents=True)
+            (project_dir / "package.json").write_text('{"dependencies":{"react":"latest","@radix-ui/react-slot":"latest","tailwindcss":"latest"}}\n', encoding="utf-8")
+            (project_dir / "components.json").write_text(json.dumps({"aliases": {"ui": "@/components/ui"}}), encoding="utf-8")
+            (project_dir / "src" / "App.tsx").write_text(
+                "import { Button } from '@/components/ui/button';\nexport default function App(){ return <Button>Save</Button> }\n",
+                encoding="utf-8",
+            )
+            req = SimpleNamespace(
+                input="Fix the broken '@/components/ui/button' import by adding or correcting the actual shadcn component file.",
+                project_root="demo",
+                build_mode="full-agent",
+                active_file="src/App.tsx",
+                open_files=["src/App.tsx", "components.json", "package.json"],
+                current_content=None,
+                selection=None,
+                preview_url=None,
+                editor_status=None,
+                asset_paths=[],
+            )
+            ctx = prepare_agent_context(req, ws_root)
+            changes = [
+                {"path": "demo/src/components/ui/Button.tsx", "new_content": "export default function Button(props: any) { return <button {...props} /> }\n"},
+                {"path": "demo/src/pages/Home.tsx", "new_content": "export default function Home(){ return null }\n"},
+            ]
+
+            scoped = agent_runtime_mod._scope_existing_repair_changes(ctx, req.input, changes)
+            issues = agent_runtime_mod._existing_repair_scope_issues(ctx, req.input, scoped)
+
+        self.assertEqual([item["path"] for item in scoped], ["demo/src/components/ui/button.tsx"])
+        self.assertIn("export function Button", scoped[0]["new_content"])
+        self.assertEqual(issues, [])
 
     def test_existing_bugfix_finalize_does_not_merge_hybrid_seed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2852,6 +2944,145 @@ class AgentVerifierRegressionTests(unittest.TestCase):
         verification = {item["name"]: item for item in result["context"].trace_verification}
         self.assertFalse(verification["frontend-style-runtime"]["ok"])
         self.assertIn("components/ui/button", verification["frontend-style-runtime"]["detail"])
+
+    def test_verifier_recovers_shadcn_lowercase_import_case_mismatch_after_no_work(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src" / "components" / "ui").mkdir(parents=True)
+            (project_dir / "src" / "lib").mkdir(parents=True)
+            (project_dir / "package.json").write_text(
+                json.dumps({
+                    "scripts": {"build": "vite build"},
+                    "dependencies": {
+                        "@tailwindcss/vite": "^4.0.0",
+                        "@radix-ui/react-slot": "^1.2.0",
+                        "class-variance-authority": "^0.7.1",
+                        "react": "^19.0.0",
+                        "vite": "^7.0.0",
+                        "tailwind-merge": "^3.0.0",
+                        "tailwindcss": "^4.0.0",
+                    },
+                }),
+                encoding="utf-8",
+            )
+            (project_dir / "components.json").write_text(json.dumps({"aliases": {"ui": "@/components/ui", "utils": "@/lib/utils"}, "base": "radix"}), encoding="utf-8")
+            (project_dir / "src" / "styles.css").write_text("@import \"tailwindcss\";\n", encoding="utf-8")
+            (project_dir / "src" / "lib" / "utils.ts").write_text("export function cn(...inputs: string[]) { return inputs.join(' ') }\n", encoding="utf-8")
+            (project_dir / "src" / "components" / "ui" / "Button.tsx").write_text("export function Button(props: any) { return <button {...props} /> }\n", encoding="utf-8")
+            (project_dir / "src" / "App.tsx").write_text("import { Button } from '@/components/ui/button';\nexport default function App(){ return <Button>Save</Button> }\n", encoding="utf-8")
+            ctx = self._ctx(ws_root, prompt="Fix the broken '@/components/ui/button' import and validate build.")
+
+            state = {
+                "context": ctx,
+                "input": "Fix the broken '@/components/ui/button' import and validate build.",
+                "spoken": "Added lowercase alias file for button component to fix import.",
+                "changes": [],
+                "actions": [],
+            }
+            result = _verify_node(state)
+
+        verification = {item["name"]: item for item in result["context"].trace_verification}
+        self.assertTrue(verification["has-work-output"]["ok"])
+        self.assertTrue(verification["relative-imports-resolve"]["ok"])
+        self.assertEqual(result["changes"][0]["path"], "demo/src/components/ui/button.tsx")
+        self.assertIn("shadcn/ui compatibility alias", result["changes"][0]["new_content"])
+        self.assertIn('export * from "./Button"', result["changes"][0]["new_content"])
+        self.assertEqual(result["actions"][0]["command"], "npm run build")
+
+    def test_verifier_recovers_missing_shadcn_button_component_after_no_work(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src" / "components" / "ui").mkdir(parents=True)
+            (project_dir / "src" / "lib").mkdir(parents=True)
+            (project_dir / "package.json").write_text(
+                json.dumps({
+                    "scripts": {"build": "vite build"},
+                    "dependencies": {
+                        "@radix-ui/react-slot": "^1.2.0",
+                        "class-variance-authority": "^0.7.1",
+                        "clsx": "^2.1.1",
+                        "react": "^19.0.0",
+                        "react-dom": "^19.0.0",
+                        "tailwind-merge": "^3.0.0",
+                        "tailwindcss": "^4.0.0",
+                        "vite": "^7.0.0",
+                    },
+                }),
+                encoding="utf-8",
+            )
+            (project_dir / "components.json").write_text(json.dumps({"aliases": {"ui": "@/components/ui", "utils": "@/lib/utils"}, "base": "radix"}), encoding="utf-8")
+            (project_dir / "src" / "styles.css").write_text("@import \"tailwindcss\";\n", encoding="utf-8")
+            (project_dir / "src" / "lib" / "utils.ts").write_text("export function cn(...inputs: string[]) { return inputs.filter(Boolean).join(' ') }\n", encoding="utf-8")
+            (project_dir / "src" / "App.tsx").write_text("import { Button } from '@/components/ui/button';\nexport default function App(){ return <Button>Save</Button> }\n", encoding="utf-8")
+            ctx = self._ctx(ws_root, prompt="Fix the broken '@/components/ui/button' import and validate build.")
+
+            state = {
+                "context": ctx,
+                "input": "Fix the broken '@/components/ui/button' import by adding or correcting the actual shadcn component file. Keep the existing shadcn/Tailwind setup and validate imports/build.",
+                "spoken": "I reviewed the request but did not propose any file edits.",
+                "changes": [],
+                "actions": [],
+            }
+            result = _verify_node(state)
+
+        verification = {item["name"]: item for item in result["context"].trace_verification}
+        self.assertTrue(verification["has-work-output"]["ok"])
+        self.assertTrue(verification["relative-imports-resolve"]["ok"])
+        self.assertEqual(result["changes"][0]["path"], "demo/src/components/ui/button.tsx")
+        content = result["changes"][0]["new_content"]
+        self.assertIn("export function Button", content)
+        self.assertIn("@radix-ui/react-slot", content)
+        self.assertIn("@/lib/utils", content)
+        self.assertEqual(result["actions"][0]["command"], "npm run build")
+
+    def test_verifier_recovers_shadcn_import_after_scope_gate_leaves_shell_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_root = Path(tmp)
+            project_dir = ws_root / "demo"
+            (project_dir / "src" / "components" / "ui").mkdir(parents=True)
+            (project_dir / "src" / "lib").mkdir(parents=True)
+            (project_dir / "package.json").write_text(
+                json.dumps({
+                    "scripts": {"build": "vite build"},
+                    "dependencies": {
+                        "@radix-ui/react-slot": "^1.2.0",
+                        "class-variance-authority": "^0.7.1",
+                        "clsx": "^2.1.1",
+                        "react": "^19.0.0",
+                        "react-dom": "^19.0.0",
+                        "tailwind-merge": "^3.0.0",
+                        "tailwindcss": "^4.0.0",
+                        "vite": "^7.0.0",
+                    },
+                }),
+                encoding="utf-8",
+            )
+            (project_dir / "components.json").write_text(json.dumps({"aliases": {"ui": "@/components/ui", "utils": "@/lib/utils"}, "base": "radix"}), encoding="utf-8")
+            (project_dir / "src" / "styles.css").write_text("@import \"tailwindcss\";\n", encoding="utf-8")
+            (project_dir / "src" / "lib" / "utils.ts").write_text("export function cn(...inputs: string[]) { return inputs.filter(Boolean).join(' ') }\n", encoding="utf-8")
+            (project_dir / "src" / "components" / "ui" / "Button.tsx").write_text(
+                "export default function Button(props: any) { return <button {...props} /> }\n",
+                encoding="utf-8",
+            )
+            (project_dir / "src" / "App.tsx").write_text("import { Button } from '@/components/ui/button';\nexport default function App(){ return <Button>Save</Button> }\n", encoding="utf-8")
+            ctx = self._ctx(ws_root, prompt="Fix the broken '@/components/ui/button' import and validate build.")
+
+            state = {
+                "context": ctx,
+                "input": "Fix the broken '@/components/ui/button' import by adding or correcting the actual shadcn component file.",
+                "spoken": "Added Button.tsx and will run build.",
+                "changes": [],
+                "actions": [{"type": "shell", "command": "npm run build", "cwd": "demo"}],
+            }
+            result = _verify_node(state)
+
+        verification = {item["name"]: item for item in result["context"].trace_verification}
+        self.assertTrue(verification["has-work-output"]["ok"])
+        self.assertTrue(verification["relative-imports-resolve"]["ok"])
+        self.assertEqual(result["changes"][0]["path"], "demo/src/components/ui/button.tsx")
+        self.assertIn('export { default as Button } from "./Button"', result["changes"][0]["new_content"])
 
     def test_verifier_blocks_invalid_shadcn_avatar_size_prop(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -6891,6 +7122,107 @@ class AgentAutoExecuteRegressionTests(unittest.TestCase):
                 {"path": "src/App.tsx", "name": "useEffect"},
             ],
         )
+
+    def test_quick_vite_alias_repair_adds_src_alias_for_shadcn_imports(self) -> None:
+        session_id = "quick-vite-alias-repair-test"
+        STATE.get("sessions", {}).pop(session_id, None)
+        session_token = CURRENT_SESSION_ID.set(session_id)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                project = root / "demo"
+                (project / "src" / "components" / "ui").mkdir(parents=True)
+                (project / "src" / "App.tsx").write_text(
+                    "import { Button } from '@/components/ui/button';\nexport default function App(){ return <Button>Save</Button> }\n",
+                    encoding="utf-8",
+                )
+                (project / "src" / "components" / "ui" / "button.tsx").write_text(
+                    "export function Button(props: any) { return <button {...props} /> }\n",
+                    encoding="utf-8",
+                )
+                (project / "vite.config.ts").write_text(
+                    'import { defineConfig } from "vite";\nimport react from "@vitejs/plugin-react";\n\nexport default defineConfig({\n  plugins: [react()],\n});\n',
+                    encoding="utf-8",
+                )
+                (project / "package.json").write_text('{"scripts":{"build":"vite build"}}\n', encoding="utf-8")
+                STATE["sessions"][session_id] = {
+                    "workspace": root,
+                    "runners": {},
+                    "agent_jobs": {},
+                    "oauth_pending": {},
+                    "google_user": None,
+                }
+                execution = {
+                    "validation": {
+                        "commands": ["npm run build"],
+                        "results": [
+                            {
+                                "ok": False,
+                                "command": "npm run build",
+                                "stdout": 'error during build:\n[vite]: Rollup failed to resolve import "@/components/ui/button" from "/tmp/demo/src/App.tsx".',
+                                "stderr": "",
+                            }
+                        ],
+                    }
+                }
+
+                with patch("api.main._run_harness_shell_actions_internal", return_value={"ok": True, "results": [{"ok": True, "command": "npm run build"}]}):
+                    result = main_mod._try_quick_vite_alias_repair(
+                        main_mod.AgentReq(input="fix shadcn import", project_root="demo"),
+                        execution,
+                        lambda _event, _data: None,
+                    )
+
+                config = (project / "vite.config.ts").read_text(encoding="utf-8")
+
+            self.assertTrue(result["ok"])
+            self.assertIn("node:url", config)
+            self.assertIn("resolve", config)
+            self.assertIn('"@"', config)
+            self.assertEqual(result["changed_paths"], ["vite.config.ts"])
+        finally:
+            CURRENT_SESSION_ID.reset(session_token)
+            STATE.get("sessions", {}).pop(session_id, None)
+
+    def test_surgical_shadcn_import_repair_skips_preview_gate_after_build_passes(self) -> None:
+        session_id = "surgical-shadcn-import-preview-skip-test"
+        STATE.get("sessions", {}).pop(session_id, None)
+        session_token = CURRENT_SESSION_ID.set(session_id)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                project = root / "demo"
+                (project / "src" / "components" / "ui").mkdir(parents=True)
+                (project / "package.json").write_text('{"scripts":{"build":"vite build"}}\n', encoding="utf-8")
+                (project / "index.html").write_text('<div id="root"></div><script type="module" src="/src/main.tsx"></script>\n', encoding="utf-8")
+                STATE["sessions"][session_id] = {
+                    "workspace": root,
+                    "runners": {},
+                    "agent_jobs": {},
+                    "oauth_pending": {},
+                    "google_user": None,
+                }
+                shell_ok = {"ok": True, "results": [{"ok": True, "command": "npm run build", "stdout": "built"}], "ran": 1}
+                with patch("api.main._run_harness_shell_actions_internal", return_value=shell_ok), \
+                    patch("api.main._infer_validation_commands", return_value=["npm run build"]), \
+                    patch("api.main._auto_execute_preview_audit") as preview_mock:
+                    execution = main_mod._auto_execute_agent_result(
+                        main_mod.AgentReq(
+                            input="Fix the broken '@/components/ui/button' import by adding or correcting the actual shadcn component file. Keep the existing shadcn/Tailwind setup and validate imports/build.",
+                            project_root="demo",
+                            auto_execute=True,
+                        ),
+                        [{"path": "demo/src/components/ui/button.tsx", "new_content": "export function Button(props: any) { return <button {...props} /> }\n"}],
+                        [{"type": "shell", "command": "npm run build", "cwd": "demo"}],
+                        lambda *_args: None,
+                    )
+
+            self.assertTrue(execution["ok"])
+            self.assertIsNone(execution["preview_audit"])
+            preview_mock.assert_not_called()
+        finally:
+            CURRENT_SESSION_ID.reset(session_token)
+            STATE.get("sessions", {}).pop(session_id, None)
 
     def test_quick_ts6133_repair_removes_unused_usestate_setter(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
